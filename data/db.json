@@ -1,0 +1,1114 @@
+{
+  "products": [
+    {
+      "id": "bg-prem-250g",
+      "nameAr": "فحم الذهب الأسود الفاخر (250g + 10g مجاناً)",
+      "nameEn": "Black Gold Premium Charcoal - 250g Pouch",
+      "category": "premium",
+      "price": 600,
+      "originalPrice": 700,
+      "discountPercent": 14,
+      "weightOptions": [
+        {
+          "weight": "250g (ربع كيلو)",
+          "price": 600
+        },
+        {
+          "weight": "500g (نصف كيلو)",
+          "price": 1000
+        },
+        {
+          "weight": "1kg (كيلو كامل)",
+          "price": 1600
+        }
+      ],
+      "descriptionAr": "الخط الفاخر الملكي من فحم الذهب الأسود. عبوة محكمة الإغلاق بنظام Zipper Lock عازل للرطوبة. اشتعال فوري فائق النقاء يدوم حتى 6 ساعات بدون أدخنة أو روائح أو شرار مع رماد أبيض ناصع. مبرمجة بوزن 260 جرام (+10 جرام هدية مجانية).",
+      "descriptionEn": "Luxury moisture-proof Zipper pouch of pure premium charcoal. 6+ hours burn duration with zero smoke, odor, or sparks. Features +10g gold guarantee.",
+      "origin": "الذهب الأسود - مصنع صنعاء",
+      "burnDurationHours": "6+ ساعات متواصلة",
+      "ashPercentage": "أقل من 1.5% رماد أبيض",
+      "moisture": "< 2% فائق الجفاف",
+      "rating": 5,
+      "reviewCount": 230,
+      "images": [
+        "/src/assets/images/black_gold_pouch_pair_1786125935649.jpg",
+        "/src/assets/images/black_gold_shisha_session_1786125947470.jpg",
+        "/src/assets/images/black_gold_retail_stand_1786125959576.jpg"
+      ],
+      "specs": [
+        {
+          "labelAr": "نوع التغليف",
+          "labelEn": "Packaging",
+          "valueAr": "كيس حراري فاخر Zipper Lock عازل للرطوبة",
+          "valueEn": "Moisture-Proof Zipper Pouch"
+        },
+        {
+          "labelAr": "ضمان الوزن",
+          "labelEn": "Weight Guarantee",
+          "valueAr": "260g (250g + 10g هدية ذهبية مجانية)",
+          "valueEn": "260g (250g + 10g Free Bonus)"
+        },
+        {
+          "labelAr": "الحرارة والرماد",
+          "labelEn": "Heat & Ash",
+          "valueAr": "حرارة مستقرة قوية ورماد أبيض ثلجي",
+          "valueEn": "Stable High Heat & Snow White Ash"
+        },
+        {
+          "labelAr": "سعر التاجر / الجملة",
+          "labelEn": "Wholesale Margin",
+          "valueAr": "480 ريال (ربح التاجر 120 ريال للكيس)",
+          "valueEn": "480 YER (120 YER Trader Profit)"
+        }
+      ],
+      "isFeatured": true,
+      "isBestSeller": true,
+      "stock": 800
+    },
+    {
+      "id": "bg-prem-500g",
+      "nameAr": "فحم الذهب الأسود الفاخر (500g + 10g مجاناً)",
+      "nameEn": "Black Gold Premium Charcoal - 500g Pouch",
+      "category": "premium",
+      "price": 1000,
+      "originalPrice": 1200,
+      "discountPercent": 17,
+      "weightOptions": [
+        {
+          "weight": "250g (ربع كيلو)",
+          "price": 600
+        },
+        {
+          "weight": "500g (نصف كيلو)",
+          "price": 1000
+        },
+        {
+          "weight": "1kg (كيلو كامل)",
+          "price": 1600
+        }
+      ],
+      "descriptionAr": "العبوة الملكية العائلية سعة 500 جرام من الفحم الفاخر المصفى. مثالية للمجالس الفاخرة، ديوان الضيافة، وجلسات الشيشة الممتدة. حرارة مستمرة حتى 6 ساعات ونقاء مطلق.",
+      "descriptionEn": "Royal 500g Zipper pack of Black Gold Premium Charcoal. Supreme choice for luxury lounges and extended smoking sessions.",
+      "origin": "الذهب الأسود - صنعاء",
+      "burnDurationHours": "6+ ساعات متواصلة",
+      "ashPercentage": "أقل من 1.5% رماد أبيض",
+      "moisture": "< 2%",
+      "rating": 5,
+      "reviewCount": 310,
+      "images": [
+        "/src/assets/images/black_gold_pouch_pair_1786125935649.jpg",
+        "/src/assets/images/black_gold_shisha_session_1786125947470.jpg",
+        "/src/assets/images/black_gold_delivery_fleet_1786125973582.jpg"
+      ],
+      "specs": [
+        {
+          "labelAr": "نوع التغليف",
+          "labelEn": "Packaging",
+          "valueAr": "كيس حراري متعدد الطبقات عازل 510g",
+          "valueEn": "Multi-layer Sealed Zipper Pouch 510g"
+        },
+        {
+          "labelAr": "ضمان الوزن",
+          "labelEn": "Weight Guarantee",
+          "valueAr": "510g (500g + 10g هدية ذهبية مجانية)",
+          "valueEn": "510g (500g + 10g Free Bonus)"
+        },
+        {
+          "labelAr": "مدة الجمرة",
+          "labelEn": "Burn Duration",
+          "valueAr": "أكثر من 6 ساعات نار هادئة نقية",
+          "valueEn": "6+ Hours Continuous Gentle Heat"
+        },
+        {
+          "labelAr": "سعر التاجر / الجملة",
+          "labelEn": "Wholesale Margin",
+          "valueAr": "800 ريال (ربح التاجر 200 ريال للكيس)",
+          "valueEn": "800 YER (200 YER Trader Profit)"
+        }
+      ],
+      "isFeatured": true,
+      "isBestSeller": true,
+      "stock": 650
+    },
+    {
+      "id": "bg-prem-1kg",
+      "nameAr": "فحم الذهب الأسود الفاخر (1 كجم كامل + 10g مجاناً)",
+      "nameEn": "Black Gold Premium Charcoal - 1kg Pouch",
+      "category": "premium",
+      "price": 1600,
+      "originalPrice": 1900,
+      "discountPercent": 15,
+      "weightOptions": [
+        {
+          "weight": "250g (ربع كيلو)",
+          "price": 600
+        },
+        {
+          "weight": "500g (نصف كيلو)",
+          "price": 1000
+        },
+        {
+          "weight": "1kg (كيلو كامل)",
+          "price": 1600
+        }
+      ],
+      "descriptionAr": "العبوة الكبرى من خط الفحم الفاخر (1 كجم صافي + 10g هدية). مناسبة للاستخدام المنزلي المكثف والمقاهي الراقية. تعبئة خاصة بأعلى مواصفات الفرز النقي.",
+      "descriptionEn": "1kg Master Premium Charcoal Pouch. Built for frequent connoisseurs, luxury cafes, and major guest events.",
+      "origin": "الذهب الأسود - صنعاء",
+      "burnDurationHours": "6+ ساعات متواصلة",
+      "ashPercentage": "أقل من 1.5%",
+      "moisture": "< 2%",
+      "rating": 4.9,
+      "reviewCount": 185,
+      "images": [
+        "/src/assets/images/black_gold_pouch_pair_1786125935649.jpg",
+        "/src/assets/images/black_gold_merch_kit_1786125990648.jpg",
+        "/src/assets/images/black_gold_retail_stand_1786125959576.jpg"
+      ],
+      "specs": [
+        {
+          "labelAr": "نوع التغليف",
+          "labelEn": "Packaging",
+          "valueAr": "كيس سميك مقوى مع يد حمل وقفل Zipper",
+          "valueEn": "Heavy-Duty Reinforced Zipper Bag"
+        },
+        {
+          "labelAr": "سعر التاجر / الجملة",
+          "labelEn": "Wholesale Margin",
+          "valueAr": "1,300 ريال (ربح التاجر 300 ريال للكيس)",
+          "valueEn": "1,300 YER (300 YER Trader Profit)"
+        }
+      ],
+      "isFeatured": true,
+      "isBestSeller": false,
+      "stock": 400
+    },
+    {
+      "id": "bg-std-250g",
+      "nameAr": "فحم الذهب الأسود الشعبي (250g + 10g مجاناً)",
+      "nameEn": "Black Gold Standard Charcoal - 250g Pack",
+      "category": "local",
+      "price": 500,
+      "originalPrice": 600,
+      "discountPercent": 16,
+      "weightOptions": [
+        {
+          "weight": "250g (ربع كيلو)",
+          "price": 500
+        },
+        {
+          "weight": "500g (نصف كيلو)",
+          "price": 800
+        },
+        {
+          "weight": "1kg (كيلو كامل)",
+          "price": 1200
+        }
+      ],
+      "descriptionAr": "الخيار الاقتصادي اليومي عالي الجودة والمغربل ميكانيكياً بدون أتربة. سعر مناسب للجميع مع نفس الجودة والاشتغال السريع (أقل من 5 دقائق) وبدون فرقعة أو روائح.",
+      "descriptionEn": "High-value daily standard charcoal, mechanically screened with zero dust and quick 5-min lighting.",
+      "origin": "الذهب الأسود - صنعاء",
+      "burnDurationHours": "4 - 5 ساعات",
+      "ashPercentage": "< 2.5%",
+      "moisture": "< 3%",
+      "rating": 4.8,
+      "reviewCount": 420,
+      "images": [
+        "/src/assets/images/local_charcoal_pack_1786118685561.jpg",
+        "/src/assets/images/black_gold_pouch_pair_1786125935649.jpg"
+      ],
+      "specs": [
+        {
+          "labelAr": "الاستخدام اليومي",
+          "labelEn": "Usage",
+          "valueAr": "للمنازل والمشاوي اليومية والمباخر",
+          "valueEn": "Daily Home & Incense"
+        },
+        {
+          "labelAr": "سعر التاجر / الجملة",
+          "labelEn": "Wholesale Margin",
+          "valueAr": "380 ريال (ربح التاجر 120 ريال للكيس)",
+          "valueEn": "380 YER (120 YER Trader Profit)"
+        }
+      ],
+      "isFeatured": false,
+      "isBestSeller": true,
+      "stock": 1200
+    },
+    {
+      "id": "bg-std-500g",
+      "nameAr": "فحم الذهب الأسود الشعبي (500g + 10g مجاناً)",
+      "nameEn": "Black Gold Standard Charcoal - 500g Pack",
+      "category": "local",
+      "price": 800,
+      "originalPrice": 950,
+      "discountPercent": 15,
+      "weightOptions": [
+        {
+          "weight": "250g (ربع كيلو)",
+          "price": 500
+        },
+        {
+          "weight": "500g (نصف كيلو)",
+          "price": 800
+        },
+        {
+          "weight": "1kg (كيلو كامل)",
+          "price": 1200
+        }
+      ],
+      "descriptionAr": "عبوة النصف كيلو الاقتصادية من الفحم الشعبي النظيف. توفير عالي وعمر جمرة طويل ومواصفات خاضعة للفرز الصارم.",
+      "descriptionEn": "Economic 500g pack of standard clean charcoal. Great value and solid burn duration.",
+      "origin": "الذهب الأسود - صنعاء",
+      "burnDurationHours": "4 - 5 ساعات",
+      "ashPercentage": "< 2.5%",
+      "moisture": "< 3%",
+      "rating": 4.8,
+      "reviewCount": 290,
+      "images": [
+        "/src/assets/images/local_charcoal_pack_1786118685561.jpg",
+        "/src/assets/images/charcoal_hero_banner_1786118670743.jpg"
+      ],
+      "specs": [
+        {
+          "labelAr": "سعر التاجر / الجملة",
+          "labelEn": "Wholesale Margin",
+          "valueAr": "550 ريال (ربح التاجر 250 ريال للكيس)",
+          "valueEn": "550 YER (250 YER Trader Profit)"
+        }
+      ],
+      "isFeatured": false,
+      "isBestSeller": false,
+      "stock": 900
+    },
+    {
+      "id": "bg-std-1kg",
+      "nameAr": "فحم الذهب الأسود الشعبي (1 كجم كامل + 10g مجاناً)",
+      "nameEn": "Black Gold Standard Charcoal - 1kg Pack",
+      "category": "local",
+      "price": 1200,
+      "originalPrice": 1400,
+      "discountPercent": 14,
+      "weightOptions": [
+        {
+          "weight": "250g (ربع كيلو)",
+          "price": 500
+        },
+        {
+          "weight": "500g (نصف كيلو)",
+          "price": 800
+        },
+        {
+          "weight": "1kg (كيلو كامل)",
+          "price": 1200
+        }
+      ],
+      "descriptionAr": "عبوة الكيلو الشعبي الأكثر مبيعاً للمشاوي المنزلية والرحلات والسوبرماركت. تمنحك ساعات من الشواء الممتع والنظيف.",
+      "descriptionEn": "Best-selling 1kg daily value charcoal pack for BBQ and family dinners.",
+      "origin": "الذهب الأسود - صنعاء",
+      "burnDurationHours": "5 ساعات متواصلة",
+      "ashPercentage": "< 2.5%",
+      "moisture": "< 3%",
+      "rating": 4.9,
+      "reviewCount": 512,
+      "images": [
+        "/src/assets/images/local_charcoal_pack_1786118685561.jpg",
+        "/src/assets/images/black_gold_pouch_pair_1786125935649.jpg"
+      ],
+      "specs": [
+        {
+          "labelAr": "سعر التاجر / الجملة",
+          "labelEn": "Wholesale Margin",
+          "valueAr": "900 ريال (ربح التاجر 300 ريال للكيس)",
+          "valueEn": "900 YER (300 YER Trader Profit)"
+        }
+      ],
+      "isFeatured": false,
+      "isBestSeller": true,
+      "stock": 1500
+    },
+    {
+      "id": "bg-retail-box",
+      "nameAr": "صندوق العرض والترويج للبقالات (24 عبوة + ستاند خشبي مجاناً)",
+      "nameEn": "Retail Display Stand & Wholesale Box (24 Pouches)",
+      "category": "wholesale",
+      "price": 18500,
+      "originalPrice": 22000,
+      "discountPercent": 16,
+      "weightOptions": [
+        {
+          "weight": "24 عبوة مشكلة",
+          "price": 18500
+        },
+        {
+          "weight": "48 عبوة سوبرماركت",
+          "price": 36000
+        }
+      ],
+      "descriptionAr": "عرض التأسيس والدخول الميداني للبقالات ونقاط البيع في صنعاء: يشمل 24 عبوة مشكلة من فحم الذهب الأسود (شعبي وفاخر) مع ستاند عرض خشبي فاخر مجاني للمحل وبوسترات دعائية وضمان استرجاع 100%.",
+      "descriptionEn": "Complete store entry kit for supermarkets and groceries: 24 mixed pouches + free wooden display rack + promotional posters + 100% buyback guarantee.",
+      "origin": "الذهب الأسود - صنعاء",
+      "burnDurationHours": "مخصص للجملة والتوزيع",
+      "ashPercentage": "< 2%",
+      "moisture": "< 2%",
+      "rating": 5,
+      "reviewCount": 88,
+      "images": [
+        "/src/assets/images/black_gold_retail_stand_1786125959576.jpg",
+        "/src/assets/images/black_gold_pouch_pair_1786125935649.jpg",
+        "/src/assets/images/black_gold_merch_kit_1786125990648.jpg"
+      ],
+      "specs": [
+        {
+          "labelAr": "محتوى الكرتون",
+          "labelEn": "Box Content",
+          "valueAr": "24 عبوة مشكلة (فاخر وشعبي بأحجام 250g و 500g و 1kg)",
+          "valueEn": "24 Mixed Pouches"
+        },
+        {
+          "labelAr": "حافز التاجر",
+          "labelEn": "Trader Incentive",
+          "valueAr": "ستاند مجاني + هامش ربح يصل إلى 30% + عينات مجانية",
+          "valueEn": "Free Display + Up to 30% margin"
+        },
+        {
+          "labelAr": "سياسة التوزيع",
+          "labelEn": "Delivery Policy",
+          "valueAr": "توصيل مباشر مجاني للبقالة بالدراجات النارية في صنعاء",
+          "valueEn": "Free Direct Motorbike Delivery"
+        }
+      ],
+      "isFeatured": true,
+      "isBestSeller": true,
+      "stock": 120
+    },
+    {
+      "id": "bg-restaurant-sack",
+      "nameAr": "شوال فحم خشن نقي للمطاعم والمشاوي (شوال 20 كجم)",
+      "nameEn": "Wholesale Restaurant & Grill Charcoal Sack (20kg)",
+      "category": "wholesale",
+      "price": 4000,
+      "originalPrice": 4800,
+      "discountPercent": 16,
+      "weightOptions": [
+        {
+          "weight": "شوال واحد (20 كجم)",
+          "price": 4000
+        },
+        {
+          "weight": "5 شوالات للمطاعم",
+          "price": 19000
+        },
+        {
+          "weight": "10 شوالات جملة",
+          "price": 37000
+        }
+      ],
+      "descriptionAr": "شوال فحم خشن نقي مخصص للمطاعم ومحلات المشاوي الكبرى والبرست والشوايات. قطع كبيرة طبيعية معالجة منزوعة الدخان تعطي جمراً جباراً يدوم طوال ساعات العمل.",
+      "descriptionEn": "20kg Heavy-duty commercial charcoal sack engineered specifically for restaurants, BBQ pits, and commercial kitchens.",
+      "origin": "الذهب الأسود - خط الجملة",
+      "burnDurationHours": "7+ ساعات نار متصلة",
+      "ashPercentage": "< 2%",
+      "moisture": "< 3%",
+      "rating": 4.9,
+      "reviewCount": 64,
+      "images": [
+        "/src/assets/images/black_gold_delivery_fleet_1786125973582.jpg",
+        "/src/assets/images/charcoal_hero_banner_1786118670743.jpg"
+      ],
+      "specs": [
+        {
+          "labelAr": "الوزن التقريبي",
+          "labelEn": "Weight",
+          "valueAr": "شوال 20 كجم فحم خشن نقي",
+          "valueEn": "20kg Coarse Lump Charcoal"
+        },
+        {
+          "labelAr": "الميزة للمطاعم",
+          "labelEn": "Restaurant Advantage",
+          "valueAr": "حرارة هائلة وموفر جداً في استهلاك المطاعم",
+          "valueEn": "Extreme High Heat & High Cost Efficiency"
+        }
+      ],
+      "isFeatured": true,
+      "isBestSeller": false,
+      "stock": 250
+    },
+    {
+      "id": "bg-ignition-cubes",
+      "nameAr": "مكعبات الإشعال السريع الذهبية (عبوة 24 مكعب)",
+      "nameEn": "Golden Quick-Ignition Firestarter Cubes (24 Cubes)",
+      "category": "bbq",
+      "price": 450,
+      "originalPrice": 600,
+      "discountPercent": 25,
+      "weightOptions": [
+        {
+          "weight": "علبة 24 مكعب",
+          "price": 450
+        },
+        {
+          "weight": "3 علب توفير",
+          "price": 1200
+        }
+      ],
+      "descriptionAr": "مكعبات إشعال آمنة وسريعة الاشتعال بلمسة عود ثقاب واحدة. عديمة الرائحة ولا تترك أي طعم على المشاوي أو الشيشة.",
+      "descriptionEn": "Safe, odorless, instant-strike fire starter cubes. Lights in 1 second with no chemical odor.",
+      "origin": "الذهب الأسود - إكسسوارات",
+      "burnDurationHours": "اشتعال فوري خلال 5 ثوانٍ",
+      "ashPercentage": "0%",
+      "rating": 4.9,
+      "reviewCount": 140,
+      "images": [
+        "/src/assets/images/black_gold_merch_kit_1786125990648.jpg",
+        "/src/assets/images/black_gold_shisha_session_1786125947470.jpg"
+      ],
+      "specs": [
+        {
+          "labelAr": "عدد المكعبات",
+          "labelEn": "Count",
+          "valueAr": "24 مكعب إشعال سريع",
+          "valueEn": "24 Fast Cubes"
+        }
+      ],
+      "isFeatured": false,
+      "isBestSeller": false,
+      "stock": 500
+    }
+  ],
+  "users": [],
+  "orders": [
+    {
+      "id": "ORD-1338",
+      "orderNumber": "BG-2026-9459",
+      "date": "2026-08-23 17:42",
+      "status": "cancelled",
+      "items": [
+        {
+          "productId": "bg-prem-250g",
+          "productNameAr": "فحم الذهب الأسود الفاخر (250g + 10g مجاناً)",
+          "weight": "250g (ربع كيلو)",
+          "quantity": 2,
+          "unitPrice": 600
+        }
+      ],
+      "subtotal": 1200,
+      "shippingFee": 500,
+      "discount": 0,
+      "total": 1700,
+      "address": {
+        "id": "addr-temp",
+        "title": "مقر الفحص",
+        "city": "صنعاء",
+        "district": "حدة",
+        "street": "شارع الخمسين"
+      },
+      "customerName": "فحص استرجاع المخزون الميداني",
+      "customerPhone": "777112233",
+      "paymentMethod": "cod",
+      "notes": "طلب فحص آلي",
+      "driverId": "dr-1",
+      "driverName": "أحمد الكبسي",
+      "driverPhone": "770099887",
+      "timeline": [
+        {
+          "status": "received",
+          "time": "٠٥:٤٢ م",
+          "titleAr": "تم استلام الطلب وتأكيده بالنظام",
+          "titleEn": "Order Received & Verified"
+        },
+        {
+          "status": "cancelled",
+          "time": "٠٥:٤٢ م",
+          "titleAr": "تم إلغاء الطلب واسترجاع المخزون",
+          "titleEn": "Order Cancelled & Stock Rolled Back"
+        }
+      ],
+      "isStockRolledBack": true,
+      "cancelledAt": "2026-08-23T17:42:15.505Z",
+      "driverNotes": "سبب الإلغاء: تجربة التحقق من Rollback"
+    },
+    {
+      "id": "ORD-8589",
+      "orderNumber": "BG-2026-4465",
+      "date": "2026-08-23 17:41",
+      "status": "cancelled",
+      "items": [
+        {
+          "productId": "bg-prem-250g",
+          "productNameAr": "فحم الذهب الأسود الفاخر (250g + 10g مجاناً)",
+          "weight": "250g (ربع كيلو)",
+          "quantity": 2,
+          "unitPrice": 600
+        }
+      ],
+      "subtotal": 1200,
+      "shippingFee": 500,
+      "discount": 0,
+      "total": 1700,
+      "address": {
+        "id": "addr-temp",
+        "title": "مقر الفحص",
+        "city": "صنعاء",
+        "district": "حدة",
+        "street": "شارع الخمسين"
+      },
+      "customerName": "فحص استرجاع المخزون الميداني",
+      "customerPhone": "777112233",
+      "paymentMethod": "cod",
+      "notes": "طلب فحص آلي",
+      "driverId": "dr-1",
+      "driverName": "أحمد الكبسي",
+      "driverPhone": "770099887",
+      "timeline": [
+        {
+          "status": "received",
+          "time": "٠٥:٤١ م",
+          "titleAr": "تم استلام الطلب وتأكيده بالنظام",
+          "titleEn": "Order Received & Verified"
+        },
+        {
+          "status": "cancelled",
+          "time": "٠٥:٤١ م",
+          "titleAr": "تم إلغاء الطلب واسترجاع المخزون",
+          "titleEn": "Order Cancelled & Stock Rolled Back"
+        }
+      ],
+      "isStockRolledBack": true,
+      "cancelledAt": "2026-08-23T17:41:58.866Z",
+      "driverNotes": "سبب الإلغاء: تجربة التحقق من Rollback"
+    },
+    {
+      "id": "ORD-TEST-ROLLBACK-1787433647228",
+      "orderNumber": "BG-TEST-RB-8453",
+      "date": "2026-08-22T21:20:47.229Z",
+      "status": "cancelled",
+      "items": [
+        {
+          "productId": "bg-prem-250g",
+          "productNameAr": "فحم الذهب الأسود الفاخر (250g + 10g مجاناً)",
+          "weight": "1kg",
+          "quantity": 3,
+          "unitPrice": 600
+        },
+        {
+          "productId": "bg-prem-500g",
+          "productNameAr": "فحم الذهب الأسود الفاخر (500g + 10g مجاناً)",
+          "weight": "500g",
+          "quantity": 2,
+          "unitPrice": 1000
+        }
+      ],
+      "subtotal": 3800,
+      "shippingFee": 500,
+      "discount": 0,
+      "total": 4300,
+      "address": {
+        "id": "addr-test",
+        "title": "موقع الاختبار",
+        "city": "صنعاء",
+        "district": "حدة",
+        "street": "شارع صفر",
+        "landmark": "برج الأقصى",
+        "coordinates": {
+          "lat": 15.35,
+          "lng": 44.2
+        }
+      },
+      "customerName": "عميل اختبار الاسترجاع",
+      "customerPhone": "771234567",
+      "paymentMethod": "cod",
+      "timeline": [
+        {
+          "status": "received",
+          "time": "12:00 م",
+          "titleAr": "تم استلام الطلب وتأكيده بالنظام",
+          "titleEn": "Order Received"
+        },
+        {
+          "status": "cancelled",
+          "time": "٠٩:٢٠ م",
+          "titleAr": "تم إلغاء الطلب واسترجاع المخزون",
+          "titleEn": "Order Cancelled & Stock Rolled Back"
+        },
+        {
+          "status": "cancelled",
+          "time": "٠٩:٢٠ م",
+          "titleAr": "تم إلغاء الطلب واسترجاع المخزون",
+          "titleEn": "Order Cancelled & Stock Rolled Back"
+        }
+      ],
+      "isStockRolledBack": true,
+      "cancelledAt": "2026-08-22T21:20:47.247Z",
+      "driverNotes": "محاولة إلغاء ثانية مكررة"
+    },
+    {
+      "id": "ord-test-1787430768186",
+      "orderNumber": "BG-768186",
+      "date": "2026-08-22T20:32:48.186Z",
+      "status": "received",
+      "items": [
+        {
+          "productId": "test-bg-charcoal-1787430768184",
+          "productNameAr": "فحم الذهب الأسود الملكي الخاص - تجربة D1",
+          "weight": "500g",
+          "quantity": 5,
+          "unitPrice": 1350
+        }
+      ],
+      "subtotal": 6750,
+      "shippingFee": 500,
+      "discount": 0,
+      "total": 7250,
+      "customerName": "العميل التجريبي - صنعاء",
+      "customerPhone": "779911223",
+      "paymentMethod": "cod",
+      "address": {
+        "id": "addr-1",
+        "title": "المنزل",
+        "city": "صنعاء",
+        "district": "حدة وشارع الخمسين والحي السياسي",
+        "street": "شارع الخمسين الرئيسي",
+        "landmark": "بجوار محطة الذهب",
+        "coordinates": {
+          "lat": 15.312,
+          "lng": 44.185
+        }
+      },
+      "timeline": [
+        {
+          "status": "received",
+          "time": "12:00 م",
+          "titleAr": "تم استلام الطلب",
+          "titleEn": "Order Received"
+        }
+      ]
+    }
+  ],
+  "orderItems": [
+    {
+      "id": "oi-ORD-1338-bg-prem-250g-2agb",
+      "orderId": "ORD-1338",
+      "productId": "bg-prem-250g",
+      "productNameAr": "فحم الذهب الأسود الفاخر (250g + 10g مجاناً)",
+      "productNameEn": "Black Gold Premium Charcoal",
+      "weightOption": "250g (ربع كيلو)",
+      "quantity": 2,
+      "unitPrice": 600,
+      "totalPrice": 1200,
+      "createdAt": "2026-08-23 17:42"
+    },
+    {
+      "id": "oi-ORD-8589-bg-prem-250g-xpfs",
+      "orderId": "ORD-8589",
+      "productId": "bg-prem-250g",
+      "productNameAr": "فحم الذهب الأسود الفاخر (250g + 10g مجاناً)",
+      "productNameEn": "Black Gold Premium Charcoal",
+      "weightOption": "250g (ربع كيلو)",
+      "quantity": 2,
+      "unitPrice": 600,
+      "totalPrice": 1200,
+      "createdAt": "2026-08-23 17:41"
+    },
+    {
+      "id": "oi-ORD-TEST-ROLLBACK-1787433647228-bg-prem-250g-ninu",
+      "orderId": "ORD-TEST-ROLLBACK-1787433647228",
+      "productId": "bg-prem-250g",
+      "productNameAr": "فحم الذهب الأسود الفاخر (250g + 10g مجاناً)",
+      "productNameEn": "Black Gold Premium Charcoal",
+      "weightOption": "1kg",
+      "quantity": 3,
+      "unitPrice": 600,
+      "totalPrice": 1800,
+      "createdAt": "2026-08-22T21:20:47.229Z"
+    },
+    {
+      "id": "oi-ORD-TEST-ROLLBACK-1787433647228-bg-prem-500g-vquk",
+      "orderId": "ORD-TEST-ROLLBACK-1787433647228",
+      "productId": "bg-prem-500g",
+      "productNameAr": "فحم الذهب الأسود الفاخر (500g + 10g مجاناً)",
+      "productNameEn": "Black Gold Premium Charcoal",
+      "weightOption": "500g",
+      "quantity": 2,
+      "unitPrice": 1000,
+      "totalPrice": 2000,
+      "createdAt": "2026-08-22T21:20:47.229Z"
+    },
+    {
+      "id": "oi-ord-test-1787430768186-test-bg-charcoal-1787430768184-2znz",
+      "orderId": "ord-test-1787430768186",
+      "productId": "test-bg-charcoal-1787430768184",
+      "productNameAr": "فحم الذهب الأسود الملكي الخاص - تجربة D1",
+      "productNameEn": "Black Gold Premium Charcoal",
+      "weightOption": "500g",
+      "quantity": 5,
+      "unitPrice": 1350,
+      "totalPrice": 6750,
+      "createdAt": "2026-08-22T20:32:48.186Z"
+    }
+  ],
+  "customers": [
+    {
+      "id": "cust-777112233",
+      "name": "فحص استرجاع المخزون الميداني",
+      "phone": "777112233",
+      "district": "حدة",
+      "totalOrders": 2,
+      "totalSpent": 3400,
+      "loyaltyPoints": 17,
+      "createdAt": "2026-08-23 17:42",
+      "updatedAt": "2026-08-23T19:29:30.219Z"
+    },
+    {
+      "id": "cust-771234567",
+      "name": "عميل اختبار الاسترجاع",
+      "phone": "771234567",
+      "district": "حدة",
+      "totalOrders": 1,
+      "totalSpent": 4300,
+      "loyaltyPoints": 43,
+      "createdAt": "2026-08-22T21:20:47.229Z",
+      "updatedAt": "2026-08-23T19:29:30.219Z"
+    },
+    {
+      "id": "cust-779911223",
+      "name": "العميل التجريبي - صنعاء",
+      "phone": "779911223",
+      "district": "حدة وشارع الخمسين والحي السياسي",
+      "totalOrders": 1,
+      "totalSpent": 7250,
+      "loyaltyPoints": 72,
+      "createdAt": "2026-08-22T20:32:48.186Z",
+      "updatedAt": "2026-08-23T19:29:30.219Z"
+    }
+  ],
+  "reviews": [],
+  "coupons": [
+    {
+      "code": "GOLD2026",
+      "discountPercent": 10,
+      "maxDiscount": 2000,
+      "minOrderAmount": 2000,
+      "isActive": true
+    },
+    {
+      "code": "SANAA15",
+      "discountPercent": 15,
+      "maxDiscount": 3500,
+      "minOrderAmount": 5000,
+      "isActive": true
+    },
+    {
+      "code": "VIPBLACK",
+      "discountPercent": 20,
+      "maxDiscount": 5000,
+      "minOrderAmount": 10000,
+      "isActive": true
+    }
+  ],
+  "deliveryAgents": [
+    {
+      "id": "dr-1",
+      "name": "أحمد الكبسي",
+      "phone": "770099887",
+      "vehicleType": "motorcycle",
+      "districtZone": "حدة والسبعين",
+      "isOnline": true,
+      "activeOrdersCount": 1,
+      "rating": 4.9,
+      "deliveredCount": 412
+    },
+    {
+      "id": "dr-2",
+      "name": "محمد الحرازي",
+      "phone": "771122334",
+      "vehicleType": "motorcycle",
+      "districtZone": "التحرير وصنعاء القديمة",
+      "isOnline": true,
+      "activeOrdersCount": 0,
+      "rating": 4.8,
+      "deliveredCount": 285
+    },
+    {
+      "id": "dr-3",
+      "name": "صالح العنسي",
+      "phone": "773344556",
+      "vehicleType": "van",
+      "districtZone": "كافة مديريات صنعاء",
+      "isOnline": true,
+      "activeOrdersCount": 2,
+      "rating": 5,
+      "deliveredCount": 640
+    }
+  ],
+  "storeSettings": {
+    "storeNameAr": "فحم الذهب الأسود - صنعاء",
+    "storeNameEn": "Black Gold Charcoal Store",
+    "sloganAr": "جودة ملكية تدوم حتى 6 ساعات - بدون دخان أو رائحة",
+    "logoText": "الذهب الأسود",
+    "customLogoUrl": "/src/assets/images/black_gold_pouch_pair_1786125935649.jpg",
+    "topBannerNoticeAr": "🚚 توصيل سريع لجميع مديريات صنعاء خلال 45 دقيقة | 🎁 عبواتنا +10 جرام مجاناً",
+    "topBannerNoticeEn": "🚚 Fast Delivery in Sana'a within 45 mins | 🎁 +10g Free in every pouch",
+    "whatsappPhone": "775000150",
+    "callPhone": "775000150",
+    "contactEmail": "info@blackgold-ye.com",
+    "freeDeliveryThreshold": 8000,
+    "isStoreOpen": true,
+    "defaultCouponCode": "GOLD2026",
+    "deliveryDistricts": [
+      {
+        "id": "d1",
+        "nameAr": "حدة وشارع الخمسين والحي السياسي",
+        "nameEn": "Hadda & Political Area",
+        "fee": 500,
+        "etaMinutes": 35,
+        "isActive": true
+      },
+      {
+        "id": "d2",
+        "nameAr": "الأصبحي وشارع المقالح وبيت بوس",
+        "nameEn": "Asbahi & Bait Baws",
+        "fee": 500,
+        "etaMinutes": 40,
+        "isActive": true
+      },
+      {
+        "id": "d3",
+        "nameAr": "التحرير وشارع جمال والقاع",
+        "nameEn": "Tahrir & Al-Qaa",
+        "fee": 600,
+        "etaMinutes": 40,
+        "isActive": true
+      },
+      {
+        "id": "d4",
+        "nameAr": "صنعاء القديمة وباب اليمن وشعوب",
+        "nameEn": "Old Sanaa & Bab Al-Yaman",
+        "fee": 700,
+        "etaMinutes": 45,
+        "isActive": true
+      },
+      {
+        "id": "d5",
+        "nameAr": "شملان ومذبح وشارع الثلاثين",
+        "nameEn": "Shamlan & Madhbah",
+        "fee": 800,
+        "etaMinutes": 45,
+        "isActive": true
+      },
+      {
+        "id": "d6",
+        "nameAr": "الحصبة وشارع المطار والروضة",
+        "nameEn": "Hasaba & Airport Rd",
+        "fee": 900,
+        "etaMinutes": 50,
+        "isActive": true
+      }
+    ]
+  },
+  "galleryItems": [
+    {
+      "id": "g1",
+      "titleAr": "عبوات الذهب الأسود الفاخرة (250g و 500g)",
+      "titleEn": "Black Gold Luxury Pouches (250g & 500g)",
+      "category": "pouches",
+      "categoryNameAr": "العبوات والتغليف",
+      "categoryNameEn": "Packaging & Pouches",
+      "image": "/src/assets/images/black_gold_pouch_pair_1786125935649.jpg",
+      "descriptionAr": "تغليف أسود فاخر بنظام القفل الحراري المزدوج (Zipper Lock) للحفاظ على جودة الفحم وجفافه التام من الرطوبة.",
+      "descriptionEn": "Double Zipper-Lock moisture-proof matte black pouch bags for optimal charcoal preservation.",
+      "badgeAr": "التصميم الرسمي للعبوات",
+      "badgeEn": "Official Package Design",
+      "highlights": [
+        "عبوة 250 جرام خفيفة محكمة",
+        "عبوة 500 جرام للمجالس",
+        "طباعة ذهبية بارزة شيك"
+      ]
+    },
+    {
+      "id": "g2",
+      "titleAr": "تجربة الشيشة الفاخرة بمكعبات الفحم النقية",
+      "titleEn": "Luxury Shisha Session with Pure Cubes",
+      "category": "shisha",
+      "categoryNameAr": "جلسات الشيشة والحرارة",
+      "categoryNameEn": "Shisha & Heat Experience",
+      "image": "/src/assets/images/black_gold_shisha_session_1786125947470.jpg",
+      "descriptionAr": "حرارة متوازنة وتوهج أحمر متواصل لأكثر من 5 ساعات بدون طعم أو رائحة تعكر صفو المعسل.",
+      "descriptionEn": "Uniform glow and balanced heat lasting 5+ hours with zero taste or odor alteration.",
+      "badgeAr": "أعلى تقييم من المقاهي",
+      "badgeEn": "Top Lounge Choice",
+      "highlights": [
+        "بدون أدخنة أو رائحة",
+        "رماد أبيض ناعم",
+        "حرارة متصلة حتى 750 درجة"
+      ]
+    },
+    {
+      "id": "g3",
+      "titleAr": "منصات وعوارض العرض في منافذ البيع",
+      "titleEn": "Luxury Retail Store Display Stands",
+      "category": "retail",
+      "categoryNameAr": "منافذ البيع والمتاجر",
+      "categoryNameEn": "Retail & Store Displays",
+      "image": "/src/assets/images/black_gold_retail_stand_1786125959576.jpg",
+      "descriptionAr": "حوامل عرض مضيئة وشاشات ستاند متطورة تزين كبرى السوبرماركت والمحلات التجارية في أمانة العاصمة صنعاء.",
+      "descriptionEn": "Illuminated golden retail display stands showcased across major supermarkets and stores in Sanaa.",
+      "badgeAr": "متوفر في 120+ نقطة بيع",
+      "badgeEn": "Available in 120+ Stores",
+      "highlights": [
+        "رفوف إضاءة ذهبية",
+        "صندوق حاوية العرض المتنقل",
+        "تسليم جملة وتجزئة"
+      ]
+    },
+    {
+      "id": "g4",
+      "titleAr": "أسطول دراجات التوصيل المباشر بصنعاء",
+      "titleEn": "Sanaa Express Motorbike Delivery Fleet",
+      "category": "delivery",
+      "categoryNameAr": "أسطول التوصيل والسائقين",
+      "categoryNameEn": "Delivery Fleet & Drivers",
+      "image": "/src/assets/images/black_gold_delivery_fleet_1786125973582.jpg",
+      "descriptionAr": "أسطول دراجات نارية حديث مجهز بصناديق حرارية تحافظ على جودة المنتج وتضمن وصوله خلال 45 دقيقة.",
+      "descriptionEn": "Modern motorcycle delivery fleet equipped with thermal branded boxes for 45-minute Sanaa delivery.",
+      "badgeAr": "توصيل سريع 45 دقيقة",
+      "badgeEn": "45-Min Fast Express",
+      "highlights": [
+        "تتبع حي مباشر عبر الخريطة",
+        "صندوق حراري ضد الصدمات",
+        "مندوبون بدريس موحد"
+      ]
+    },
+    {
+      "id": "g5",
+      "titleAr": "طقم الهوية البصرية والزي الموحد للشركة",
+      "titleEn": "Official Brand Identity & Merchandise Kit",
+      "category": "merch",
+      "categoryNameAr": "الهوية والتسويق",
+      "categoryNameEn": "Brand & Marketing",
+      "image": "/src/assets/images/black_gold_merch_kit_1786125990648.jpg",
+      "descriptionAr": "هوية بصرية متكاملة تشمل سترة المندوب (Vest)، القبعة، التيشيرت الرسمي، تطبيق الهاتف، والشعار الذهبي الثلاثي الأبعاد.",
+      "descriptionEn": "Comprehensive brand identity kit featuring courier uniform, cap, mobile app interface, and 3D gold logo.",
+      "badgeAr": "هوية بصرية فاخرة",
+      "badgeEn": "Luxury Identity",
+      "highlights": [
+        "زي موحد معتمد للمندوبين",
+        "تطبيق أندرويد متكامل",
+        "تغليف هدايا وترويج"
+      ]
+    }
+  ],
+  "inventoryTransactions": [
+    {
+      "id": "tx-rollback-1787506935505-bg-prem-250g-fqg1",
+      "productId": "bg-prem-250g",
+      "productName": "فحم الذهب الأسود الفاخر (250g + 10g مجاناً)",
+      "type": "STOCK_ROLLBACK",
+      "quantity": 2,
+      "previousStock": 798,
+      "newStock": 800,
+      "reason": "استرجاع مخزون لإلغاء الطلب #BG-2026-9459",
+      "performedBy": "العميل (فحص استرجاع المخزون الميداني)",
+      "createdAt": "2026-08-23T19:29:30.219Z"
+    },
+    {
+      "id": "tx-sale-1787506935492-l30y",
+      "productId": "bg-prem-250g",
+      "productName": "فحم الذهب الأسود الفاخر (250g + 10g مجاناً)",
+      "type": "sale",
+      "quantity": -2,
+      "previousStock": 800,
+      "newStock": 798,
+      "reason": "مبيعات طلب جديد #BG-2026-9459",
+      "performedBy": "نظام الطلبات الآلي",
+      "createdAt": "2026-08-23T19:29:30.219Z"
+    },
+    {
+      "id": "tx-rollback-1787506918866-bg-prem-250g-n4gd",
+      "productId": "bg-prem-250g",
+      "productName": "فحم الذهب الأسود الفاخر (250g + 10g مجاناً)",
+      "type": "STOCK_ROLLBACK",
+      "quantity": 2,
+      "previousStock": 798,
+      "newStock": 800,
+      "reason": "استرجاع مخزون لإلغاء الطلب #BG-2026-4465",
+      "performedBy": "العميل (فحص استرجاع المخزون الميداني)",
+      "createdAt": "2026-08-23T19:29:30.219Z"
+    },
+    {
+      "id": "tx-sale-1787506918846-ddcr",
+      "productId": "bg-prem-250g",
+      "productName": "فحم الذهب الأسود الفاخر (250g + 10g مجاناً)",
+      "type": "sale",
+      "quantity": -2,
+      "previousStock": 800,
+      "newStock": 798,
+      "reason": "مبيعات طلب جديد #BG-2026-4465",
+      "performedBy": "نظام الطلبات الآلي",
+      "createdAt": "2026-08-23T19:29:30.219Z"
+    },
+    {
+      "id": "tx-rollback-1787433647297-bg-prem-500g-5c0i",
+      "productId": "bg-prem-500g",
+      "productName": "فحم الذهب الأسود الفاخر (500g + 10g مجاناً)",
+      "type": "STOCK_ROLLBACK",
+      "quantity": 2,
+      "previousStock": 648,
+      "newStock": 650,
+      "reason": "استرجاع مخزون لإلغاء الطلب #BG-TEST-RB-8453",
+      "performedBy": "مدير الفرع - حدة",
+      "createdAt": "2026-08-23T19:29:30.219Z"
+    },
+    {
+      "id": "tx-rollback-1787433647247-bg-prem-250g-u0xi",
+      "productId": "bg-prem-250g",
+      "productName": "فحم الذهب الأسود الفاخر (250g + 10g مجاناً)",
+      "type": "STOCK_ROLLBACK",
+      "quantity": 3,
+      "previousStock": 797,
+      "newStock": 800,
+      "reason": "استرجاع مخزون لإلغاء الطلب #BG-TEST-RB-8453",
+      "performedBy": "مدير الفرع - حدة",
+      "createdAt": "2026-08-23T19:29:30.219Z"
+    },
+    {
+      "id": "tx-sale-test-B-1787433647229",
+      "productId": "bg-prem-500g",
+      "productName": "فحم الذهب الأسود الفاخر (500g + 10g مجاناً)",
+      "type": "sale",
+      "quantity": -2,
+      "previousStock": 650,
+      "newStock": 648,
+      "reason": "مبيعات طلب اختباري #BG-TEST-RB-8453",
+      "performedBy": "نظام الاختبارات الآلي",
+      "createdAt": "2026-08-23T19:29:30.219Z"
+    },
+    {
+      "id": "tx-sale-test-A-1787433647228",
+      "productId": "bg-prem-250g",
+      "productName": "فحم الذهب الأسود الفاخر (250g + 10g مجاناً)",
+      "type": "sale",
+      "quantity": -3,
+      "previousStock": 800,
+      "newStock": 797,
+      "reason": "مبيعات طلب اختباري #BG-TEST-RB-8453",
+      "performedBy": "نظام الاختبارات الآلي",
+      "createdAt": "2026-08-23T19:29:30.219Z"
+    },
+    {
+      "id": "inv-init-test-bg-charcoal-1787430768184-1787430768184",
+      "productId": "test-bg-charcoal-1787430768184",
+      "productName": "فحم الذهب الأسود الملكي الخاص - تجربة D1",
+      "type": "initial",
+      "quantity": 250,
+      "previousStock": 0,
+      "newStock": 250,
+      "reason": "إضافة منتج جديد للمتجر",
+      "performedBy": "الإدارة",
+      "createdAt": "2026-08-23T19:29:30.219Z"
+    }
+  ],
+  "payments": [],
+  "notifications": [],
+  "updatedAt": "2026-08-23T19:29:30.219Z"
+}
