@@ -82,7 +82,13 @@ export default function App() {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed.map((p: any) => ({
+            ...p,
+            image: p.image || p.images?.[0] || '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg',
+            images: (p.images && p.images.length > 0) ? p.images : [p.image || '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg']
+          }));
+        }
       } catch (e) {
         console.error('Failed to parse bg_saved_products', e);
       }
@@ -222,8 +228,13 @@ export default function App() {
       .then((data) => {
         if (!isMounted) return;
         if (data.success && Array.isArray(data.data) && data.data.length > 0) {
-          setProducts(data.data);
-          safeSetLocalStorage('bg_saved_products', JSON.stringify(data.data));
+          const normalized = data.data.map((p: any) => ({
+            ...p,
+            image: p.image || p.images?.[0] || '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg',
+            images: (p.images && p.images.length > 0) ? p.images : [p.image || '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg']
+          }));
+          setProducts(normalized);
+          safeSetLocalStorage('bg_saved_products', JSON.stringify(normalized));
         }
       })
       .catch((err) => {
@@ -475,20 +486,28 @@ export default function App() {
   };
 
   const handleUpdateProduct = async (id: string, updatedPayload: any) => {
+    const finalImage = updatedPayload.image || updatedPayload.images?.[0] || '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg';
+    const finalImages = (updatedPayload.images && updatedPayload.images.length > 0) ? updatedPayload.images : [finalImage];
+    const normalizedPayload = {
+      ...updatedPayload,
+      image: finalImage,
+      images: finalImages
+    };
+
     setProducts((prev) => {
-      const updated = prev.map((p) => (p.id === id ? { ...p, ...updatedPayload } : p));
+      const updated = prev.map((p) => (p.id === id ? { ...p, ...normalizedPayload } : p));
       safeSetLocalStorage('bg_saved_products', JSON.stringify(updated));
       return updated;
     });
 
     // If modal is currently viewing this product, update it in realtime
-    setSelectedProductDetails((prev) => (prev && prev.id === id ? { ...prev, ...updatedPayload } : prev));
+    setSelectedProductDetails((prev) => (prev && prev.id === id ? { ...prev, ...normalizedPayload } : prev));
 
     try {
       await fetch(`/api/products/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updatedPayload)
+        body: JSON.stringify(normalizedPayload)
       });
     } catch (e) {
       console.log('Offline fallback for product update', e);

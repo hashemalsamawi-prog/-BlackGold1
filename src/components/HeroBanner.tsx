@@ -1,6 +1,6 @@
 import React from 'react';
 import { Language } from '../types';
-import { ASSETS } from '../assets/images';
+import { ASSETS, resolveAsset } from '../assets/images';
 import { Flame, Sparkles, ShieldCheck, Truck, Clock, Award, ArrowLeft } from 'lucide-react';
 
 interface HeroBannerProps {
@@ -80,10 +80,13 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({
           <div className="lg:col-span-5 relative">
             <div className="relative rounded-3xl overflow-hidden border border-amber-500/30 bg-gradient-to-b from-zinc-900 to-black p-3 shadow-2xl shadow-amber-500/10">
               <img
-                src={ASSETS.heroBanner}
+                src={resolveAsset(ASSETS.pouchPair || ASSETS.heroBanner)}
                 alt="فحم الذهب الأسود"
                 className="w-full h-80 sm:h-96 object-cover rounded-2xl filter contrast-105"
                 referrerPolicy="no-referrer"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).src = '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg';
+                }}
               />
               <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent opacity-80" />
               

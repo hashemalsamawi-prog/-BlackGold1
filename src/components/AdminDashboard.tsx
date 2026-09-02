@@ -290,6 +290,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       burnDurationHours: prodForm.burnDurationHours,
       ashPercentage: prodForm.ashPercentage,
       stock: Number(prodForm.stock),
+      image: finalImageUrl,
       images: [finalImageUrl]
     };
 

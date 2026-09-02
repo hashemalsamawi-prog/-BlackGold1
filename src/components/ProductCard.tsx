@@ -49,10 +49,13 @@ export const ProductCard: React.FC<ProductCardProps> = ({
         {/* Product Image */}
         <div className="relative aspect-square w-full rounded-2xl overflow-hidden bg-black/60 mb-4 border border-zinc-800 group-hover:border-amber-500/30 transition-colors">
           <img
-            src={resolveAsset(product.image)}
+            src={resolveAsset(product.images?.[0] || product.image)}
             alt={product.nameAr}
             className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
             referrerPolicy="no-referrer"
+            onError={(e) => {
+              (e.target as HTMLImageElement).src = '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg';
+            }}
           />
           <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" />
 

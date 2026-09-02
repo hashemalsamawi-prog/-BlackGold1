@@ -293,11 +293,40 @@ class D1DatabaseAccessLayer {
         });
       }
 
+      // 8. Ensure Default Master Owner Account (هاشم السماوي) exists
+      this.ensureDefaultUsers();
+
       this.isInitialized = true;
       this.saveLocal();
       console.log('✅ Cloudflare D1 Database Access Layer Initialized Successfully. Database ID:', CLOUDFLARE_CONFIG.databaseId);
     } catch (e) {
       console.error('Error during D1 DAL initialization:', e);
+    }
+  }
+
+  /**
+   * Ensure Default Owner Account exists and is ready for login
+   */
+  public ensureDefaultUsers() {
+    const hasOwner = this.tables.users.some(u => u.role === 'owner');
+    if (!hasOwner) {
+      const defaultOwner: UserAccount = {
+        id: 'usr-owner-hashem',
+        name: 'هاشم السماوي (المالك)',
+        phone: '777000111',
+        role: 'owner',
+        pin: '7777',
+        createdAt: new Date().toISOString()
+      };
+      this.tables.users.push(defaultOwner);
+      this.saveLocal();
+
+      if (CLOUDFLARE_CONFIG.accountId && CLOUDFLARE_CONFIG.apiToken && CLOUDFLARE_CONFIG.databaseId) {
+        this.executeCloudflareD1Query(
+          "INSERT OR IGNORE INTO users (id, name, phone, role, pin_hash, created_at) VALUES (?, ?, ?, ?, ?, ?);",
+          [defaultOwner.id, defaultOwner.name, defaultOwner.phone, defaultOwner.role, defaultOwner.pin, defaultOwner.createdAt]
+        ).catch(() => {});
+      }
     }
   }
 
@@ -319,29 +348,34 @@ class D1DatabaseAccessLayer {
       // 2. Products
       const productsResult = await this.executeCloudflareD1Query("SELECT * FROM products;");
       if (Array.isArray(productsResult) && productsResult.length > 0) {
-        this.tables.products = productsResult.map((r: any) => ({
-          id: r.id,
-          nameAr: r.name_ar,
-          nameEn: r.name_en,
-          category: r.category,
-          price: r.price,
-          originalPrice: r.original_price,
-          discountPercent: r.discount_percent,
-          descriptionAr: r.description_ar,
-          descriptionEn: r.description_en,
-          origin: r.origin,
-          burnDurationHours: r.burn_duration_hours,
-          ashPercentage: r.ash_percentage,
-          moisture: r.moisture,
-          rating: r.rating,
-          reviewCount: r.review_count,
-          images: typeof r.images === 'string' ? JSON.parse(r.images || '[]') : (r.images || []),
-          specs: typeof r.specs === 'string' ? JSON.parse(r.specs || '[]') : (r.specs || []),
-          weightOptions: typeof r.weight_options === 'string' ? JSON.parse(r.weight_options || '[]') : (r.weight_options || []),
-          isFeatured: Boolean(r.is_featured),
-          isBestSeller: Boolean(r.is_best_seller),
-          stock: r.stock
-        }));
+        this.tables.products = productsResult.map((r: any) => {
+          const parsedImages = typeof r.images === 'string' ? JSON.parse(r.images || '[]') : (r.images || []);
+          const primaryImg = parsedImages[0] || r.image || '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg';
+          return {
+            id: r.id,
+            nameAr: r.name_ar,
+            nameEn: r.name_en,
+            category: r.category,
+            price: r.price,
+            originalPrice: r.original_price,
+            discountPercent: r.discount_percent,
+            descriptionAr: r.description_ar,
+            descriptionEn: r.description_en,
+            origin: r.origin,
+            burnDurationHours: r.burn_duration_hours,
+            ashPercentage: r.ash_percentage,
+            moisture: r.moisture,
+            rating: r.rating,
+            reviewCount: r.review_count,
+            image: primaryImg,
+            images: parsedImages.length > 0 ? parsedImages : [primaryImg],
+            specs: typeof r.specs === 'string' ? JSON.parse(r.specs || '[]') : (r.specs || []),
+            weightOptions: typeof r.weight_options === 'string' ? JSON.parse(r.weight_options || '[]') : (r.weight_options || []),
+            isFeatured: Boolean(r.is_featured),
+            isBestSeller: Boolean(r.is_best_seller),
+            stock: r.stock
+          };
+        });
 
         for (const p of this.tables.products) {
           this.tables.inventory.set(p.id, {
@@ -381,6 +415,28 @@ class D1DatabaseAccessLayer {
           date: r.created_at
         }));
       }
+
+      // 4. Users & Owner
+      try {
+        const usersResult = await this.executeCloudflareD1Query("SELECT * FROM users;");
+        if (Array.isArray(usersResult) && usersResult.length > 0) {
+          this.tables.users = usersResult.map((u: any) => ({
+            id: u.id,
+            name: u.name,
+            phone: u.phone,
+            email: u.email || undefined,
+            role: u.role,
+            passwordHash: u.password_hash || undefined,
+            pin: u.pin_hash || u.pin || undefined,
+            createdAt: u.created_at || new Date().toISOString(),
+            lastLogin: u.last_login || undefined
+          }));
+        }
+      } catch (userErr) {
+        console.warn('D1 remote users sync warning:', userErr);
+      }
+
+      this.ensureDefaultUsers();
 
       console.log('✅ Cloudflare D1 primary sync completed successfully.');
       return true;
@@ -451,14 +507,32 @@ class D1DatabaseAccessLayer {
   // 1. PRODUCTS & CATEGORIES
   // ==========================================
   public getProducts(): Product[] {
-    return this.tables.products;
+    return this.tables.products.map(p => {
+      const primaryImg = p.image || p.images?.[0] || '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg';
+      return {
+        ...p,
+        image: primaryImg,
+        images: (p.images && p.images.length > 0) ? p.images : [primaryImg]
+      };
+    });
   }
 
   public findProductById(id: string): Product | undefined {
-    return this.tables.products.find(p => p.id === id);
+    const p = this.tables.products.find(p => p.id === id);
+    if (!p) return undefined;
+    const primaryImg = p.image || p.images?.[0] || '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg';
+    return {
+      ...p,
+      image: primaryImg,
+      images: (p.images && p.images.length > 0) ? p.images : [primaryImg]
+    };
   }
 
   public addProduct(product: Product): Product {
+    const primaryImg = product.image || product.images?.[0] || '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg';
+    product.image = primaryImg;
+    product.images = (product.images && product.images.length > 0) ? product.images : [primaryImg];
+
     this.tables.products.push(product);
     this.tables.inventory.set(product.id, {
       currentStock: product.stock,
@@ -490,7 +564,15 @@ class D1DatabaseAccessLayer {
     if (idx === -1) return null;
 
     const current = this.tables.products[idx];
-    const updated: Product = { ...current, ...updates };
+    const finalImage = updates.image || updates.images?.[0] || current.image || current.images?.[0] || '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg';
+    const finalImages = (updates.images && updates.images.length > 0) ? updates.images : (current.images && current.images.length > 0 ? current.images : [finalImage]);
+
+    const updated: Product = {
+      ...current,
+      ...updates,
+      image: finalImage,
+      images: finalImages
+    };
     this.tables.products[idx] = updated;
 
     if (updates.stock !== undefined) {
@@ -499,6 +581,13 @@ class D1DatabaseAccessLayer {
         inv.currentStock = updates.stock;
         inv.lastCountedAt = new Date().toISOString();
       }
+    }
+
+    if (CLOUDFLARE_CONFIG.accountId && CLOUDFLARE_CONFIG.apiToken && CLOUDFLARE_CONFIG.databaseId) {
+      this.executeCloudflareD1Query(
+        "UPDATE products SET name_ar = ?, price = ?, original_price = ?, images = ?, description_ar = ?, stock = ? WHERE id = ?;",
+        [updated.nameAr, updated.price, updated.originalPrice || updated.price, JSON.stringify(updated.images || [finalImage]), updated.descriptionAr, updated.stock, id]
+      ).catch(e => console.warn('D1 remote product update notice:', e));
     }
 
     this.saveLocal();

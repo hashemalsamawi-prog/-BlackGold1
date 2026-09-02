@@ -136,15 +136,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   // 4. Owner / Admin PIN Authentication (Server-Side Verified)
   const handleOwnerPinSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!ownerPin.trim()) {
-      setPinError('يرجى إدخال رمز PIN للمالك');
+    const cleanPin = ownerPin
+      .replace(/[٠-٩]/g, d => "٠١٢٣٤٥٦٧٨٩".indexOf(d).toString())
+      .replace(/[۰-۹]/g, d => "۰۱۲۳۴۵۶۷۸۹".indexOf(d).toString())
+      .trim();
+
+    if (!cleanPin) {
+      setPinError('يرجى إدخال رمز PIN للمالك (7777)');
       return;
     }
     setPinError(null);
     setIsLoading(true);
 
     try {
-      const res = await api.adminLogin({ pin: ownerPin.trim() });
+      const res = await api.adminLogin({ pin: cleanPin });
       if (res.token) {
         authStorage.setToken(res.token);
       }

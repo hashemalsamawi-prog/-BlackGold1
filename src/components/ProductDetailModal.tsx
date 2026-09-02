@@ -58,10 +58,13 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
           {/* Visual Container */}
           <div className="relative rounded-2xl overflow-hidden bg-black border border-zinc-800">
             <img
-              src={resolveAsset(product.image)}
+              src={resolveAsset(product.images?.[0] || product.image)}
               alt={product.nameAr}
               className="w-full h-80 object-cover"
               referrerPolicy="no-referrer"
+              onError={(e) => {
+                (e.target as HTMLImageElement).src = '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg';
+              }}
             />
             {product.bonusGrams && (
               <div className="absolute top-4 right-4 bg-red-600 text-white font-black text-xs px-3 py-1.5 rounded-lg shadow-lg">

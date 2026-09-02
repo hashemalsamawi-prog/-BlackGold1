@@ -11,8 +11,8 @@ export const ASSETS = {
   premiumPack: '/src/assets/images/premium_charcoal_pack_1786118701517.jpg',
 };
 
-export const resolveAsset = (path: string): string => {
-  if (!path) return ASSETS.logo;
+export const resolveAsset = (path?: string | null): string => {
+  if (!path || path.trim() === '') return ASSETS.pouchPair;
   return path;
 };
 
