@@ -4,11 +4,11 @@ import crypto from 'crypto';
 import { Product, Order, Review, Coupon, DeliveryAgent, StoreSettings, GalleryItem } from '../src/types';
 import { INITIAL_PRODUCTS, INITIAL_GALLERY_ITEMS, INITIAL_STORE_SETTINGS, INITIAL_DELIVERY_AGENTS } from '../src/data/mockData';
 
-// Cloudflare D1 Configuration
+// Cloudflare D1 Configuration (strictly via environment variables only)
 export const CLOUDFLARE_CONFIG = {
-  databaseId: process.env.CLOUDFLARE_DATABASE_ID || 'afa90d7a-7ccd-4455-8124-8218a1df4ac4',
-  accountId: process.env.CLOUDFLARE_ACCOUNT_ID || '8cacc6b0e24530ca741a99ec87ac97dd',
-  apiToken: process.env.CLOUDFLARE_API_TOKEN || 'cfut_qDgz7jDYKgrVGX8IGHVjBeTkj6HliXY5zBognYDbab9597ac',
+  databaseId: process.env.CLOUDFLARE_DATABASE_ID || '',
+  accountId: process.env.CLOUDFLARE_ACCOUNT_ID || '',
+  apiToken: process.env.CLOUDFLARE_API_TOKEN || '',
 };
 
 export interface UserAccount {
@@ -142,8 +142,18 @@ class D1DatabaseAccessLayer {
         { id: 'cat-incense', name_ar: 'أقراص البخور والمباخر سريعة الاشتعال', name_en: 'Incense Charcoal Tablets', slug: 'incense', sort_order: 6, is_active: 1, created_at: new Date().toISOString() }
       ];
 
-      // 2. Load legacy db.json if exists
-      if (fs.existsSync(this.localDbPath)) {
+      // 2. In production or when Cloudflare D1 credentials are provided, use Cloudflare D1 as PRIMARY data source
+      const hasD1Credentials = Boolean(
+        CLOUDFLARE_CONFIG.accountId && 
+        CLOUDFLARE_CONFIG.apiToken && 
+        CLOUDFLARE_CONFIG.databaseId
+      );
+
+      if (hasD1Credentials) {
+        console.log('⚡ Cloudflare D1 is active as PRIMARY authoritative database. Fetching remote tables...');
+        await this.syncFromCloudflareD1();
+      } else if (process.env.NODE_ENV !== 'production' && fs.existsSync(this.localDbPath)) {
+        // Fallback to local db.json ONLY in local development when D1 credentials are not present
         try {
           const raw = fs.readFileSync(this.localDbPath, 'utf-8');
           const parsed = JSON.parse(raw);
@@ -292,10 +302,99 @@ class D1DatabaseAccessLayer {
   }
 
   /**
-   * Execute query directly on Cloudflare D1 HTTP REST API if token & account are provided
+   * Fetch primary authoritative data directly from remote Cloudflare D1
+   */
+  public async syncFromCloudflareD1(): Promise<boolean> {
+    if (!CLOUDFLARE_CONFIG.accountId || !CLOUDFLARE_CONFIG.apiToken || !CLOUDFLARE_CONFIG.databaseId) {
+      return false;
+    }
+
+    try {
+      // 1. Categories
+      const categoriesResult = await this.executeCloudflareD1Query("SELECT * FROM categories ORDER BY sort_order ASC;");
+      if (Array.isArray(categoriesResult) && categoriesResult.length > 0) {
+        this.tables.categories = categoriesResult;
+      }
+
+      // 2. Products
+      const productsResult = await this.executeCloudflareD1Query("SELECT * FROM products;");
+      if (Array.isArray(productsResult) && productsResult.length > 0) {
+        this.tables.products = productsResult.map((r: any) => ({
+          id: r.id,
+          nameAr: r.name_ar,
+          nameEn: r.name_en,
+          category: r.category,
+          price: r.price,
+          originalPrice: r.original_price,
+          discountPercent: r.discount_percent,
+          descriptionAr: r.description_ar,
+          descriptionEn: r.description_en,
+          origin: r.origin,
+          burnDurationHours: r.burn_duration_hours,
+          ashPercentage: r.ash_percentage,
+          moisture: r.moisture,
+          rating: r.rating,
+          reviewCount: r.review_count,
+          images: typeof r.images === 'string' ? JSON.parse(r.images || '[]') : (r.images || []),
+          specs: typeof r.specs === 'string' ? JSON.parse(r.specs || '[]') : (r.specs || []),
+          weightOptions: typeof r.weight_options === 'string' ? JSON.parse(r.weight_options || '[]') : (r.weight_options || []),
+          isFeatured: Boolean(r.is_featured),
+          isBestSeller: Boolean(r.is_best_seller),
+          stock: r.stock
+        }));
+
+        for (const p of this.tables.products) {
+          this.tables.inventory.set(p.id, {
+            currentStock: p.stock,
+            reservedStock: 0,
+            minThreshold: 15,
+            lastCountedAt: new Date().toISOString()
+          });
+        }
+      }
+
+      // 3. Orders
+      const ordersResult = await this.executeCloudflareD1Query("SELECT * FROM orders ORDER BY created_at DESC;");
+      if (Array.isArray(ordersResult) && ordersResult.length > 0) {
+        this.tables.orders = ordersResult.map((r: any) => ({
+          id: r.id,
+          orderNumber: r.order_number,
+          customerName: r.customer_name,
+          customerPhone: r.customer_phone,
+          customerAddress: r.delivery_address,
+          address: {
+            id: 'addr-d1',
+            title: r.delivery_district,
+            district: r.delivery_district,
+            street: r.delivery_address,
+            phone: r.customer_phone,
+            isDefault: true
+          },
+          items: typeof r.items_json === 'string' ? JSON.parse(r.items_json || '[]') : (r.items_json || []),
+          subtotal: r.subtotal,
+          shippingFee: r.shipping_fee || 0,
+          deliveryFee: r.shipping_fee || 0,
+          discount: r.discount,
+          total: r.total,
+          paymentMethod: r.payment_method,
+          status: r.status,
+          date: r.created_at
+        }));
+      }
+
+      console.log('✅ Cloudflare D1 primary sync completed successfully.');
+      return true;
+    } catch (e) {
+      console.warn('D1 remote sync warning:', e);
+      return false;
+    }
+  }
+
+  /**
+   * Execute query directly on Cloudflare D1 HTTP REST API if token, account & database ID are provided
    */
   public async executeCloudflareD1Query(sql: string, params: any[] = []): Promise<any> {
-    if (!CLOUDFLARE_CONFIG.accountId || !CLOUDFLARE_CONFIG.apiToken) {
+    if (!CLOUDFLARE_CONFIG.accountId || !CLOUDFLARE_CONFIG.apiToken || !CLOUDFLARE_CONFIG.databaseId) {
       return null;
     }
 

@@ -24,11 +24,12 @@ export interface InventoryTransaction {
 
 // Helper to hash passwords / PINs
 export function hashSecret(secret: string): string {
-  return crypto.createHash('sha256').update(secret + 'BLACK_GOLD_SALT_2026').digest('hex');
+  const salt = process.env.JWT_SECRET || '';
+  return crypto.createHash('sha256').update(secret + salt).digest('hex');
 }
 
 // Generate secure session tokens (JWT HMAC-SHA256)
-const JWT_SECRET = process.env.JWT_SECRET || 'blackgold_secure_2026';
+const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
 
 export function generateToken(payload: { userId: string; role: string; phone: string; name: string }): string {
   const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');

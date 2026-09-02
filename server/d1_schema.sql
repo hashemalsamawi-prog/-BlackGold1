@@ -1,7 +1,7 @@
 -- =================================================================
 -- متجر فحم الذهب الأسود - صنعاء (BLACK GOLD CHARCOAL STORE)
 -- CLOUDFLARE D1 DATABASE SCHEMA
--- Database ID: afa90d7a-7ccd-4455-8124-8218a1df4ac4
+-- Database ID: Configured via CLOUDFLARE_DATABASE_ID
 -- Engine: Cloudflare Serverless D1 (SQLite Dialect)
 -- =================================================================
 
