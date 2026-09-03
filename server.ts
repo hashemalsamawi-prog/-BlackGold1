@@ -19,6 +19,7 @@ if (!fs.existsSync(UPLOADS_DIR)) {
 
 // Serve uploaded and local assets statically
 app.use("/uploads", express.static(UPLOADS_DIR));
+app.use("/images", express.static(path.join(process.cwd(), "public", "images")));
 app.use("/src/assets/images", express.static(path.join(process.cwd(), "src", "assets", "images")));
 
 app.use(express.json({ limit: "50mb" }));

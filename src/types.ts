@@ -210,6 +210,14 @@ export interface StoreSettings {
   deliveryDistricts?: any[];
   loyaltyPointsPer1000YER: number;
   customLogoUrl?: string;
+  heroBannerImage?: string;
+  heroBannerTitle?: string;
+  heroBannerSubtitle?: string;
+  heroBannerPrice?: number;
+  heroBannerOldPrice?: number;
+  enableAnimations?: boolean;
+  logoAnimation?: 'pulse' | 'glow' | 'none';
+  bannerAnimation?: 'float' | 'glow' | 'zoom' | 'none';
 }
 
 export interface GalleryItem {

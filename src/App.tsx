@@ -108,24 +108,28 @@ export default function App() {
     }
     return [];
   });
-  // Address State with localStorage persistence
+  // Address State with localStorage persistence (Starts empty by default so customers enter their own address)
   const [addresses, setAddresses] = useState<DeliveryAddress[]>(() => {
     const saved = safeGetLocalStorage('bg_saved_addresses', '');
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          // Filter out mock/demo addresses
+          const valid = parsed.filter(a => a.id !== 'addr-1' && a.id !== 'addr-2' && !a.street?.includes('شارع بيروت') && !a.street?.includes('شارع صخر'));
+          return valid;
+        }
       } catch (e) {
         console.error(e);
       }
     }
-    return MOCK_ADDRESSES;
+    return [];
   });
 
   const [selectedAddressId, setSelectedAddressId] = useState<string>(() => {
     const saved = safeGetLocalStorage('bg_selected_address_id', '');
-    if (saved) return saved;
-    return MOCK_ADDRESSES[0]?.id || '';
+    if (saved && saved !== 'addr-1' && saved !== 'addr-2') return saved;
+    return '';
   });
   const [reviews, setReviews] = useState<Review[]>([]);
   const [deliveryAgents, setDeliveryAgents] = useState<DeliveryAgent[]>(INITIAL_DELIVERY_AGENTS);
@@ -341,6 +345,20 @@ export default function App() {
 
     setToastMessage("تم تحديث وتطبيق شعار وهوية المتجر بنجاح في كافة الشاشات! 👑✨");
     setTimeout(() => setToastMessage(null), 4000);
+  };
+
+  const handleUpdateGalleryItems = (newItems: GalleryItem[]) => {
+    setGalleryItems(newItems);
+    safeSetLocalStorage('bg_saved_gallery', JSON.stringify(newItems));
+    fetch('/api/gallery', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newItems)
+    }).catch((err) => {
+      console.log('Gallery sync local fallback', err);
+    });
+    setToastMessage("تم تحديث صور وتطبيقات معرض الذهب الأسود بنجاح! 📸✨");
+    setTimeout(() => setToastMessage(null), 3000);
   };
 
 
@@ -753,6 +771,13 @@ export default function App() {
               el.scrollIntoView({ behavior: 'smooth', block: 'start' });
             }
           }}
+          bannerImage={storeSettings.heroBannerImage}
+          bannerTitle={storeSettings.heroBannerTitle}
+          bannerSubtitle={storeSettings.heroBannerSubtitle}
+          bannerPrice={storeSettings.heroBannerPrice}
+          bannerOldPrice={storeSettings.heroBannerOldPrice}
+          enableAnimations={storeSettings.enableAnimations}
+          bannerAnimation={storeSettings.bannerAnimation}
         />
 
         {/* Main Products Grid Section */}
@@ -905,7 +930,11 @@ export default function App() {
           <QualityProtocolSection lang={lang} />
 
           {/* Marketing & Real Product Photos Gallery */}
-          <MarketingGallery lang={lang} />
+          <MarketingGallery 
+            lang={lang} 
+            items={galleryItems}
+            enableAnimations={storeSettings.enableAnimations}
+          />
 
           {/* B2B Grocery & Restaurant Wholesale Partner Banner */}
           {activeCategory !== 'wholesale' && (
@@ -1114,6 +1143,8 @@ export default function App() {
           onChangeUserRole={(r) => setUserRole(r)}
           theme={theme}
           onToggleTheme={toggleTheme}
+          galleryItems={galleryItems}
+          onUpdateGalleryItems={handleUpdateGalleryItems}
         />
 
         <AiAdvisorModal
@@ -1152,8 +1183,8 @@ export default function App() {
           lang={lang}
         />
 
-        {/* Sticky Quick-Checkout Floating Bar (Appears when cart has items) */}
-        {cart.length > 0 && (
+        {/* Sticky Quick-Checkout Floating Bar (Appears when cart has items and NO modal/drawer is open) */}
+        {cart.length > 0 && !checkoutOpen && !cartOpen && !ordersOpen && !adminOpen && !mandoubOpen && !aiAdvisorOpen && !authOpen && !mapOpen && !welcomeOpen && !selectedProductDetails && (
           <div className="fixed bottom-16 sm:bottom-6 left-3 right-3 sm:left-auto sm:right-6 sm:max-w-md z-40 bg-[#161622]/95 border-2 border-amber-500/60 p-3 sm:p-4 rounded-2xl shadow-2xl backdrop-blur-xl flex items-center justify-between gap-3 text-right animate-in fade-in slide-in-from-bottom duration-300">
             <div className="flex items-center gap-2.5">
               <div className="w-10 h-10 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center font-black text-sm shadow-md">

@@ -271,16 +271,14 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                     </button>
                   </div>
                 ) : (
-                  <div className="p-3 rounded-xl bg-slate-950 border border-dashed border-amber-500/40 flex items-center justify-between gap-2">
-                    <span className="text-xs text-slate-400">لم يتم حفظ موقع للتوصيل بعد</span>
-                    <button
-                      type="button"
-                      onClick={onOpenMap}
-                      className="px-3 py-1.5 rounded-lg gold-gradient-bg text-slate-950 font-black text-[11px] cursor-pointer flex items-center gap-1"
-                    >
-                      <Plus className="w-3 h-3" />
-                      <span>+ إضافة موقع</span>
-                    </button>
+                  <div className="p-3 rounded-xl bg-slate-950/90 border border-dashed border-amber-500/30 flex items-center justify-between gap-2">
+                    <div className="space-y-0.5 text-right">
+                      <span className="text-xs font-bold text-slate-200 block">عنوان التوصيل</span>
+                      <span className="text-[10px] text-slate-400">ستقوم بإدخال اسمك وحيك وعنوانك في خطوة إتمام الطلب</span>
+                    </div>
+                    <span className="px-2.5 py-1 rounded-lg bg-amber-500/15 text-amber-300 border border-amber-500/30 text-[10px] font-black shrink-0">
+                      في الخطوة التالية ✍️
+                    </span>
                   </div>
                 )}
               </div>

@@ -3,7 +3,7 @@ import {
   Product, Order, Coupon, Review, Language, DeliveryAgent, 
   MarketingCampaign, StoreSettings, DistrictDeliveryConfig, ThemeMode, GalleryItem 
 } from '../types';
-import { SANAA_DISTRICTS } from '../data/mockData';
+import { SANAA_DISTRICTS, INITIAL_GALLERY_ITEMS } from '../data/mockData';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, BarChart, Bar, PieChart, Pie, Cell } from 'recharts';
 import { 
   BarChart3, Package, ShoppingCart, Users, Tag, MessageSquare, Settings, 
@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { Logo } from './Logo';
 import { playOrderAlertSound } from '../utils/soundAlert';
-import { resolveAsset } from '../assets/images';
+import { resolveAsset, ASSETS } from '../assets/images';
 import { compressImage, safeSetLocalStorage, safeRemoveLocalStorage, safeGetLocalStorage } from '../utils/storage';
 import { api } from '../services/api';
 
@@ -41,6 +41,8 @@ interface AdminDashboardProps {
   onChangeUserRole?: (role: 'owner' | 'mandoub' | 'customer') => void;
   theme?: ThemeMode;
   onToggleTheme?: () => void;
+  galleryItems?: GalleryItem[];
+  onUpdateGalleryItems?: (items: GalleryItem[]) => void;
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
@@ -64,7 +66,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   userRole = 'owner',
   onChangeUserRole,
   theme = 'dark',
-  onToggleTheme
+  onToggleTheme,
+  galleryItems = [],
+  onUpdateGalleryItems
 }) => {
   if (!isOpen) return null;
 
@@ -86,6 +90,43 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Logo upload refs & states
   const logoFileInputRef = useRef<HTMLInputElement>(null);
   const [isLogoDraggingOver, setIsLogoDraggingOver] = useState(false);
+
+  // Banner & Media Refs & States
+  const bannerFileInputRef = useRef<HTMLInputElement>(null);
+  const bannerCameraInputRef = useRef<HTMLInputElement>(null);
+  const galleryItemFileInputRef = useRef<HTMLInputElement>(null);
+  const activeUploadGalleryIdRef = useRef<string | null>(null);
+  const [mediaNotification, setMediaNotification] = useState<string | null>(null);
+
+  // Gallery items state
+  const [galleryList, setGalleryList] = useState<GalleryItem[]>(() => {
+    if (galleryItems && galleryItems.length > 0) return galleryItems;
+    const saved = safeGetLocalStorage('bg_saved_gallery', '');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      } catch {}
+    }
+    return INITIAL_GALLERY_ITEMS;
+  });
+
+  useEffect(() => {
+    if (galleryItems && galleryItems.length > 0) {
+      setGalleryList(galleryItems);
+    }
+  }, [galleryItems]);
+
+  // Gallery Modal
+  const [galleryModalOpen, setGalleryModalOpen] = useState(false);
+  const [editingGalleryId, setEditingGalleryId] = useState<string | null>(null);
+  const [galleryForm, setGalleryForm] = useState({
+    titleAr: '',
+    titleEn: '',
+    category: 'sessions',
+    image: ASSETS.pouchPair,
+    descriptionAr: ''
+  });
 
   // Editing Product Modal State
   const [productModalOpen, setProductModalOpen] = useState(false);
@@ -218,6 +259,179 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       processImageFile(e.dataTransfer.files[0]);
     }
+  };
+
+  const showMediaToast = (msg: string) => {
+    setMediaNotification(msg);
+    setTimeout(() => setMediaNotification(null), 4000);
+  };
+
+  // Universal image processor with auto-compression and server upload fallback
+  const processUniversalImage = async (file: File, maxW = 1200, maxH = 1200): Promise<string> => {
+    if (!file || !file.type.startsWith('image/')) {
+      alert('يرجى اختيار ملف صورة صالح (JPG, PNG, WEBP, SVG).');
+      throw new Error('Invalid image file');
+    }
+    try {
+      const { dataUrl } = await compressImage(file, maxW, maxH, 0.85);
+      try {
+        const uploadRes = await api.uploadImage(dataUrl, file.name);
+        if (uploadRes.success && uploadRes.url) {
+          return uploadRes.url;
+        }
+      } catch (err) {
+        console.warn('API upload fallback:', err);
+      }
+      return dataUrl;
+    } catch (err) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+          const res = e.target?.result as string;
+          if (res) {
+            try {
+              const uploadRes = await api.uploadImage(res, file.name);
+              if (uploadRes.success && uploadRes.url) {
+                resolve(uploadRes.url);
+                return;
+              }
+            } catch {}
+            resolve(res);
+          } else {
+            reject(new Error('Failed reading file'));
+          }
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+  };
+
+  // Logo upload & reset handlers
+  const handleLogoUpload = async (file: File) => {
+    try {
+      const url = await processUniversalImage(file, 600, 600);
+      const updated = { ...editableSettings, customLogoUrl: url };
+      setEditableSettings(updated);
+      safeSetLocalStorage('bg_custom_logo', url);
+      window.dispatchEvent(new Event('bg_logo_updated'));
+      onUpdateStoreSettings(updated);
+      showMediaToast('تم تحديث وحفظ شعار المتجر بنجاح! 👑✨');
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleResetLogo = () => {
+    const updated = { ...editableSettings, customLogoUrl: ASSETS.logo };
+    setEditableSettings(updated);
+    safeRemoveLocalStorage('bg_custom_logo');
+    window.dispatchEvent(new Event('bg_logo_updated'));
+    onUpdateStoreSettings(updated);
+    showMediaToast('تمت استعادة الشعار الرسمي الافتراضي للذهب الأسود');
+  };
+
+  // Banner upload & reset handlers
+  const handleBannerUpload = async (file: File) => {
+    try {
+      const url = await processUniversalImage(file, 1600, 900);
+      const updated = { ...editableSettings, heroBannerImage: url };
+      setEditableSettings(updated);
+      onUpdateStoreSettings(updated);
+      showMediaToast('تم تحديث وحفظ صورة البانر الترويجي بنجاح! 🖼️✨');
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleResetBanner = () => {
+    const updated = {
+      ...editableSettings,
+      heroBannerImage: ASSETS.pouchPair,
+      heroBannerTitle: 'عرض خاص محدود',
+      heroBannerSubtitle: 'عبوة 250g + 10g هدية إضافية',
+      heroBannerPrice: 1200,
+      heroBannerOldPrice: 1500,
+      enableAnimations: true,
+      bannerAnimation: 'float' as const
+    };
+    setEditableSettings(updated);
+    onUpdateStoreSettings(updated);
+    showMediaToast('تمت استعادة صورة وبيانات البانر الافتراضية');
+  };
+
+  // Gallery file picker change handler
+  const handleGalleryItemFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const targetId = activeUploadGalleryIdRef.current;
+    if (!targetId) return;
+
+    try {
+      const url = await processUniversalImage(file, 1200, 1200);
+      const updated = galleryList.map(item => item.id === targetId ? { ...item, image: url } : item);
+      setGalleryList(updated);
+      safeSetLocalStorage('bg_saved_gallery', JSON.stringify(updated));
+      if (onUpdateGalleryItems) onUpdateGalleryItems(updated);
+      showMediaToast('تم تحديث صورة المعرض وحفظها فوراً! 📸✨');
+    } catch (err) {
+      console.error(err);
+    } finally {
+      if (e.target) e.target.value = '';
+    }
+  };
+
+  // Save gallery modal item
+  const handleSaveGalleryModalItem = () => {
+    if (!galleryForm.titleAr.trim()) {
+      alert('يرجى كتابة عنوان العنصر.');
+      return;
+    }
+    let updated: GalleryItem[];
+    if (editingGalleryId) {
+      updated = galleryList.map(item => item.id === editingGalleryId ? {
+        ...item,
+        titleAr: galleryForm.titleAr,
+        titleEn: galleryForm.titleEn || galleryForm.titleAr,
+        category: galleryForm.category,
+        image: galleryForm.image,
+        descriptionAr: galleryForm.descriptionAr
+      } : item);
+    } else {
+      const newItem: GalleryItem = {
+        id: 'gal-' + Date.now(),
+        titleAr: galleryForm.titleAr,
+        titleEn: galleryForm.titleEn || galleryForm.titleAr,
+        category: galleryForm.category,
+        image: galleryForm.image,
+        descriptionAr: galleryForm.descriptionAr
+      };
+      updated = [...galleryList, newItem];
+    }
+    setGalleryList(updated);
+    safeSetLocalStorage('bg_saved_gallery', JSON.stringify(updated));
+    if (onUpdateGalleryItems) onUpdateGalleryItems(updated);
+    setGalleryModalOpen(false);
+    showMediaToast('تم حفظ بيانات بطاقة المعرض بنجاح! 📸');
+  };
+
+  const handleDeleteGalleryItem = (id: string) => {
+    if (galleryList.length <= 1) {
+      alert('يجب الإبقاء على صورة واحدة على الأقل في المعرض.');
+      return;
+    }
+    const updated = galleryList.filter(item => item.id !== id);
+    setGalleryList(updated);
+    safeSetLocalStorage('bg_saved_gallery', JSON.stringify(updated));
+    if (onUpdateGalleryItems) onUpdateGalleryItems(updated);
+    showMediaToast('تم حذف العنصر من المعرض');
+  };
+
+  const handleResetGallery = () => {
+    setGalleryList(INITIAL_GALLERY_ITEMS);
+    safeSetLocalStorage('bg_saved_gallery', JSON.stringify(INITIAL_GALLERY_ITEMS));
+    if (onUpdateGalleryItems) onUpdateGalleryItems(INITIAL_GALLERY_ITEMS);
+    showMediaToast('تمت استعادة صور المعرض الافتراضية الأصلية');
   };
 
   const handleOpenEditProduct = (prod: Product) => {
@@ -467,7 +681,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             { id: 'fleet', label: `🚚 المناديب (${deliveryAgents.length})`, icon: Truck },
             { id: 'coupons', label: `🏷️ الكوبونات (${campaigns.length})`, icon: Tag },
             { id: 'reviews', label: `⭐ التقييمات (${reviews.length})`, icon: MessageSquare },
-            { id: 'marketing', label: '🎨 المعرض والتسويق', icon: Sparkles },
+            { id: 'marketing', label: '🎨 الصور والشعار والتحريك والمعرض', icon: Sparkles },
             { id: 'reports', label: '📈 التقارير المالية', icon: TrendingUp },
             { id: 'settings', label: '⚙️ إعدادات المتجر', icon: Settings }
           ].map((t) => {
@@ -1102,18 +1316,549 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         )}
 
         {/* ========================================================= */}
-        {/* TAB 9: MARKETING & GALLERY */}
+        {/* TAB 9: MARKETING & GALLERY & LOGO & ANIMATIONS */}
         {/* ========================================================= */}
         {activeTab === 'marketing' && (
-          <div className="space-y-4 overflow-y-auto pr-1 text-xs">
-            <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-3">
-              <h4 className="font-bold text-white flex items-center gap-2">
+          <div className="space-y-6 overflow-y-auto pr-1 text-xs">
+            {/* Success Notification Banner */}
+            {mediaNotification && (
+              <div className="p-3.5 rounded-2xl bg-gradient-to-r from-emerald-500/20 to-teal-500/20 border border-emerald-500/40 text-emerald-300 flex items-center justify-between shadow-lg animate-in fade-in duration-300">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
+                  <span className="font-black text-xs">{mediaNotification}</span>
+                </div>
+                <button onClick={() => setMediaNotification(null)} className="text-emerald-400 hover:text-white p-1">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+
+            {/* Hidden File Inputs for Universal Image Uploads */}
+            <input
+              type="file"
+              ref={logoFileInputRef}
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files?.[0]) handleLogoUpload(e.target.files[0]);
+                e.target.value = '';
+              }}
+            />
+            <input
+              type="file"
+              ref={bannerFileInputRef}
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files?.[0]) handleBannerUpload(e.target.files[0]);
+                e.target.value = '';
+              }}
+            />
+            <input
+              type="file"
+              ref={bannerCameraInputRef}
+              accept="image/*"
+              capture="environment"
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files?.[0]) handleBannerUpload(e.target.files[0]);
+                e.target.value = '';
+              }}
+            />
+            <input
+              type="file"
+              ref={galleryItemFileInputRef}
+              accept="image/*"
+              className="hidden"
+              onChange={handleGalleryItemFileChange}
+            />
+
+            {/* Header intro */}
+            <div className="p-5 rounded-3xl bg-gradient-to-r from-amber-500/10 via-slate-900 to-amber-500/5 border border-amber-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-5 h-5 text-amber-400" />
+                  <h3 className="text-base font-black text-white">إدارة صور الهوية، الشعار، البانر، والمعرض الملكي</h3>
+                </div>
+                <p className="text-slate-400 text-xs mt-1">
+                  تحكم كامل في رفع وتحديث صور الشعار، صورة البانر الترويجي، بطاقات المعرض الميداني، ومؤثرات الحركة والتوهج للمتجر.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    onUpdateStoreSettings(editableSettings);
+                    if (onUpdateGalleryItems) onUpdateGalleryItems(galleryList);
+                    showMediaToast('تم حفظ وتطبيق كافة إعدادات الصور والشعار والهوية بنجاح! 👑✨');
+                  }}
+                  className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 font-black text-xs hover:brightness-110 shadow-lg shadow-amber-500/20 cursor-pointer flex items-center gap-1.5 transition-all"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>حفظ وتطبيق التغييرات</span>
+                </button>
+              </div>
+            </div>
+
+            {/* SECTION 1: LOGO & LOGO ANIMATION */}
+            <div className="p-5 rounded-3xl bg-slate-900/80 border border-slate-800 space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                <div className="flex items-center gap-2">
+                  <Award className="w-5 h-5 text-amber-400" />
+                  <h4 className="font-black text-white text-sm">1. شعار المتجر الرسمي والتحريك (Logo & Glow)</h4>
+                </div>
+                <button
+                  onClick={handleResetLogo}
+                  className="text-xs text-slate-400 hover:text-amber-400 flex items-center gap-1 transition-colors"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>استعادة الشعار الافتراضي</span>
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
+                {/* Logo Live Preview */}
+                <div className="lg:col-span-4 flex flex-col items-center justify-center p-6 rounded-2xl bg-black/60 border border-slate-800 space-y-3">
+                  <span className="text-[11px] font-bold text-slate-400">معاينة حية للشعار في المتجر:</span>
+                  <div className="p-4 rounded-2xl bg-slate-950/80 border border-amber-500/30 flex items-center justify-center shadow-inner">
+                    <Logo 
+                      size="lg" 
+                      showText={true} 
+                      customLogoUrl={editableSettings.customLogoUrl} 
+                      animated={editableSettings.enableAnimations !== false} 
+                    />
+                  </div>
+                  <span className="text-[10px] text-amber-500 font-mono">
+                    {editableSettings.customLogoUrl ? '✓ شعار مخصص نشط' : 'الافتراضي: شعار الذهب الأسود'}
+                  </span>
+                </div>
+
+                {/* Logo Upload Actions & Settings */}
+                <div className="lg:col-span-8 space-y-4">
+                  <div className="space-y-1.5">
+                    <label className="text-slate-300 font-bold block">رفع صورة جديدة للشعار:</label>
+                    <p className="text-slate-400 text-[11px]">
+                      يدعم ملفات PNG, SVG, JPG, WebP. يفضل أن تكون الخلفية شفافة أو مربعة للحصول على أفضل توهج وفخامة.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    <button
+                      onClick={() => logoFileInputRef.current?.click()}
+                      className="px-4 py-2.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 font-black text-xs flex items-center gap-2 cursor-pointer transition-all shadow-sm"
+                    >
+                      <Upload className="w-4 h-4 text-amber-400" />
+                      <span>اختيار صورة الشعار من الجهاز 📸</span>
+                    </button>
+
+                    <button
+                      onClick={handleResetLogo}
+                      className="px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs border border-slate-700 transition-colors"
+                    >
+                      استعادة الافتراضي
+                    </button>
+                  </div>
+
+                  {/* Manual URL Input */}
+                  <div className="space-y-1 pt-1">
+                    <label className="text-slate-400 text-[11px] block">أو أدخل رابط الشعار مباشرة (URL):</label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        placeholder="https://... أو /images/..."
+                        value={editableSettings.customLogoUrl || ''}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          const upd = { ...editableSettings, customLogoUrl: val };
+                          setEditableSettings(upd);
+                          if (val) safeSetLocalStorage('bg_custom_logo', val);
+                          else safeRemoveLocalStorage('bg_custom_logo');
+                          window.dispatchEvent(new Event('bg_logo_updated'));
+                          onUpdateStoreSettings(upd);
+                        }}
+                        className="flex-1 bg-slate-950 border border-slate-800 text-amber-300 p-2 rounded-xl text-xs font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Logo Animation Options */}
+                  <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800 flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-amber-400" />
+                      <span className="font-bold text-slate-200 text-xs">تأثير توهج وتحريك الشعار:</span>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      {[
+                        { id: 'glow', label: 'توهج ملكي ✨' },
+                        { id: 'pulse', label: 'نبض هادئ 💫' },
+                        { id: 'none', label: 'ثابت بدون تحريك' },
+                      ].map(opt => (
+                        <button
+                          key={opt.id}
+                          onClick={() => {
+                            const upd = { ...editableSettings, logoAnimation: opt.id as any };
+                            setEditableSettings(upd);
+                            onUpdateStoreSettings(upd);
+                            showMediaToast(`تم ضبط تحريك الشعار إلى: ${opt.label}`);
+                          }}
+                          className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+                            (editableSettings.logoAnimation || 'glow') === opt.id
+                              ? 'bg-amber-500 text-slate-950 font-black shadow-sm'
+                              : 'bg-slate-800 text-slate-400 hover:text-slate-200'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* SECTION 2: HERO BANNER IMAGE & PROMO */}
+            <div className="p-5 rounded-3xl bg-slate-900/80 border border-slate-800 space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                <div className="flex items-center gap-2">
+                  <Image className="w-5 h-5 text-amber-400" />
+                  <h4 className="font-black text-white text-sm">2. صورة البانر الرئيسي الترويجي والتحريك (Hero Banner)</h4>
+                </div>
+                <button
+                  onClick={handleResetBanner}
+                  className="text-xs text-slate-400 hover:text-amber-400 flex items-center gap-1 transition-colors"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>استعادة البانر الافتراضي</span>
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+                {/* Banner Live Preview */}
+                <div className="lg:col-span-5 space-y-2">
+                  <span className="text-[11px] font-bold text-slate-400 block">معاينة البانر الترويجي في الواجهة:</span>
+                  <div className="relative rounded-2xl overflow-hidden border border-amber-500/30 bg-black aspect-video flex items-center justify-center group shadow-xl">
+                    <img
+                      src={resolveAsset(editableSettings.heroBannerImage || ASSETS.pouchPair)}
+                      alt="معاينة البانر"
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                      referrerPolicy="no-referrer"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).src = ASSETS.pouchPair;
+                      }}
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent" />
+                    <div className="absolute bottom-3 right-3 left-3 p-2.5 rounded-xl bg-black/85 backdrop-blur-md border border-amber-500/30 flex items-center justify-between">
+                      <div>
+                        <span className="text-[9px] font-black text-amber-400 uppercase block">
+                          {editableSettings.heroBannerTitle || 'عرض خاص محدود'}
+                        </span>
+                        <p className="text-[11px] font-black text-white line-clamp-1">
+                          {editableSettings.heroBannerSubtitle || 'عبوة 250g + 10g هدية إضافية'}
+                        </p>
+                      </div>
+                      <div className="text-left">
+                        <span className="text-[11px] font-black text-amber-400 font-mono">
+                          {(editableSettings.heroBannerPrice || 1200).toLocaleString()} ريال
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Banner Controls */}
+                <div className="lg:col-span-7 space-y-4">
+                  <div className="space-y-1.5">
+                    <label className="text-slate-300 font-bold block">رفع صورة جديدة للبانر الرئيسي:</label>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        onClick={() => bannerFileInputRef.current?.click()}
+                        className="px-4 py-2.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 font-black text-xs flex items-center gap-2 cursor-pointer transition-all"
+                      >
+                        <Upload className="w-4 h-4 text-amber-400" />
+                        <span>رفع صورة البانر من الجهاز 🖼️</span>
+                      </button>
+
+                      <button
+                        onClick={() => bannerCameraInputRef.current?.click()}
+                        className="px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs border border-slate-700 flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Camera className="w-4 h-4" />
+                        <span>كاميرا</span>
+                      </button>
+
+                      <button
+                        onClick={handleResetBanner}
+                        className="px-3 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white text-xs"
+                      >
+                        استعادة الافتراضي
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Banner Texts and Prices */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                    <div>
+                      <label className="text-slate-400 text-[11px] block mb-1">عنوان العرض على البانر:</label>
+                      <input
+                        type="text"
+                        value={editableSettings.heroBannerTitle || ''}
+                        placeholder="عرض خاص محدود"
+                        onChange={(e) => {
+                          const upd = { ...editableSettings, heroBannerTitle: e.target.value };
+                          setEditableSettings(upd);
+                          onUpdateStoreSettings(upd);
+                        }}
+                        className="w-full bg-slate-950 border border-slate-800 text-white p-2 rounded-xl text-xs font-bold"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-slate-400 text-[11px] block mb-1">تفاصيل البكج والهدية:</label>
+                      <input
+                        type="text"
+                        value={editableSettings.heroBannerSubtitle || ''}
+                        placeholder="عبوة 250g + 10g هدية إضافية"
+                        onChange={(e) => {
+                          const upd = { ...editableSettings, heroBannerSubtitle: e.target.value };
+                          setEditableSettings(upd);
+                          onUpdateStoreSettings(upd);
+                        }}
+                        className="w-full bg-slate-950 border border-slate-800 text-white p-2 rounded-xl text-xs"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-slate-400 text-[11px] block mb-1">السعر المخفض (بالريال):</label>
+                      <input
+                        type="number"
+                        value={editableSettings.heroBannerPrice || 1200}
+                        onChange={(e) => {
+                          const upd = { ...editableSettings, heroBannerPrice: Number(e.target.value) };
+                          setEditableSettings(upd);
+                          onUpdateStoreSettings(upd);
+                        }}
+                        className="w-full bg-slate-950 border border-slate-800 text-amber-400 p-2 rounded-xl text-xs font-mono font-bold"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-slate-400 text-[11px] block mb-1">السعر الأصلي قبل الخصم:</label>
+                      <input
+                        type="number"
+                        value={editableSettings.heroBannerOldPrice || 1500}
+                        onChange={(e) => {
+                          const upd = { ...editableSettings, heroBannerOldPrice: Number(e.target.value) };
+                          setEditableSettings(upd);
+                          onUpdateStoreSettings(upd);
+                        }}
+                        className="w-full bg-slate-950 border border-slate-800 text-slate-400 p-2 rounded-xl text-xs font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Banner Animation Settings */}
+                  <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800 flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-amber-400" />
+                      <span className="font-bold text-slate-200 text-xs">حركة وتأثير البانر الترويجي (Banner Animation):</span>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      {[
+                        { id: 'float', label: 'طفو عائم Float 🛸' },
+                        { id: 'zoom', label: 'تكبير ناعم Zoom 🔍' },
+                        { id: 'glow', label: 'توهج فقط Glow ✨' },
+                        { id: 'none', label: 'ثابت بدون تحريك' },
+                      ].map(opt => (
+                        <button
+                          key={opt.id}
+                          onClick={() => {
+                            const upd = { ...editableSettings, bannerAnimation: opt.id as any };
+                            setEditableSettings(upd);
+                            onUpdateStoreSettings(upd);
+                            showMediaToast(`تم ضبط حركة البانر إلى: ${opt.label}`);
+                          }}
+                          className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+                            (editableSettings.bannerAnimation || 'float') === opt.id
+                              ? 'bg-amber-500 text-slate-950 font-black shadow-sm'
+                              : 'bg-slate-800 text-slate-400 hover:text-slate-200'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* SECTION 3: MARKETING GALLERY MANAGER */}
+            <div className="p-5 rounded-3xl bg-slate-900/80 border border-slate-800 space-y-4">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Layers className="w-5 h-5 text-amber-400" />
+                    <h4 className="font-black text-white text-sm">3. معرض صور وتطبيقات الذهب الأسود ({galleryList.length} صور)</h4>
+                  </div>
+                  <p className="text-slate-400 text-[11px] mt-0.5">
+                    الصور المعروضة في قسم "معرض صور وتطبيقات الذهب الأسود" في واجهة المتجر. يمكنك تغيير صورة أي كرت أو رفع صور جديدة بحرية تامة!
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      setEditingGalleryId(null);
+                      setGalleryForm({
+                        titleAr: '',
+                        titleEn: '',
+                        category: 'sessions',
+                        image: ASSETS.pouchPair,
+                        descriptionAr: ''
+                      });
+                      setGalleryModalOpen(true);
+                    }}
+                    className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-md shadow-amber-500/20 cursor-pointer"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>إضافة صورة وتطبيق جديد</span>
+                  </button>
+
+                  <button
+                    onClick={handleResetGallery}
+                    className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs flex items-center gap-1 transition-colors"
+                    title="استعادة الصور الأربعة الافتراضية"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>الافتراضية</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Gallery Cards Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                {galleryList.map((item) => (
+                  <div
+                    key={item.id}
+                    className="group relative rounded-2xl overflow-hidden bg-slate-950 border border-slate-800 hover:border-amber-500/50 transition-all flex flex-col justify-between shadow-lg"
+                  >
+                    {/* Image Box */}
+                    <div className="relative aspect-video sm:aspect-square overflow-hidden bg-black flex items-center justify-center">
+                      <img
+                        src={resolveAsset(item.image)}
+                        alt={item.titleAr}
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                        referrerPolicy="no-referrer"
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).src = ASSETS.pouchPair;
+                        }}
+                      />
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-transparent" />
+
+                      {/* Category Badge */}
+                      <span className="absolute top-2.5 right-2.5 px-2 py-0.5 rounded-md bg-black/75 backdrop-blur-sm border border-amber-500/40 text-[10px] font-black text-amber-400">
+                        {item.category === 'fleet'
+                          ? '🛵 أسطول صنعاء'
+                          : item.category === 'sessions'
+                          ? '🔥 جلسات الروقان'
+                          : item.category === 'retail'
+                          ? '🏪 نقاط البيع'
+                          : '👑 الهوية الملكية'}
+                      </span>
+
+                      {/* Quick Upload Button on Image */}
+                      <button
+                        onClick={() => {
+                          activeUploadGalleryIdRef.current = item.id;
+                          galleryItemFileInputRef.current?.click();
+                        }}
+                        className="absolute bottom-2.5 right-2.5 px-2.5 py-1.5 rounded-xl bg-amber-500/90 hover:bg-amber-400 text-slate-950 font-black text-[11px] shadow-lg flex items-center gap-1 cursor-pointer transition-transform active:scale-95"
+                        title="رفع صورة جديدة لهذا الكرت"
+                      >
+                        <Upload className="w-3.5 h-3.5" />
+                        <span>تغيير الصورة 📸</span>
+                      </button>
+                    </div>
+
+                    {/* Content & Actions */}
+                    <div className="p-3 space-y-2 flex-1 flex flex-col justify-between">
+                      <div>
+                        <h5 className="font-black text-white text-xs line-clamp-1">{item.titleAr}</h5>
+                        {item.descriptionAr && (
+                          <p className="text-slate-400 text-[10px] line-clamp-2 mt-1 leading-relaxed">
+                            {item.descriptionAr}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="flex items-center justify-between pt-2 border-t border-slate-800/80">
+                        <button
+                          onClick={() => {
+                            setEditingGalleryId(item.id);
+                            setGalleryForm({
+                              titleAr: item.titleAr,
+                              titleEn: item.titleEn || item.titleAr,
+                              category: item.category,
+                              image: item.image,
+                              descriptionAr: item.descriptionAr || ''
+                            });
+                            setGalleryModalOpen(true);
+                          }}
+                          className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-bold flex items-center gap-1 transition-colors"
+                        >
+                          <Edit className="w-3.5 h-3.5 text-amber-400" />
+                          <span>تعديل النصوص</span>
+                        </button>
+
+                        <button
+                          onClick={() => handleDeleteGalleryItem(item.id)}
+                          className="p-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 transition-colors"
+                          title="حذف هذا الكرت"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* SECTION 4: GLOBAL ANIMATIONS SWITCH */}
+            <div className="p-5 rounded-3xl bg-slate-900/80 border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-5 h-5 text-amber-400" />
+                  <h4 className="font-black text-white text-sm">4. تفعيل التحريك والمؤثرات البصرية الشاملة (Global Animations)</h4>
+                </div>
+                <p className="text-slate-400 text-[11px]">
+                  تشغيل حركات الطفو، نبض الهالة الذهبية للشعار، دوران نجوم التميز، ولمعان أكياس الفحم الملكية في كافة شاشات المتجر.
+                </p>
+              </div>
+
+              <button
+                onClick={() => {
+                  const current = editableSettings.enableAnimations !== false;
+                  const upd = { ...editableSettings, enableAnimations: !current };
+                  setEditableSettings(upd);
+                  onUpdateStoreSettings(upd);
+                  showMediaToast(
+                    !current 
+                      ? 'تم تفعيل كافة الحركات والمؤثرات في المتجر بنجاح! ✨' 
+                      : 'تم إيقاف الحركات وتشغيل النمط الهادئ'
+                  );
+                }}
+                className={`px-5 py-2.5 rounded-xl font-black text-xs flex items-center gap-2 transition-all cursor-pointer shadow-md ${
+                  editableSettings.enableAnimations !== false
+                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/50 hover:bg-emerald-500/30'
+                    : 'bg-slate-800 text-slate-400 border border-slate-700 hover:bg-slate-700'
+                }`}
+              >
                 <Sparkles className="w-4 h-4 text-amber-400" />
-                <span>أصول الهوية البصرية ومعرض صور متجر الذهب الأسود:</span>
-              </h4>
-              <p className="text-slate-400 text-[11px]">
-                الصور الحقيقية المنتجة للعبوات الملكية Zipper Lock، جلسات الشيشة الفاخرة، استاندات البقالات، وأسطول دراجات التوصيل السريع بصنعاء.
-              </p>
+                <span>{editableSettings.enableAnimations !== false ? '✓ التحريك مفعّل نشط' : 'التحريك متوقف'}</span>
+              </button>
             </div>
           </div>
         )}
@@ -1350,6 +2095,162 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   تسجيل حركة المخزون
                 </button>
               </form>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL: ADD / EDIT GALLERY ITEM */}
+        {galleryModalOpen && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+            <div className="bg-[#121218] border border-amber-500/50 rounded-3xl max-w-lg w-full p-5 text-slate-100 space-y-4 max-h-[90vh] overflow-y-auto shadow-2xl">
+              <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+                <div className="flex items-center gap-2">
+                  <Image className="w-5 h-5 text-amber-400" />
+                  <h4 className="font-black text-white text-sm">
+                    {editingGalleryId ? 'تعديل بيانات بطاقة المعرض' : 'إضافة صورة وتطبيق جديد للمعرض'}
+                  </h4>
+                </div>
+                <button 
+                  onClick={() => setGalleryModalOpen(false)} 
+                  className="text-slate-400 hover:text-white p-1 rounded-lg"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Image Preview & Upload in Modal */}
+              <div className="space-y-3">
+                <div className="relative rounded-2xl overflow-hidden bg-black aspect-video border border-amber-500/30 flex items-center justify-center">
+                  <img
+                    src={resolveAsset(galleryForm.image)}
+                    alt="معاينة الصورة"
+                    className="w-full h-full object-cover"
+                    referrerPolicy="no-referrer"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).src = ASSETS.pouchPair;
+                    }}
+                  />
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent" />
+                  <span className="absolute bottom-2 right-2 text-[10px] text-amber-400 font-bold bg-black/70 px-2 py-0.5 rounded">
+                    معاينة حية للصورة
+                  </span>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="flex-1 cursor-pointer px-3 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 font-bold text-xs text-center flex items-center justify-center gap-1.5 transition-all">
+                    <Upload className="w-4 h-4" />
+                    <span>رفع صورة من الجهاز 📸</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          try {
+                            const url = await processUniversalImage(file, 1200, 1200);
+                            setGalleryForm(prev => ({ ...prev, image: url }));
+                          } catch (err) {
+                            console.error(err);
+                          }
+                        }
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
+
+                  <label className="cursor-pointer px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs flex items-center gap-1.5 transition-all">
+                    <Camera className="w-4 h-4 text-amber-400" />
+                    <span>الكاميرا</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          try {
+                            const url = await processUniversalImage(file, 1200, 1200);
+                            setGalleryForm(prev => ({ ...prev, image: url }));
+                          } catch (err) {
+                            console.error(err);
+                          }
+                        }
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
+                </div>
+
+                <div>
+                  <label className="text-slate-400 text-[11px] block mb-1">أو رابط الصورة المباشر (URL):</label>
+                  <input
+                    type="text"
+                    value={galleryForm.image}
+                    onChange={(e) => setGalleryForm({ ...galleryForm, image: e.target.value })}
+                    placeholder="https://... أو /images/..."
+                    className="w-full bg-slate-950 border border-slate-800 text-amber-300 font-mono p-2 rounded-xl text-xs"
+                  />
+                </div>
+              </div>
+
+              {/* Form Fields */}
+              <div className="space-y-3 pt-2 border-t border-slate-800">
+                <div>
+                  <label className="text-slate-300 font-bold block mb-1">تصنيف البطاقة:</label>
+                  <select
+                    value={galleryForm.category}
+                    onChange={(e) => setGalleryForm({ ...galleryForm, category: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 text-amber-400 p-2.5 rounded-xl font-bold text-xs"
+                  >
+                    <option value="sessions">🔥 جلسات الروقان والمقاهي الملكية</option>
+                    <option value="fleet">🛵 أسطول التوصيل السريع ودراجات صنعاء</option>
+                    <option value="retail">🏪 استاندات نقاط البيع والبقالات</option>
+                    <option value="brand">👑 الهوية الملكية والعبوات الفاخرة</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-slate-300 font-bold block mb-1">عنوان البطاقة بالعربي:</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="مثال: جلسات المقاهي الفاخرة بصنعاء"
+                    value={galleryForm.titleAr}
+                    onChange={(e) => setGalleryForm({ ...galleryForm, titleAr: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 text-white p-2.5 rounded-xl font-bold text-xs"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-slate-300 font-bold block mb-1">وصف البطاقة بالعربي:</label>
+                  <textarea
+                    rows={3}
+                    placeholder="مثال: تجربة استثنائية مع فحم الذهب الأسود بنقاء 100% وبدون أي شرار..."
+                    value={galleryForm.descriptionAr}
+                    onChange={(e) => setGalleryForm({ ...galleryForm, descriptionAr: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 text-white p-2.5 rounded-xl text-xs"
+                  />
+                </div>
+
+                <div className="pt-2 flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setGalleryModalOpen(false)}
+                    className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold"
+                  >
+                    إلغاء
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveGalleryModalItem}
+                    className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 font-black text-xs hover:brightness-110 shadow-lg cursor-pointer"
+                  >
+                    {editingGalleryId ? 'حفظ التعديلات' : 'إضافة للمعرض الآن'}
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         )}
