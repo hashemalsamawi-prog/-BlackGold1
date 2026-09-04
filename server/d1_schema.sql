@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS products (
     name_ar TEXT NOT NULL,
     name_en TEXT NOT NULL,
     category_id TEXT,
-    category TEXT NOT NULL CHECK (category IN ('pouches', 'wholesale', 'local', 'premium', 'bbq', 'incense')),
+    category TEXT NOT NULL CHECK (category IN ('pouches', 'wholesale', 'b2b', 'local', 'premium', 'bbq', 'incense')),
     price REAL NOT NULL,
     original_price REAL,
     discount_percent INTEGER DEFAULT 0,
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS users (
     name TEXT NOT NULL,
     phone TEXT UNIQUE NOT NULL,
     email TEXT,
-    role TEXT NOT NULL CHECK (role IN ('owner', 'admin', 'employee', 'delivery', 'customer')),
+    role TEXT NOT NULL CHECK (role IN ('owner', 'admin', 'employee', 'delivery', 'mandoub', 'customer')),
     pin_hash TEXT,
     password_hash TEXT,
     created_at TEXT DEFAULT (datetime('now')),
@@ -95,8 +95,9 @@ CREATE TABLE IF NOT EXISTS orders (
     discount REAL NOT NULL DEFAULT 0,
     total REAL NOT NULL,
     payment_method TEXT NOT NULL DEFAULT 'cash',
-    payment_status TEXT NOT NULL DEFAULT 'pending' CHECK (payment_status IN ('pending', 'paid', 'failed', 'refunded')),
-    status TEXT NOT NULL DEFAULT 'received' CHECK (status IN ('received', 'preparing', 'shipped', 'delivering', 'delivered', 'completed', 'cancelled')),
+    payment_status TEXT NOT NULL DEFAULT 'pending' CHECK (payment_status IN ('pending', 'paid', 'confirmed', 'failed', 'refunded')),
+    status TEXT NOT NULL DEFAULT 'received' CHECK (status IN ('received', 'pending', 'preparing', 'shipped', 'delivering', 'on_way', 'delivered', 'completed', 'cancelled')),
+    is_stock_rolled_back INTEGER DEFAULT 0,
     coupon_code TEXT,
     driver_id TEXT,
     driver_name TEXT,
@@ -143,7 +144,7 @@ CREATE TABLE IF NOT EXISTS inventory_logs (
     id TEXT PRIMARY KEY,
     product_id TEXT NOT NULL,
     product_name TEXT NOT NULL,
-    type TEXT NOT NULL CHECK (type IN ('initial', 'purchase', 'sale', 'adjustment', 'damage', 'return')),
+    type TEXT NOT NULL CHECK (type IN ('initial', 'purchase', 'sale', 'adjustment', 'damage', 'return', 'STOCK_ROLLBACK')),
     quantity INTEGER NOT NULL,
     previous_stock INTEGER NOT NULL,
     new_stock INTEGER NOT NULL,
@@ -202,7 +203,7 @@ CREATE TABLE IF NOT EXISTS gallery_items (
     title_ar TEXT NOT NULL,
     title_en TEXT,
     image_url TEXT NOT NULL,
-    category TEXT DEFAULT 'factory',
+    category TEXT DEFAULT 'factory' CHECK (category IN ('factory', 'fleet', 'sessions', 'retail', 'merch', 'general')),
     caption TEXT,
     sort_order INTEGER DEFAULT 0,
     is_active INTEGER DEFAULT 1,
@@ -234,8 +235,8 @@ CREATE TABLE IF NOT EXISTS payments (
     id TEXT PRIMARY KEY,
     order_id TEXT NOT NULL,
     amount REAL NOT NULL,
-    method TEXT NOT NULL CHECK (method IN ('cash', 'kuraimi', 'haseb', 'jawali', 'floosak', 'other')),
-    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'confirmed', 'failed', 'refunded')),
+    method TEXT NOT NULL CHECK (method IN ('cash', 'cod', 'kuraimi', 'haseb', 'jawali', 'floosak', 'other')),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'confirmed', 'paid', 'failed', 'refunded')),
     reference_number TEXT,
     proof_image_url TEXT,
     notes TEXT,
@@ -278,4 +279,17 @@ CREATE INDEX IF NOT EXISTS idx_inventory_logs_created_at ON inventory_logs(creat
 CREATE INDEX IF NOT EXISTS idx_reviews_product_id ON reviews(product_id);
 CREATE INDEX IF NOT EXISTS idx_coupons_code ON coupons(code);
 CREATE INDEX IF NOT EXISTS idx_payments_order_id ON payments(order_id);
+CREATE INDEX IF NOT EXISTS idx_orders_is_rolled_back ON orders(is_stock_rolled_back);
 CREATE INDEX IF NOT EXISTS idx_notifications_recipient ON notifications(recipient_role, recipient_id);
+
+-- =================================================================
+-- TRIGGERS FOR ATOMIC INVENTORY CONSISTENCY
+-- =================================================================
+
+CREATE TRIGGER IF NOT EXISTS prevent_negative_stock
+BEFORE UPDATE ON products
+FOR EACH ROW
+WHEN NEW.stock < 0
+BEGIN
+    SELECT RAISE(ABORT, 'Insufficient stock: product stock cannot be negative');
+END;

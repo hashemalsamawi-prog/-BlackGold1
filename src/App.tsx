@@ -30,6 +30,7 @@ import { B2BProfitCalculator } from './components/B2BProfitCalculator';
 import { QualityProtocolSection } from './components/QualityProtocolSection';
 import { playOrderAlertSound } from './utils/soundAlert';
 import { safeGetLocalStorage, safeSetLocalStorage, safeRemoveLocalStorage } from './utils/storage';
+import { authStorage } from './services/api';
 
 import { Flame, Sparkles, CheckCircle2, ShieldCheck, MapPin, Truck, Phone, Award, MessageSquare, Store, Calculator, Sun, Moon, Mail, SlidersHorizontal, ArrowUpDown, RotateCcw, Filter, X, AlertTriangle, RefreshCw, Clock, WifiOff, AlertCircle } from 'lucide-react';
 
@@ -437,10 +438,14 @@ export default function App() {
     });
 
     try {
+      const token = authStorage.getToken();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
       const res = await fetch(`/api/orders/${orderId}/status`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status, driverNotes, bypassForPreview: true })
+        headers,
+        body: JSON.stringify({ status, driverNotes })
       });
       const data = await res.json();
       if (data.success && data.data) {
@@ -1028,7 +1033,7 @@ export default function App() {
                 onClick={() => setAdminOpen(true)} 
                 className="text-amber-400/90 hover:text-amber-300 transition-colors cursor-pointer flex items-center gap-1 bg-amber-500/10 px-2.5 py-1 rounded-lg border border-amber-500/30"
               >
-                <span>لوحة تحكم المالك 👑 (PIN: 7777)</span>
+                <span>لوحة تحكم المالك 👑</span>
               </button>
             </div>
           </div>

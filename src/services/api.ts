@@ -93,24 +93,45 @@ export const api = {
   },
 
   async getOrders() {
-    const res = await fetch('/api/orders');
+    const token = authStorage.getToken();
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const res = await fetch('/api/orders', { headers });
     return res.json();
   },
 
   async createOrder(orderData: any) {
+    const token = authStorage.getToken();
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
     const res = await fetch('/api/orders', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(orderData),
     });
     return res.json();
   },
 
   async updateOrderStatus(orderId: string, status: string, driverNotes?: string) {
+    const token = authStorage.getToken();
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
     const res = await fetch(`/api/orders/${orderId}/status`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ status, driverNotes }),
+    });
+    return res.json();
+  },
+
+  async cancelOrder(orderId: string, reason?: string) {
+    const token = authStorage.getToken();
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const res = await fetch(`/api/orders/${orderId}/cancel`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ reason }),
     });
     return res.json();
   },

@@ -142,7 +142,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       .trim();
 
     if (!cleanPin) {
-      setPinError('يرجى إدخال رمز PIN للمالك (7777)');
+      setPinError('يرجى إدخال رمز PIN السري للمالك');
       return;
     }
     setPinError(null);
@@ -167,7 +167,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       }, 300);
     } catch (err: any) {
       setIsLoading(false);
-      setPinError(err.message || 'رمز المرور غير صحيح. الرمز الافتراضي للمالك هو: 7777');
+      setPinError(err.message || 'رمز الدخول غير صحيح');
     }
   };
 
@@ -507,7 +507,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   <div>
                     <h4 className="font-black text-white">بوابة إدارة المالك الموثقة</h4>
                     <p className="text-[11px] text-amber-300/80 mt-0.5">
-                      مخصصة للمالك (هاشم السماوي) والإدارة للتحكم بالأسعار والمخزون والمناديب. الرمز الافتراضي: <strong className="text-amber-400 font-mono">7777</strong>
+                      مخصصة للمالك (هاشم السماوي) والإدارة للتحكم بالأسعار والمخزون والمناديب عبر رمز PIN السري المعتمد.
                     </p>
                   </div>
                 </div>
@@ -521,7 +521,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       <input
                         type="password"
                         maxLength={8}
-                        placeholder="أدخل رمز PIN (مثال: 7777)"
+                        placeholder="أدخل رمز PIN السري"
                         value={ownerPin}
                         onChange={(e) => {
                           setOwnerPin(e.target.value);

@@ -4,7 +4,17 @@ import fs from "fs";
 import crypto from "crypto";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
-import { db, hashSecret, generateToken, verifyToken, UserAccount } from "./server/db";
+import { 
+  db, 
+  hashSecret, 
+  generateToken, 
+  verifyToken, 
+  UserAccount,
+  timingSafeEqual,
+  normalizeDigits,
+  validateYemeniPhone,
+  sanitizeInputString
+} from "./server/db";
 import { d1, CLOUDFLARE_CONFIG } from "./server/d1";
 import { Order, Product } from "./src/types";
 
@@ -64,22 +74,16 @@ function authenticateUser(req: AuthenticatedRequest, res: Response, next: NextFu
   next();
 }
 
-// Role Enforcement Middleware
+// Role Enforcement Middleware (Strict RBAC - Zero Bypasses)
 function requireRoles(allowedRoles: string[]) {
   return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
-    if (req.user) {
-      if (allowedRoles.includes(req.user.role)) {
-        return next();
-      }
-      return res.status(403).json({ success: false, message: "غير مصرح لك بتنفيذ هذه العملية" });
+    if (!req.user) {
+      return res.status(401).json({ success: false, message: "يتطلب هذا الإجراء تسجيل الدخول أولاً" });
     }
-    // Allow local development and AI Studio preview environments to manage store
-    const host = req.headers.host || '';
-    const referer = req.headers.referer || '';
-    if (process.env.NODE_ENV !== 'production' || host.includes('localhost') || referer.includes('ai.studio') || host.includes('3000')) {
-      return next();
+    if (!allowedRoles.includes(req.user.role)) {
+      return res.status(403).json({ success: false, message: "ليس لديك الصلاحية المطلوبة لتنفيذ هذه العملية" });
     }
-    return res.status(401).json({ success: false, message: "يتطلب هذا الإجراء تسجيل الدخول أولاً" });
+    return next();
   };
 }
 
@@ -92,17 +96,20 @@ app.use(authenticateUser);
 // Quick Customer Login / Register (Phone + Name)
 app.post("/api/auth/quick-customer", (req, res) => {
   const { phone, name } = req.body;
-  if (!phone || phone.replace(/\D/g, '').length < 6) {
-    return res.status(400).json({ success: false, message: "رقم الهاتف غير صالح" });
+  const rawPhone = normalizeDigits(phone || '');
+  const phoneValidation = validateYemeniPhone(rawPhone);
+  if (!phoneValidation.isValid) {
+    return res.status(400).json({ success: false, message: "يرجى إدخال رقم هاتف يمني صحيح (مثال: 77XXXXXXX أو 73XXXXXXX)" });
   }
 
-  const cleanPhone = phone.trim();
+  const cleanPhone = phoneValidation.normalized;
+  const safeName = sanitizeInputString(name || '', 80) || `عميل الذهب الأسود (${cleanPhone.slice(-4)})`;
   let user = db.findUserByPhone(cleanPhone);
 
   if (!user) {
     user = {
       id: "usr-" + Date.now(),
-      name: name?.trim() || `عميل الذهب الأسود (${cleanPhone.slice(-4)})`,
+      name: safeName,
       phone: cleanPhone,
       role: 'customer',
       createdAt: new Date().toISOString(),
@@ -111,7 +118,7 @@ app.post("/api/auth/quick-customer", (req, res) => {
     db.addUser(user);
   } else {
     user = db.updateUser(user.id, {
-      name: name?.trim() || user.name,
+      name: safeName,
       lastLogin: new Date().toISOString()
     }) || user;
   }
@@ -135,95 +142,52 @@ app.post("/api/auth/quick-customer", (req, res) => {
   });
 });
 
-// Helper to normalize Arabic-Indic digits (e.g. ٧٧٧٧ -> 7777)
-function normalizeDigits(val: any): string {
-  if (val === null || val === undefined) return '';
-  return String(val)
-    .replace(/[٠-٩]/g, d => "٠١٢٣٤٥٦٧٨٩".indexOf(d).toString())
-    .replace(/[۰-۹]/g, d => "۰۱۲۳۴۵۶۷۸۹".indexOf(d).toString())
-    .trim();
-}
-
-// Admin / Owner / Employee Login with PIN or Password
+// Admin / Owner / Employee Login with Secure PIN or Password
 app.post("/api/auth/admin-login", (req, res) => {
   const { phone, pin, password } = req.body;
   
+  if (!pin && !password) {
+    return res.status(400).json({ success: false, message: "يرجى إدخال رمز PIN أو كلمة المرور للدخول" });
+  }
+
+  const rawSecret = normalizeDigits(pin || password || '').trim();
+  if (!rawSecret) {
+    return res.status(400).json({ success: false, message: "رمز الدخول لا يمكن أن يكون فارغاً" });
+  }
+
+  const cleanPhone = phone ? normalizeDigits(phone).replace(/\D/g, '') : '';
+  const hashedInput = hashSecret(rawSecret);
+
   // Find owner/admin/employee accounts
   const users = db.getUsers().filter(u => ['owner', 'admin', 'employee'].includes(u.role));
   
-  let matchedUser: UserAccount | undefined;
-  
-  const rawPin = normalizeDigits(pin);
-  const rawPass = normalizeDigits(password);
-  const cleanPhone = phone ? normalizeDigits(phone).replace(/\D/g, '') : '';
+  let matchedUser = users.find(u => {
+    if (cleanPhone && u.phone.replace(/\D/g, '') !== cleanPhone) {
+      return false;
+    }
+    const pinOk = u.pinHash ? timingSafeEqual(u.pinHash, hashedInput) : false;
+    const passOk = u.passwordHash ? timingSafeEqual(u.passwordHash, hashedInput) : false;
+    return pinOk || passOk;
+  });
 
-  if (rawPin) {
-    const hashedPin = hashSecret(rawPin);
-    const sha256NoSalt = crypto.createHash('sha256').update(rawPin).digest('hex');
-    const legacySalt = crypto.createHash('sha256').update(rawPin + 'BLACK_GOLD_SALT_2026').digest('hex');
-
-    const isValidPin = (u: UserAccount) => {
-      const p = u.pin;
-      if (!p) return false;
-      return p === rawPin || p === hashedPin || p === sha256NoSalt || p === legacySalt;
-    };
-
-    // Match by PIN or phone+PIN
-    matchedUser = users.find(u => {
-      if (cleanPhone) {
-        return u.phone.replace(/\D/g, '') === cleanPhone && isValidPin(u);
-      }
-      return isValidPin(u);
-    });
-
-    // Fallback for Master Owner PIN (7777 or 2026) as designated in the store system
-    if (!matchedUser && (rawPin === '7777' || rawPin === '2026')) {
+  // Verify against ADMIN_PIN environment variable if configured
+  if (!matchedUser && process.env.ADMIN_PIN) {
+    const envPin = normalizeDigits(process.env.ADMIN_PIN).trim();
+    if (envPin && timingSafeEqual(hashSecret(envPin), hashedInput)) {
       let owner = users.find(u => u.role === 'owner');
       if (!owner) {
         owner = {
           id: 'usr-owner-hashem',
           name: 'هاشم السماوي (المالك)',
-          phone: cleanPhone || '777000111',
+          phone: cleanPhone || '775000150',
           role: 'owner',
-          pin: '7777',
+          pinHash: hashedInput,
           createdAt: new Date().toISOString()
         };
         db.addUser(owner);
       } else {
-        owner.pin = '7777';
-        db.updateUser(owner.id, { pin: '7777' });
-      }
-      matchedUser = owner;
-    }
-  } else if (rawPass) {
-    const hashedPass = hashSecret(rawPass);
-    const sha256NoSalt = crypto.createHash('sha256').update(rawPass).digest('hex');
-
-    const isValidPass = (u: UserAccount) => {
-      const p = u.passwordHash || u.pin;
-      if (!p) return false;
-      return p === rawPass || p === hashedPass || p === sha256NoSalt;
-    };
-
-    matchedUser = users.find(u => {
-      if (cleanPhone) {
-        return u.phone.replace(/\D/g, '') === cleanPhone && isValidPass(u);
-      }
-      return isValidPass(u);
-    });
-
-    if (!matchedUser && (rawPass === '7777' || rawPass === '2026' || rawPass === 'admin123')) {
-      let owner = users.find(u => u.role === 'owner');
-      if (!owner) {
-        owner = {
-          id: 'usr-owner-hashem',
-          name: 'هاشم السماوي (المالك)',
-          phone: cleanPhone || '777000111',
-          role: 'owner',
-          pin: '7777',
-          createdAt: new Date().toISOString()
-        };
-        db.addUser(owner);
+        owner.pinHash = hashedInput;
+        db.updateUser(owner.id, { pinHash: hashedInput });
       }
       matchedUser = owner;
     }
@@ -261,30 +225,39 @@ app.post("/api/auth/driver-login", (req, res) => {
   }
 
   const cleanPhone = normalizeDigits(phone).replace(/\D/g, '');
-  const secret = normalizeDigits(pin || password || '');
+  const secret = normalizeDigits(pin || password || '').trim();
+  if (!secret) {
+    return res.status(400).json({ success: false, message: "رمز الدخول لا يمكن أن يكون فارغاً" });
+  }
+
   const hashedSecret = hashSecret(secret);
 
   // Check in registered users list
   const drivers = db.getUsers().filter(u => u.role === 'delivery');
-  let matchedDriver = drivers.find(d => 
-    d.phone.replace(/\D/g, '') === cleanPhone && (d.pin === hashedSecret || d.passwordHash === hashedSecret)
-  );
+  let matchedDriver = drivers.find(d => {
+    if (d.phone.replace(/\D/g, '') !== cleanPhone) return false;
+    const pinMatch = d.pinHash ? timingSafeEqual(d.pinHash, hashedSecret) : false;
+    const passMatch = d.passwordHash ? timingSafeEqual(d.passwordHash, hashedSecret) : false;
+    return pinMatch || passMatch;
+  });
 
-  // Check default delivery accounts (Ahmed, Mohammed, Saleh with PIN 1234 or 7777)
-  if (!matchedDriver) {
-    const agents = db.getDeliveryAgents();
-    const agent = agents.find(a => a.phone.replace(/\D/g, '') === cleanPhone);
-    if (agent && (secret === '1234' || secret === '7777' || secret === '2026')) {
-      matchedDriver = {
-        id: agent.id,
-        name: agent.name,
-        phone: agent.phone,
-        role: 'delivery',
-        pin: hashedSecret,
-        createdAt: new Date().toISOString()
-      };
-      // Register or update in user database
-      db.addUser(matchedDriver);
+  // Verify against DRIVER_DEFAULT_PIN environment variable if configured
+  if (!matchedDriver && process.env.DRIVER_DEFAULT_PIN) {
+    const envDriverPin = normalizeDigits(process.env.DRIVER_DEFAULT_PIN).trim();
+    if (envDriverPin && timingSafeEqual(hashSecret(envDriverPin), hashedSecret)) {
+      const agents = db.getDeliveryAgents();
+      const agent = agents.find(a => a.phone.replace(/\D/g, '') === cleanPhone);
+      if (agent) {
+        matchedDriver = {
+          id: agent.id,
+          name: agent.name,
+          phone: agent.phone,
+          role: 'delivery',
+          pinHash: hashedSecret,
+          createdAt: new Date().toISOString()
+        };
+        db.addUser(matchedDriver);
+      }
     }
   }
 
@@ -566,7 +539,7 @@ app.post("/api/inventory/adjust", requireRoles(['owner', 'admin', 'employee']), 
 // ==========================================
 
 // Create Order (Server-Side Recalculation of Prices & Coupon & Stock Validation)
-app.post("/api/orders", (req: AuthenticatedRequest, res) => {
+app.post("/api/orders", async (req: AuthenticatedRequest, res) => {
   const { items, address, customerName, customerPhone, paymentMethod, notes, couponCode } = req.body;
 
   if (!items || !Array.isArray(items) || items.length === 0) {
@@ -662,48 +635,22 @@ app.post("/api/orders", (req: AuthenticatedRequest, res) => {
   const now = new Date();
   const timeFormatted = now.toLocaleTimeString("ar-YE", { hour: "2-digit", minute: "2-digit" });
 
-  // 5. Atomically Deduct Stock and Log Transactions with Relational Order ID
-  for (const it of validatedItems) {
-    const product = db.findProductById(it.productId);
-    if (product) {
-      const prev = product.stock;
-      product.stock = Math.max(0, product.stock - it.quantity);
-      db.updateProduct(product.id, { stock: product.stock });
-
-      db.logInventoryTransaction({
-        id: 'tx-sale-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
-        productId: product.id,
-        productName: product.nameAr,
-        type: 'sale',
-        quantity: -it.quantity,
-        previousStock: prev,
-        newStock: product.stock,
-        reason: `مبيعات طلب جديد #${orderNum}`,
-        orderId: orderId,
-        performedBy: 'نظام الطلبات الآلي',
-        date: new Date().toISOString()
-      });
-    }
-  }
-
-  const newOrder: Order = {
-    id: orderId,
+  // 5. Atomic Stock Deduction, Customer Upsert, Order & Items Creation
+  const atomicResult = await db.createOrderAtomic({
+    orderId,
     orderNumber: orderNum,
-    date: now.toISOString().replace("T", " ").substring(0, 16),
-    status: "received",
-    items: validatedItems,
+    customerName: customerName.trim(),
+    customerPhone: customerPhone.trim(),
+    address,
+    validatedItems,
     subtotal: calculatedSubtotal,
     shippingFee: calculatedShipping,
     discount: calculatedDiscount,
     total: calculatedTotal,
-    address,
-    customerName: customerName.trim(),
-    customerPhone: customerPhone.trim(),
     paymentMethod: paymentMethod || "cod",
     notes: notes || "",
-    driverId: assignedDriver.id,
-    driverName: assignedDriver.name,
-    driverPhone: assignedDriver.phone,
+    couponCode: couponCode ? String(couponCode).trim() : undefined,
+    assignedDriver,
     timeline: [
       {
         status: "received",
@@ -711,10 +658,18 @@ app.post("/api/orders", (req: AuthenticatedRequest, res) => {
         titleAr: "تم استلام الطلب وتأكيده بالنظام",
         titleEn: "Order Received & Verified"
       }
-    ]
-  };
+    ],
+    date: now.toISOString().replace("T", " ").substring(0, 16)
+  });
 
-  const createdOrder = db.addOrder(newOrder);
+  if (!atomicResult.success || !atomicResult.order) {
+    return res.status(400).json({
+      success: false,
+      message: atomicResult.message || "فشلت عملية إنشاء الطلب لعدم توفر المخزون الكافي"
+    });
+  }
+
+  const createdOrder = atomicResult.order;
 
   // Log Analytics Event
   db.logAnalyticsEvent('purchase', {
@@ -731,12 +686,16 @@ app.post("/api/orders", (req: AuthenticatedRequest, res) => {
   });
 });
 
-// Admin & Delivery Orders List
+// Admin, Delivery, and Customer Orders List with Strict Role Enforcement
 app.get("/api/orders", (req: AuthenticatedRequest, res) => {
+  if (!req.user) {
+    return res.status(401).json({ success: false, message: "يتطلب الوصول إلى قائمة الطلبات تسجيل الدخول" });
+  }
+
   const allOrders = db.getOrders();
 
-  // If user role is delivery driver, filter only their orders
-  if (req.user && req.user.role === 'delivery') {
+  // If user role is delivery driver, filter only their assigned orders
+  if (req.user.role === 'delivery') {
     const driverOrders = allOrders.filter(o => 
       o.driverId === req.user?.userId || 
       o.driverName === req.user?.name || 
@@ -745,8 +704,19 @@ app.get("/api/orders", (req: AuthenticatedRequest, res) => {
     return res.json({ success: true, data: driverOrders });
   }
 
-  // Otherwise return orders list for admin/owner/preview
-  return res.json({ success: true, data: allOrders });
+  // If user role is admin, owner, or employee, return all orders
+  if (['owner', 'admin', 'employee'].includes(req.user.role)) {
+    return res.json({ success: true, data: allOrders });
+  }
+
+  // If user role is customer, return only their orders
+  if (req.user.role === 'customer' && req.user.phone) {
+    const cleanPhone = req.user.phone.replace(/\D/g, '');
+    const customerOrders = allOrders.filter(o => o.customerPhone.replace(/\D/g, '') === cleanPhone);
+    return res.json({ success: true, data: customerOrders });
+  }
+
+  return res.status(403).json({ success: false, message: "ليس لديك صلاحية لعرض قائمة الطلبات" });
 });
 
 // Customer's Personal Orders (My Orders)
@@ -804,21 +774,23 @@ app.get("/api/orders/:id/items", (req, res) => {
   res.json({ success: true, data: items });
 });
 
-// Update Order Status (Restricted to Authorized Roles & Preview)
-app.patch("/api/orders/:id/status", (req: AuthenticatedRequest, res) => {
+// Update Order Status (Restricted to Authorized Roles)
+app.patch("/api/orders/:id/status", async (req: AuthenticatedRequest, res) => {
   const { id } = req.params;
-  const { status, driverNotes, driverId, driverName, driverPhone, customerPhone } = req.body;
+  const { status, driverNotes, driverId, driverName, driverPhone } = req.body;
 
   const order = db.findOrderById(id);
   if (!order) {
     return res.status(404).json({ success: false, message: "الطلب غير موجود" });
   }
 
-  const isManagement = (req.user && ['owner', 'admin', 'employee'].includes(req.user.role)) || req.body.bypassForPreview === true || !req.user;
-  const isAssignedDriver = req.user && req.user.role === 'delivery' && (
-    order.driverId === req.user.userId || order.driverName === req.user.name || order.driverPhone === req.user.phone
+  const isManagement = !!(req.user && ['owner', 'admin', 'employee'].includes(req.user.role));
+  const isAssignedDriver = !!(req.user && req.user.role === 'delivery' && (
+    order.driverId === req.user.userId || order.driverName === req.user.name || (req.user.phone && order.driverPhone === req.user.phone)
+  ));
+  const isCustomerOwner = !!(
+    req.user && req.user.phone && order.customerPhone.replace(/\D/g, '') === req.user.phone.replace(/\D/g, '')
   );
-  const isCustomerOwner = customerPhone && order.customerPhone.replace(/\D/g, '') === customerPhone.replace(/\D/g, '');
 
   if (!isManagement && !isAssignedDriver && !isCustomerOwner) {
     return res.status(403).json({ success: false, message: "غير مصرح لك بتغيير حالة هذا الطلب" });
@@ -831,16 +803,16 @@ app.patch("/api/orders/:id/status", (req: AuthenticatedRequest, res) => {
 
   const actor = req.user 
     ? `${req.user.name || req.user.role} (${req.user.phone || ''})` 
-    : (isCustomerOwner ? `العميل (${order.customerName})` : 'إدارة المتجر');
+    : 'إدارة المتجر';
 
-  const updated = db.updateOrderStatus(id, status, driverNotes, actor);
+  const updated = await db.updateOrderStatus(id, status, driverNotes, actor);
   res.json({ success: true, data: updated });
 });
 
 // Explicit Order Cancellation & Stock Rollback Endpoint
-app.post("/api/orders/:id/cancel", (req: AuthenticatedRequest, res) => {
+app.post("/api/orders/:id/cancel", async (req: AuthenticatedRequest, res) => {
   const { id } = req.params;
-  const { reason, customerPhone } = req.body || {};
+  const { reason } = req.body || {};
 
   const order = db.findOrderById(id);
   if (!order) {
@@ -857,8 +829,10 @@ app.post("/api/orders/:id/cancel", (req: AuthenticatedRequest, res) => {
     });
   }
 
-  const isManagement = (req.user && ['owner', 'admin', 'employee'].includes(req.user.role)) || req.body?.bypassForPreview === true || !req.user;
-  const isCustomerOwner = customerPhone && order.customerPhone.replace(/\D/g, '') === customerPhone.replace(/\D/g, '');
+  const isManagement = !!(req.user && ['owner', 'admin', 'employee'].includes(req.user.role));
+  const isCustomerOwner = !!(
+    req.user && req.user.phone && order.customerPhone.replace(/\D/g, '') === req.user.phone.replace(/\D/g, '')
+  );
 
   if (!isManagement && !isCustomerOwner) {
     return res.status(403).json({ success: false, message: "غير مصرح لك بإلغاء هذا الطلب" });
@@ -866,10 +840,10 @@ app.post("/api/orders/:id/cancel", (req: AuthenticatedRequest, res) => {
 
   const actor = req.user 
     ? `${req.user.name || req.user.role} (${req.user.phone || ''})` 
-    : (isCustomerOwner ? `العميل (${order.customerName})` : 'إدارة المتجر');
+    : 'إدارة المتجر';
 
   const notes = reason ? `سبب الإلغاء: ${reason}` : undefined;
-  const updated = db.updateOrderStatus(id, 'cancelled', notes, actor);
+  const updated = await db.updateOrderStatus(id, 'cancelled', notes, actor);
 
   res.json({
     success: true,

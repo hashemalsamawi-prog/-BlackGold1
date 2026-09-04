@@ -4,9 +4,10 @@ import crypto from 'crypto';
 import { Product, Order, Review, Coupon, DeliveryAgent, StoreSettings, GalleryItem } from '../src/types';
 import { d1, CLOUDFLARE_CONFIG } from './d1';
 import type { UserAccount, CustomerRecord, OrderItemRecord, InventoryLogRecord } from './d1';
+import { hashSecret, getJwtSecret, timingSafeEqual, normalizeDigits, validateYemeniPhone, sanitizeInputString, generateToken, verifyToken } from './security';
 
 export type { UserAccount, CustomerRecord, OrderItemRecord, InventoryLogRecord };
-export { CLOUDFLARE_CONFIG };
+export { CLOUDFLARE_CONFIG, hashSecret, getJwtSecret, timingSafeEqual, normalizeDigits, validateYemeniPhone, sanitizeInputString, generateToken, verifyToken };
 
 export interface InventoryTransaction {
   id: string;
@@ -20,38 +21,6 @@ export interface InventoryTransaction {
   orderId?: string;
   performedBy: string;
   date: string;
-}
-
-// Helper to hash passwords / PINs
-export function hashSecret(secret: string): string {
-  const salt = process.env.JWT_SECRET || '';
-  return crypto.createHash('sha256').update(secret + salt).digest('hex');
-}
-
-// Generate secure session tokens (JWT HMAC-SHA256)
-const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
-
-export function generateToken(payload: { userId: string; role: string; phone: string; name: string }): string {
-  const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
-  const body = Buffer.from(JSON.stringify({ ...payload, iat: Date.now(), exp: Date.now() + 30 * 24 * 60 * 60 * 1000 })).toString('base64url');
-  const signature = crypto.createHmac('sha256', JWT_SECRET).update(`${header}.${body}`).digest('base64url');
-  return `${header}.${body}.${signature}`;
-}
-
-export function verifyToken(token: string): { userId: string; role: string; phone: string; name: string } | null {
-  try {
-    if (!token) return null;
-    const parts = token.split('.');
-    if (parts.length !== 3) return null;
-    const [header, body, signature] = parts;
-    const expectedSig = crypto.createHmac('sha256', JWT_SECRET).update(`${header}.${body}`).digest('base64url');
-    if (signature !== expectedSig) return null;
-    const decoded = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
-    if (decoded.exp && decoded.exp < Date.now()) return null;
-    return decoded;
-  } catch (e) {
-    return null;
-  }
 }
 
 /**
@@ -133,7 +102,11 @@ class DatabaseProxy {
     return d1.addOrder(order);
   }
 
-  public updateOrderStatus(id: string, status: Order['status'], driverNotes?: string, actor?: string): Order | null {
+  public async createOrderAtomic(orderData: any): Promise<{ success: boolean; order?: Order; message?: string }> {
+    return d1.createOrderAtomic(orderData);
+  }
+
+  public async updateOrderStatus(id: string, status: Order['status'], driverNotes?: string, actor?: string): Promise<Order | null> {
     return d1.updateOrderStatus(id, status, driverNotes, actor);
   }
 
