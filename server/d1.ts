@@ -57,7 +57,7 @@ export interface InventoryLogRecord {
   id: string;
   productId: string;
   productName: string;
-  type: 'initial' | 'purchase' | 'sale' | 'return' | 'damage' | 'adjustment' | 'STOCK_ROLLBACK';
+  type: 'initial' | 'purchase' | 'sale' | 'return' | 'damage' | 'adjustment' | 'STOCK_IN' | 'STOCK_OUT' | 'STOCK_ROLLBACK';
   quantity: number;
   previousStock: number;
   newStock: number;
@@ -93,6 +93,18 @@ export interface NotificationRecord {
   createdAt: string;
 }
 
+export const VALID_ORDER_STATUS_TRANSITIONS: Record<string, string[]> = {
+  received: ['pending', 'preparing', 'cancelled'],
+  pending: ['preparing', 'cancelled'],
+  preparing: ['shipped', 'on_way', 'delivering', 'cancelled'],
+  shipped: ['on_way', 'delivering', 'delivered', 'cancelled'],
+  on_way: ['delivering', 'delivered', 'cancelled'],
+  delivering: ['delivered', 'cancelled'],
+  delivered: [],
+  completed: [],
+  cancelled: []
+};
+
 // Memory / Local Persistent Store for D1 Entities
 class D1DatabaseAccessLayer {
   private localDbPath = path.join(process.cwd(), 'data', 'db.json');
@@ -101,21 +113,37 @@ class D1DatabaseAccessLayer {
   // In-memory relational tables matching D1 Schema
   private tables = {
     categories: [] as Array<{ id: string; name_ar: string; name_en?: string; slug: string; sort_order: number; is_active: number; created_at: string }>,
-    products: [] as Product[],
+    products: [...INITIAL_PRODUCTS] as Product[],
     users: [] as UserAccount[],
     customers: [] as CustomerRecord[],
     orders: [] as Order[],
     order_items: [] as OrderItemRecord[],
     inventory: new Map<string, { currentStock: number; reservedStock: number; minThreshold: number; lastCountedAt?: string }>(),
     inventory_logs: [] as InventoryLogRecord[],
-    delivery_agents: [] as DeliveryAgent[],
+    delivery_agents: [...INITIAL_DELIVERY_AGENTS] as DeliveryAgent[],
     reviews: [] as Review[],
-    coupons: [] as Coupon[],
-    gallery_items: [] as GalleryItem[],
-    store_settings: {} as StoreSettings,
+    coupons: [
+      { code: "GOLD2026", discountPercent: 10, maxDiscount: 2000, minOrderAmount: 2000, isActive: true },
+      { code: "SANAA15", discountPercent: 15, maxDiscount: 3500, minOrderAmount: 5000, isActive: true },
+      { code: "VIPBLACK", discountPercent: 20, maxDiscount: 5000, minOrderAmount: 10000, isActive: true }
+    ] as Coupon[],
+    gallery_items: [...INITIAL_GALLERY_ITEMS] as GalleryItem[],
+    store_settings: {
+      ...INITIAL_STORE_SETTINGS,
+      deliveryDistricts: [
+        { id: "d1", nameAr: "حدة وشارع الخمسين والحي السياسي", nameEn: "Hadda & Political Area", fee: 500, etaMinutes: 35, isActive: true },
+        { id: "d2", nameAr: "الأصبحي وشارع المقالح وبيت بوس", nameEn: "Asbahi & Bait Baws", fee: 500, etaMinutes: 40, isActive: true },
+        { id: "d3", nameAr: "التحرير وشارع جمال والقاع", nameEn: "Tahrir & Al-Qaa", fee: 600, etaMinutes: 40, isActive: true },
+        { id: "d4", nameAr: "صنعاء القديمة وباب اليمن وشعوب", nameEn: "Old Sanaa & Bab Al-Yaman", fee: 700, etaMinutes: 45, isActive: true },
+        { id: "d5", nameAr: "شملان ومذبح وشارع الثلاثين", nameEn: "Shamlan & Madhbah", fee: 800, etaMinutes: 45, isActive: true },
+        { id: "d6", nameAr: "الحصبة وشارع المطار والروضة", nameEn: "Hasaba & Airport Rd", fee: 900, etaMinutes: 50, isActive: true }
+      ]
+    } as StoreSettings,
     payments: [] as PaymentRecord[],
     notifications: [] as NotificationRecord[]
   };
+
+  private initPromise: Promise<void> | null = null;
 
   constructor() {
     this.init();
@@ -124,14 +152,16 @@ class D1DatabaseAccessLayer {
   /**
    * Initialize Schema, migrate legacy data, and sync with Cloudflare D1
    */
-  public async init() {
+  public async init(): Promise<void> {
     if (this.isInitialized) return;
+    if (this.initPromise) return this.initPromise;
 
-    try {
-      const dataDir = path.dirname(this.localDbPath);
-      if (!fs.existsSync(dataDir)) {
-        fs.mkdirSync(dataDir, { recursive: true });
-      }
+    this.initPromise = (async () => {
+      try {
+        const dataDir = path.dirname(this.localDbPath);
+        if (!fs.existsSync(dataDir)) {
+          fs.mkdirSync(dataDir, { recursive: true });
+        }
 
       // 1. Seed Categories
       this.tables.categories = [
@@ -302,8 +332,13 @@ class D1DatabaseAccessLayer {
       console.log('✅ Cloudflare D1 Database Access Layer Initialized Successfully. Database ID:', CLOUDFLARE_CONFIG.databaseId);
     } catch (e) {
       console.error('Error during D1 DAL initialization:', e);
+    } finally {
+      this.isInitialized = true;
     }
-  }
+  })();
+
+  return this.initPromise;
+}
 
   /**
    * Ensure Owner Account structure exists and loads credentials strictly from environment or D1
@@ -673,6 +708,10 @@ class D1DatabaseAccessLayer {
   }
 
   private saveLocal() {
+    // In production or when Cloudflare D1 is configured, do NOT write to or rely on local db.json
+    if (process.env.NODE_ENV === 'production' || this.isD1Configured()) {
+      return;
+    }
     try {
       const payload = {
         products: this.tables.products,
@@ -899,23 +938,74 @@ class D1DatabaseAccessLayer {
     paymentMethod: string;
     notes?: string;
     couponCode?: string;
+    idempotencyKey?: string;
     assignedDriver: { id: string; name: string; phone: string };
     timeline: Array<{ status: string; time: string; titleAr: string; titleEn: string }>;
     date: string;
-  }): Promise<{ success: boolean; order?: Order; message?: string }> {
+  }): Promise<{ success: boolean; order?: Order; message?: string; isDuplicate?: boolean }> {
     const cleanPhone = orderData.customerPhone.replace(/\D/g, '');
+
+    // Idempotency check: if order with this idempotency key was already created, return it
+    if (orderData.idempotencyKey) {
+      if (this.isD1Configured()) {
+        const existingD1 = await this.executeCloudflareD1Query(
+          "SELECT * FROM orders WHERE idempotency_key = ? LIMIT 1;",
+          [orderData.idempotencyKey]
+        );
+        if (Array.isArray(existingD1) && existingD1.length > 0) {
+          const row = existingD1[0];
+          const existingOrder: Order = {
+            id: row.id,
+            orderNumber: row.order_number,
+            date: row.created_at,
+            status: row.status,
+            items: typeof row.items_json === 'string' ? JSON.parse(row.items_json || '[]') : (row.items_json || []),
+            subtotal: row.subtotal,
+            shippingFee: row.shipping_fee || 0,
+            discount: row.discount || 0,
+            total: row.total,
+            address: {
+              id: `addr-${row.id}`,
+              title: row.delivery_district,
+              district: row.delivery_district,
+              street: row.delivery_address,
+              phone: row.customer_phone,
+              isDefault: true
+            },
+            customerName: row.customer_name,
+            customerPhone: row.customer_phone,
+            paymentMethod: row.payment_method,
+            notes: row.notes || '',
+            driverId: row.driver_id,
+            driverName: row.driver_name,
+            driverPhone: row.driver_phone,
+            timeline: typeof row.timeline_json === 'string' ? JSON.parse(row.timeline_json || '[]') : (row.timeline_json || []),
+            idempotencyKey: row.idempotency_key
+          };
+          return { success: true, order: existingOrder, isDuplicate: true, message: 'طلب مكرر تم إنشاؤه مسبقاً' };
+        }
+      }
+      const existingMem = this.tables.orders.find(o => o.idempotencyKey === orderData.idempotencyKey);
+      if (existingMem) {
+        return { success: true, order: existingMem, isDuplicate: true, message: 'طلب مكرر تم إنشاؤه مسبقاً' };
+      }
+    }
 
     // If Cloudflare D1 is configured, execute atomic compound SQL directly on D1
     if (this.isD1Configured()) {
       const sqlEsc = (s: any) => String(s ?? '').replace(/'/g, "''");
       const statements: string[] = [];
 
-      // 1. Stock check & conditional deduction for each item
+      // 1. Stock check & conditional deduction for each item on BOTH products AND inventory tables
       // Using CASE WHEN stock >= qty THEN stock - qty ELSE -1 END
-      // Combined with trigger `prevent_negative_stock`, any insufficient stock immediately aborts the batch with error 7500!
+      // Combined with triggers `prevent_negative_stock` and `prevent_negative_inventory_stock`,
+      // any insufficient stock immediately aborts the compound batch atomically!
       for (const it of orderData.validatedItems) {
         statements.push(
           `UPDATE products SET stock = CASE WHEN stock >= ${it.quantity} THEN stock - ${it.quantity} ELSE -1 END, updated_at = datetime('now') WHERE id = '${sqlEsc(it.productId)}';`
+        );
+        statements.push(
+          `UPDATE inventory SET current_stock = CASE WHEN current_stock >= ${it.quantity} THEN current_stock - ${it.quantity} ELSE -1 END, updated_at = datetime('now') WHERE product_id = '${sqlEsc(it.productId)}';`
         );
       }
 
@@ -936,23 +1026,23 @@ class D1DatabaseAccessLayer {
       // 3. Insert order
       statements.push(
         `INSERT INTO orders (` +
-        `id, order_number, customer_id, customer_name, customer_phone, delivery_district, delivery_address, items_json, subtotal, shipping_fee, discount, total, payment_method, payment_status, status, coupon_code, driver_id, driver_name, driver_phone, notes, driver_notes, timeline_json, created_at, updated_at` +
+        `id, order_number, customer_id, customer_name, customer_phone, delivery_district, delivery_address, items_json, subtotal, shipping_fee, discount, total, payment_method, payment_status, status, is_stock_rolled_back, idempotency_key, coupon_code, driver_id, driver_name, driver_phone, notes, driver_notes, timeline_json, created_at, updated_at` +
         `) VALUES (` +
         `'${orderData.orderId}', '${orderData.orderNumber}', '${customerId}', '${sqlEsc(orderData.customerName)}', '${sqlEsc(cleanPhone)}', ` +
         `'${sqlEsc(orderData.address.district)}', '${sqlEsc(orderData.address.street || orderData.address.district)}', '${sqlEsc(JSON.stringify(orderData.validatedItems))}', ` +
         `${orderData.subtotal}, ${orderData.shippingFee}, ${orderData.discount}, ${orderData.total}, ` +
-        `'${sqlEsc(orderData.paymentMethod || 'cash')}', 'pending', 'received', '${sqlEsc(orderData.couponCode || '')}', ` +
+        `'${sqlEsc(orderData.paymentMethod || 'cash')}', 'pending', 'received', 0, '${sqlEsc(orderData.idempotencyKey || '')}', '${sqlEsc(orderData.couponCode || '')}', ` +
         `'${sqlEsc(orderData.assignedDriver.id)}', '${sqlEsc(orderData.assignedDriver.name)}', '${sqlEsc(orderData.assignedDriver.phone)}', ` +
         `'${sqlEsc(orderData.notes || '')}', '', '${sqlEsc(JSON.stringify(orderData.timeline))}', datetime('now'), datetime('now')` +
         `);`
       );
 
-      // 4. Insert order items
+      // 4. Insert order items (both product_id and productId for relational integrity)
       for (const it of orderData.validatedItems) {
         const itemRowId = `oi-${orderData.orderId}-${it.productId}-${Math.random().toString(36).substring(2, 7)}`;
         statements.push(
-          `INSERT INTO order_items (id, order_id, product_id, product_name_ar, product_name_en, weight_option, quantity, unit_price, total_price, created_at) ` +
-          `VALUES ('${itemRowId}', '${orderData.orderId}', '${sqlEsc(it.productId)}', '${sqlEsc(it.productNameAr)}', '${sqlEsc(it.productNameEn || '')}', '${sqlEsc(it.weight)}', ${it.quantity}, ${it.unitPrice}, ${it.unitPrice * it.quantity}, datetime('now'));`
+          `INSERT INTO order_items (id, order_id, product_id, productId, product_name_ar, product_name_en, weight_option, quantity, unit_price, total_price, created_at) ` +
+          `VALUES ('${itemRowId}', '${orderData.orderId}', '${sqlEsc(it.productId)}', '${sqlEsc(it.productId)}', '${sqlEsc(it.productNameAr)}', '${sqlEsc(it.productNameEn || '')}', '${sqlEsc(it.weight)}', ${it.quantity}, ${it.unitPrice}, ${it.unitPrice * it.quantity}, datetime('now'));`
         );
       }
 
@@ -968,10 +1058,10 @@ class D1DatabaseAccessLayer {
         );
       }
 
-      // 6. If coupon used, update usage_count
+      // 6. If coupon used, update usage_count safely
       if (orderData.couponCode) {
         statements.push(
-          `UPDATE coupons SET usage_count = usage_count + 1 WHERE code = '${sqlEsc(orderData.couponCode)}';`
+          `UPDATE coupons SET usage_count = usage_count + 1 WHERE code = '${sqlEsc(orderData.couponCode)}' AND (max_uses IS NULL OR usage_count < max_uses);`
         );
       }
 
@@ -991,6 +1081,17 @@ class D1DatabaseAccessLayer {
           message: `خطأ أثناء تنفيذ العملية في D1: ${errMsg}`
         };
       }
+    } else {
+      // Local fallback verification: ensure sufficient stock before modifying
+      for (const it of orderData.validatedItems) {
+        const p = this.findProductById(it.productId);
+        if (!p || p.stock < it.quantity) {
+          return {
+            success: false,
+            message: `عذراً! الكمية المطلوبة من "${it.productNameAr}" تتجاوز المخزون المتاح حالياً.`
+          };
+        }
+      }
     }
 
     // Update in-memory state so local cache reflects D1 immediately
@@ -998,6 +1099,11 @@ class D1DatabaseAccessLayer {
       const p = this.findProductById(it.productId);
       if (p) {
         p.stock = Math.max(0, p.stock - it.quantity);
+      }
+      const inv = this.tables.inventory.get(it.productId);
+      if (inv) {
+        inv.currentStock = Math.max(0, inv.currentStock - it.quantity);
+        inv.lastCountedAt = new Date().toISOString();
       }
     }
 
@@ -1026,7 +1132,9 @@ class D1DatabaseAccessLayer {
       driverId: orderData.assignedDriver.id,
       driverName: orderData.assignedDriver.name,
       driverPhone: orderData.assignedDriver.phone,
-      timeline: orderData.timeline
+      timeline: orderData.timeline,
+      idempotencyKey: orderData.idempotencyKey,
+      isStockRolledBack: false
     };
 
     this.tables.orders.unshift(newOrder);
@@ -1205,17 +1313,29 @@ class D1DatabaseAccessLayer {
         `UPDATE products SET stock = stock + ${restoredQty}, updated_at = datetime('now') WHERE id = '${sqlEsc(it.productId)}';`
       );
       statements.push(
+        `UPDATE inventory SET current_stock = current_stock + ${restoredQty}, updated_at = datetime('now') WHERE product_id = '${sqlEsc(it.productId)}';`
+      );
+      statements.push(
         `INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, order_id, performed_by, created_at) ` +
         `VALUES ('${logRecord.id}', '${sqlEsc(it.productId)}', '${sqlEsc(it.productNameAr)}', 'STOCK_ROLLBACK', ${restoredQty}, ${prevStock}, ${newStock}, '${sqlEsc(logRecord.reason)}', '${order.id}', '${sqlEsc(actor)}', datetime('now'));`
       );
     }
 
     statements.push(
-      `UPDATE orders SET status = 'cancelled', is_stock_rolled_back = 1, cancelled_at = datetime('now'), updated_at = datetime('now') WHERE id = '${order.id}';`
+      `UPDATE orders SET status = 'cancelled', is_stock_rolled_back = 1, cancelled_at = datetime('now'), updated_at = datetime('now') WHERE id = '${order.id}' AND is_stock_rolled_back = 0;`
+    );
+
+    const notifId = `notif-cancel-${Date.now()}`;
+    statements.push(
+      `INSERT INTO notifications (id, recipient_role, title, message, type, is_read, link, created_at) ` +
+      `VALUES ('${notifId}', 'admin', 'استرجاع مخزون - إلغاء طلب', 'تم إلغاء الطلب #${order.orderNumber || order.id} وإعادة الكميات تلقائيًا للمخزون', 'stock', 0, '/admin/orders/${order.id}', datetime('now'));`
     );
 
     if (this.isD1Configured()) {
-      await this.executeCloudflareD1Raw(statements.join(' '));
+      const rollbackRes = await this.executeCloudflareD1Raw(statements.join(' '));
+      if (!rollbackRes.success) {
+        console.error('D1 Stock Rollback raw execution warning:', rollbackRes.errors);
+      }
     }
 
     // 5. Update payment status if exists to cancelled / failed
@@ -1247,6 +1367,14 @@ class D1DatabaseAccessLayer {
     if (!order) return null;
 
     const previousStatus = order.status;
+
+    // Strict State Machine Verification
+    if (status !== previousStatus) {
+      const allowedNext = VALID_ORDER_STATUS_TRANSITIONS[previousStatus];
+      if (allowedNext && !allowedNext.includes(status)) {
+        throw new Error(`انتقال غير مسموح لحالة الطلب من (${previousStatus}) إلى (${status})`);
+      }
+    }
 
     // Execute Stock Rollback if transitioning to 'cancelled' from a non-cancelled status
     if (status === 'cancelled') {
@@ -1333,6 +1461,64 @@ class D1DatabaseAccessLayer {
         lastCountedAt: data.lastCountedAt
       };
     });
+  }
+
+  public async adjustProductStock(params: {
+    productId: string;
+    type: 'initial' | 'purchase' | 'sale' | 'return' | 'damage' | 'adjustment' | 'STOCK_IN' | 'STOCK_OUT' | 'STOCK_ROLLBACK';
+    quantity: number;
+    previousStock: number;
+    newStock: number;
+    reason: string;
+    performedBy: string;
+  }): Promise<{ product: Product; transaction: InventoryLogRecord }> {
+    const product = this.findProductById(params.productId);
+    if (!product) throw new Error("المنتج غير موجود");
+
+    if (params.newStock < 0) {
+      throw new Error("لا يمكن تعيين المخزون لقيمة سالبة");
+    }
+
+    const txId = 'tx-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+    const sqlEsc = (s: any) => String(s ?? '').replace(/'/g, "''");
+
+    // Execute on Cloudflare D1 with trigger protection
+    if (this.isD1Configured()) {
+      const statements = [
+        `UPDATE products SET stock = ${params.newStock}, updated_at = datetime('now') WHERE id = '${sqlEsc(params.productId)}';`,
+        `INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, performed_by, created_at) ` +
+        `VALUES ('${txId}', '${sqlEsc(params.productId)}', '${sqlEsc(product.nameAr)}', '${params.type}', ${params.quantity}, ${params.previousStock}, ${params.newStock}, '${sqlEsc(params.reason)}', '${sqlEsc(params.performedBy)}', datetime('now'));`
+      ];
+      await this.executeCloudflareD1Raw(statements.join(' '));
+    }
+
+    // Update in-memory state
+    product.stock = params.newStock;
+    product.updatedAt = new Date().toISOString();
+
+    const inv = this.tables.inventory.get(params.productId);
+    if (inv) {
+      inv.currentStock = params.newStock;
+      inv.lastCountedAt = new Date().toISOString();
+    }
+
+    const logRecord: InventoryLogRecord = {
+      id: txId,
+      productId: params.productId,
+      productName: product.nameAr,
+      type: params.type,
+      quantity: params.quantity,
+      previousStock: params.previousStock,
+      newStock: params.newStock,
+      reason: params.reason,
+      performedBy: params.performedBy,
+      createdAt: new Date().toISOString()
+    };
+
+    this.tables.inventory_logs.unshift(logRecord);
+    this.saveLocal();
+
+    return { product, transaction: logRecord };
   }
 
   // ==========================================

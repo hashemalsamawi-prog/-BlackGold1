@@ -487,13 +487,24 @@
       "name": "هاشم السماوي (المالك)",
       "phone": "777000111",
       "role": "owner",
-      "pinHash": "3785beabde383bacbf8e18a351aae08a49c5098430a96e33d8fea1c3fe8f968c",
       "createdAt": "2026-09-02T23:10:30.927Z"
     }
   ],
   "orders": [],
   "orderItems": [],
-  "customers": [],
+  "customers": [
+    {
+      "id": "test-cust-771112233",
+      "name": "عمر التيست",
+      "phone": "771112233",
+      "district": "التحرير",
+      "totalOrders": 1,
+      "totalSpent": 1500,
+      "loyaltyPoints": 15,
+      "createdAt": "2026-09-04 16:55:22",
+      "updatedAt": "2026-09-04 16:55:22"
+    }
+  ],
   "reviews": [],
   "coupons": [
     {
@@ -501,71 +512,66 @@
       "discountPercent": 10,
       "maxDiscount": 2000,
       "minOrderAmount": 2000,
-      "isActive": true
+      "isActive": true,
+      "usageCount": 0
     },
     {
       "code": "SANAA15",
       "discountPercent": 15,
       "maxDiscount": 3500,
       "minOrderAmount": 5000,
-      "isActive": true
+      "isActive": true,
+      "usageCount": 0
     },
     {
       "code": "VIPBLACK",
       "discountPercent": 20,
       "maxDiscount": 5000,
       "minOrderAmount": 10000,
-      "isActive": true
+      "isActive": true,
+      "usageCount": 0
     }
   ],
   "deliveryAgents": [
     {
-      "id": "drv-1",
+      "id": "dr-1",
       "name": "أحمد الكبسي",
-      "phone": "771234567",
+      "phone": "770099887",
       "vehicleType": "motorcycle",
-      "assignedDistricts": [
-        "حدة",
-        "السبعين",
-        "الأصبحي",
-        "بيت بوس"
-      ],
-      "isActive": true,
-      "currentLatitude": 15.328,
-      "currentLongitude": 44.185,
-      "completedOrdersCount": 428,
-      "rating": 4.9
+      "assignedDistricts": [],
+      "completedOrdersCount": 0,
+      "rating": 4.95,
+      "isActive": true
     },
     {
-      "id": "drv-2",
-      "name": "ياسر الردماني",
-      "phone": "775678912",
+      "id": "dr-2",
+      "name": "محمد العنسي",
+      "phone": "771122334",
       "vehicleType": "motorcycle",
-      "assignedDistricts": [
-        "التحرير",
-        "الصافية",
-        "شعوب",
-        "الحصبة"
-      ],
-      "isActive": true,
-      "currentLatitude": 15.352,
-      "currentLongitude": 44.209,
-      "completedOrdersCount": 312,
-      "rating": 4.8
+      "assignedDistricts": [],
+      "completedOrdersCount": 0,
+      "rating": 4.9,
+      "isActive": true
     },
     {
-      "id": "drv-3",
-      "name": "محمد الشامي (فان التوريد B2B)",
-      "phone": "773456789",
+      "id": "dr-3",
+      "name": "إبراهيم المؤيد",
+      "phone": "773344556",
       "vehicleType": "van",
-      "assignedDistricts": [
-        "جميع مناطق أمانة العاصمة"
-      ],
-      "isActive": true,
-      "currentLatitude": 15.34,
-      "currentLongitude": 44.195,
-      "completedOrdersCount": 560,
-      "rating": 5
+      "assignedDistricts": [],
+      "completedOrdersCount": 0,
+      "rating": 4.98,
+      "isActive": true
+    },
+    {
+      "id": "dr-4",
+      "name": "سامي الحيمي",
+      "phone": "775566778",
+      "vehicleType": "motorcycle",
+      "assignedDistricts": [],
+      "completedOrdersCount": 0,
+      "rating": 4.88,
+      "isActive": false
     }
   ],
   "storeSettings": {
@@ -832,8 +838,61 @@
       "descriptionAr": "ملحقات ومقتنيات فاخرة بشعار الذهب الأسود لشركائنا وعملائنا المميزين."
     }
   ],
-  "inventoryTransactions": [],
+  "inventoryTransactions": [
+    {
+      "id": "tx-rollback-1787506935505-bg-prem-250g-fqg1",
+      "productId": "bg-prem-250g",
+      "productName": "فحم الذهب الأسود الفاخر (250g + 10g مجاناً)",
+      "type": "STOCK_ROLLBACK",
+      "quantity": 2,
+      "previousStock": 798,
+      "newStock": 800,
+      "reason": "استرجاع مخزون لإلغاء الطلب #BG-2026-9459",
+      "orderId": "ORD-1338",
+      "performedBy": "العميل (فحص استرجاع المخزون الميداني)",
+      "createdAt": "2026-08-23T17:42:15.505Z"
+    },
+    {
+      "id": "tx-rollback-1787506918866-bg-prem-250g-n4gd",
+      "productId": "bg-prem-250g",
+      "productName": "فحم الذهب الأسود الفاخر (250g + 10g مجاناً)",
+      "type": "STOCK_ROLLBACK",
+      "quantity": 2,
+      "previousStock": 798,
+      "newStock": 800,
+      "reason": "استرجاع مخزون لإلغاء الطلب #BG-2026-4465",
+      "orderId": "ORD-8589",
+      "performedBy": "العميل (فحص استرجاع المخزون الميداني)",
+      "createdAt": "2026-08-23T17:41:58.866Z"
+    },
+    {
+      "id": "tx-rollback-1787433647297-bg-prem-500g-5c0i",
+      "productId": "bg-prem-500g",
+      "productName": "فحم الذهب الأسود الفاخر (500g + 10g مجاناً)",
+      "type": "STOCK_ROLLBACK",
+      "quantity": 2,
+      "previousStock": 648,
+      "newStock": 650,
+      "reason": "استرجاع مخزون لإلغاء الطلب #BG-TEST-RB-8453",
+      "orderId": "ORD-TEST-ROLLBACK-1787433647228",
+      "performedBy": "مدير الفرع - حدة",
+      "createdAt": "2026-08-22T21:20:47.297Z"
+    },
+    {
+      "id": "tx-rollback-1787433647247-bg-prem-250g-u0xi",
+      "productId": "bg-prem-250g",
+      "productName": "فحم الذهب الأسود الفاخر (250g + 10g مجاناً)",
+      "type": "STOCK_ROLLBACK",
+      "quantity": 3,
+      "previousStock": 797,
+      "newStock": 800,
+      "reason": "استرجاع مخزون لإلغاء الطلب #BG-TEST-RB-8453",
+      "orderId": "ORD-TEST-ROLLBACK-1787433647228",
+      "performedBy": "مدير الفرع - حدة",
+      "createdAt": "2026-08-22T21:20:47.247Z"
+    }
+  ],
   "payments": [],
   "notifications": [],
-  "updatedAt": "2026-09-04T16:53:48.713Z"
+  "updatedAt": "2026-09-05T18:16:19.870Z"
 }

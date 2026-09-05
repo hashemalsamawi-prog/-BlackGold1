@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS products (
     weight_options TEXT NOT NULL DEFAULT '[]', -- JSON array of { weight, price }
     is_featured INTEGER DEFAULT 1,
     is_best_seller INTEGER DEFAULT 0,
-    stock INTEGER NOT NULL DEFAULT 100,
+    stock INTEGER NOT NULL DEFAULT 100 CHECK (stock >= 0),
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now')),
     FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE SET NULL
@@ -98,6 +98,7 @@ CREATE TABLE IF NOT EXISTS orders (
     payment_status TEXT NOT NULL DEFAULT 'pending' CHECK (payment_status IN ('pending', 'paid', 'confirmed', 'failed', 'refunded')),
     status TEXT NOT NULL DEFAULT 'received' CHECK (status IN ('received', 'pending', 'preparing', 'shipped', 'delivering', 'on_way', 'delivered', 'completed', 'cancelled')),
     is_stock_rolled_back INTEGER DEFAULT 0,
+    idempotency_key TEXT UNIQUE,
     coupon_code TEXT,
     driver_id TEXT,
     driver_name TEXT,
@@ -117,6 +118,7 @@ CREATE TABLE IF NOT EXISTS order_items (
     id TEXT PRIMARY KEY,
     order_id TEXT NOT NULL,
     product_id TEXT NOT NULL,
+    productId TEXT,
     product_name_ar TEXT NOT NULL,
     product_name_en TEXT,
     weight_option TEXT NOT NULL,
@@ -131,7 +133,7 @@ CREATE TABLE IF NOT EXISTS order_items (
 -- 7. INVENTORY TABLE
 CREATE TABLE IF NOT EXISTS inventory (
     product_id TEXT PRIMARY KEY,
-    current_stock INTEGER NOT NULL DEFAULT 0,
+    current_stock INTEGER NOT NULL DEFAULT 0 CHECK (current_stock >= 0),
     reserved_stock INTEGER NOT NULL DEFAULT 0,
     min_threshold INTEGER NOT NULL DEFAULT 10,
     last_counted_at TEXT,
@@ -144,7 +146,7 @@ CREATE TABLE IF NOT EXISTS inventory_logs (
     id TEXT PRIMARY KEY,
     product_id TEXT NOT NULL,
     product_name TEXT NOT NULL,
-    type TEXT NOT NULL CHECK (type IN ('initial', 'purchase', 'sale', 'adjustment', 'damage', 'return', 'STOCK_ROLLBACK')),
+    type TEXT NOT NULL CHECK (type IN ('initial', 'purchase', 'sale', 'adjustment', 'damage', 'return', 'STOCK_IN', 'STOCK_OUT', 'STOCK_ROLLBACK')),
     quantity INTEGER NOT NULL,
     previous_stock INTEGER NOT NULL,
     new_stock INTEGER NOT NULL,
@@ -194,6 +196,7 @@ CREATE TABLE IF NOT EXISTS coupons (
     is_active INTEGER DEFAULT 1,
     valid_until TEXT,
     usage_count INTEGER DEFAULT 0,
+    max_uses INTEGER DEFAULT 100,
     created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -271,6 +274,7 @@ CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers(phone);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_orders_customer_phone ON orders(customer_phone);
 CREATE INDEX IF NOT EXISTS idx_orders_order_number ON orders(order_number);
+CREATE INDEX IF NOT EXISTS idx_orders_idempotency_key ON orders(idempotency_key);
 CREATE INDEX IF NOT EXISTS idx_orders_driver_id ON orders(driver_id);
 CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items(order_id);
 CREATE INDEX IF NOT EXISTS idx_order_items_product_id ON order_items(product_id);
@@ -292,4 +296,12 @@ FOR EACH ROW
 WHEN NEW.stock < 0
 BEGIN
     SELECT RAISE(ABORT, 'Insufficient stock: product stock cannot be negative');
+END;
+
+CREATE TRIGGER IF NOT EXISTS prevent_negative_inventory_stock
+BEFORE UPDATE ON inventory
+FOR EACH ROW
+WHEN NEW.current_stock < 0
+BEGIN
+    SELECT RAISE(ABORT, 'Insufficient stock: inventory current_stock cannot be negative');
 END;

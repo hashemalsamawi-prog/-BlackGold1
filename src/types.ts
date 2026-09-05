@@ -51,6 +51,7 @@ export interface Product {
   reviewsCount?: number;
   reviewCount?: number;
   rating?: number;
+  updatedAt?: string;
 }
 
 export interface CartItem {
@@ -104,9 +105,11 @@ export interface Order {
   date?: string;
   updatedAt?: string;
   deliveredAt?: string;
+  completedAt?: string;
   cancelledAt?: string;
   isWholesale?: boolean;
   isStockRolledBack?: boolean;
+  idempotencyKey?: string;
   timeline?: Array<{ status: string; timestamp?: string; time?: string; titleAr?: string; titleEn?: string; note?: string }>;
 }
 
@@ -150,6 +153,7 @@ export interface Coupon {
   validUntil?: string;
   isActive: boolean;
   usageCount?: number;
+  maxUses?: number;
 }
 
 export interface DeliveryAgent {

@@ -2,18 +2,18 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { Product, Order, Review, Coupon, DeliveryAgent, StoreSettings, GalleryItem } from '../src/types';
-import { d1, CLOUDFLARE_CONFIG } from './d1';
+import { d1, CLOUDFLARE_CONFIG, VALID_ORDER_STATUS_TRANSITIONS } from './d1';
 import type { UserAccount, CustomerRecord, OrderItemRecord, InventoryLogRecord } from './d1';
-import { hashSecret, getJwtSecret, timingSafeEqual, normalizeDigits, validateYemeniPhone, sanitizeInputString, generateToken, verifyToken } from './security';
+import { hashSecret, getJwtSecret, timingSafeEqual, normalizeDigits, validateYemeniPhone, sanitizeInputString, generateToken, verifyToken, createRateLimiter } from './security';
 
 export type { UserAccount, CustomerRecord, OrderItemRecord, InventoryLogRecord };
-export { CLOUDFLARE_CONFIG, hashSecret, getJwtSecret, timingSafeEqual, normalizeDigits, validateYemeniPhone, sanitizeInputString, generateToken, verifyToken };
+export { CLOUDFLARE_CONFIG, VALID_ORDER_STATUS_TRANSITIONS, hashSecret, getJwtSecret, timingSafeEqual, normalizeDigits, validateYemeniPhone, sanitizeInputString, generateToken, verifyToken, createRateLimiter };
 
 export interface InventoryTransaction {
   id: string;
   productId: string;
   productName: string;
-  type: 'initial' | 'purchase' | 'sale' | 'return' | 'damage' | 'adjustment' | 'STOCK_ROLLBACK';
+  type: 'initial' | 'purchase' | 'sale' | 'return' | 'damage' | 'adjustment' | 'STOCK_IN' | 'STOCK_OUT' | 'STOCK_ROLLBACK';
   quantity: number; // positive or negative
   previousStock: number;
   newStock: number;
@@ -102,7 +102,7 @@ class DatabaseProxy {
     return d1.addOrder(order);
   }
 
-  public async createOrderAtomic(orderData: any): Promise<{ success: boolean; order?: Order; message?: string }> {
+  public async createOrderAtomic(orderData: any): Promise<{ success: boolean; order?: Order; message?: string; isDuplicate?: boolean }> {
     return d1.createOrderAtomic(orderData);
   }
 
@@ -239,6 +239,18 @@ class DatabaseProxy {
     return tx;
   }
 
+  public adjustProductStock(params: {
+    productId: string;
+    type: 'initial' | 'purchase' | 'sale' | 'return' | 'damage' | 'adjustment' | 'STOCK_IN' | 'STOCK_OUT' | 'STOCK_ROLLBACK';
+    quantity: number;
+    previousStock: number;
+    newStock: number;
+    reason: string;
+    performedBy: string;
+  }) {
+    return d1.adjustProductStock(params);
+  }
+
   public logAnalyticsEvent(event: string, data: any, userId?: string) {
     // Analytics telemetry
   }
@@ -257,6 +269,10 @@ class DatabaseProxy {
       const hasProduct = order.items.some(it => it.productId === productId);
       return isMatchPhone && isDelivered && hasProduct;
     });
+  }
+
+  public async init(): Promise<void> {
+    await d1.init();
   }
 }
 

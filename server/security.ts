@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import type { Request, Response, NextFunction } from 'express';
 
 let devEphemeralSecret: string | null = null;
 
@@ -119,3 +120,50 @@ export function sanitizeInputString(input: string = '', maxLength: number = 255)
     .trim()
     .slice(0, maxLength);
 }
+
+export interface RateLimiterOptions {
+  windowMs: number;
+  maxRequests: number;
+  message?: string;
+}
+
+/**
+ * In-memory IP rate limiter for protecting sensitive authentication and transaction endpoints
+ */
+export function createRateLimiter(options: RateLimiterOptions) {
+  const ipRequests = new Map<string, { count: number; resetTime: number }>();
+
+  // Cleanup interval every 60 seconds
+  const timer = setInterval(() => {
+    const now = Date.now();
+    for (const [ip, entry] of ipRequests.entries()) {
+      if (now > entry.resetTime) {
+        ipRequests.delete(ip);
+      }
+    }
+  }, 60000);
+  if (timer.unref) timer.unref();
+
+  return (req: Request, res: Response, next: NextFunction) => {
+    const forwarded = req.headers['x-forwarded-for'];
+    const ip = (typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : req.socket?.remoteAddress) || '127.0.0.1';
+    const now = Date.now();
+    const record = ipRequests.get(ip);
+
+    if (!record || now > record.resetTime) {
+      ipRequests.set(ip, { count: 1, resetTime: now + options.windowMs });
+      return next();
+    }
+
+    if (record.count >= options.maxRequests) {
+      return res.status(429).json({
+        success: false,
+        message: options.message || 'تم تجاوز عدد المحاولات المسموح بها. يرجى الانتظار قليلاً ثم إعادة المحاولة.'
+      });
+    }
+
+    record.count += 1;
+    return next();
+  };
+}
+
