@@ -146,7 +146,7 @@ export function createRateLimiter(options: RateLimiterOptions) {
 
   return (req: Request, res: Response, next: NextFunction) => {
     const forwarded = req.headers['x-forwarded-for'];
-    const ip = (typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : req.socket?.remoteAddress) || '127.0.0.1';
+    const ip = req.ip || (typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : req.socket?.remoteAddress) || '127.0.0.1';
     const now = Date.now();
     const record = ipRequests.get(ip);
 

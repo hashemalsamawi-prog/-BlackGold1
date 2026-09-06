@@ -127,9 +127,13 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     };
 
     try {
+      const authHeader = typeof window !== 'undefined' && localStorage.getItem('bg_auth_token')
+        ? { 'Authorization': `Bearer ${localStorage.getItem('bg_auth_token')}` }
+        : {};
+
       const res = await fetch('/api/orders', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeader },
         body: JSON.stringify(newOrder),
       });
       const data = await res.json();
@@ -144,7 +148,6 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
     setIsSubmitting(false);
     onClose();
-    onOpenTracking();
   };
 
   const handleSendWhatsAppOrder = async () => {

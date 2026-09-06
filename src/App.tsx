@@ -17,6 +17,7 @@ import { CartDrawer } from './components/CartDrawer';
 import { InteractiveMapModal } from './components/InteractiveMapModal';
 import { CheckoutModal } from './components/CheckoutModal';
 import { OrderTrackerModal } from './components/OrderTrackerModal';
+import { OrderConfirmationModal } from './components/OrderConfirmationModal';
 import { MandoubPortal } from './components/MandoubPortal';
 import { AdminDashboard } from './components/AdminDashboard';
 import { AiAdvisorModal } from './components/AiAdvisorModal';
@@ -200,6 +201,9 @@ export default function App() {
   const [aiAdvisorOpen, setAiAdvisorOpen] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
+  const [confirmedOrder, setConfirmedOrder] = useState<Order | null>(null);
+  const [confirmationOpen, setConfirmationOpen] = useState(false);
+  const [trackingFocusOrderId, setTrackingFocusOrderId] = useState<string | null>(null);
   const [welcomeOpen, setWelcomeOpen] = useState<boolean>(() => {
     const seen = safeGetLocalStorage('bg_welcome_seen', '');
     return !seen;
@@ -247,7 +251,11 @@ export default function App() {
         console.warn('Products background sync note:', err);
       });
 
-    fetch('/api/orders')
+    const orderToken = authStorage.getToken();
+    const orderHeaders: Record<string, string> = {};
+    if (orderToken) orderHeaders['Authorization'] = `Bearer ${orderToken}`;
+
+    fetch('/api/orders', { headers: orderHeaders })
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
@@ -255,7 +263,10 @@ export default function App() {
       .then((data) => {
         if (!isMounted) return;
         if (data.success && Array.isArray(data.data)) {
-          setOrders(data.data);
+          // Clean out corrupt test orders (missing total or items)
+          const validOrders = data.data.filter((o: any) => o && (o.totalAmount || o.total));
+          setOrders(validOrders);
+          safeSetLocalStorage('bg_saved_orders', JSON.stringify(validOrders));
         }
       })
       .catch((err) => {
@@ -418,16 +429,74 @@ export default function App() {
     setCheckoutOpen(true);
   };
 
+  const fetchLatestOrders = async (notifyIfNew = true) => {
+    try {
+      const token = authStorage.getToken();
+      const headers: Record<string, string> = {};
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const res = await fetch('/api/orders', { headers });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.success && Array.isArray(data.data)) {
+        const validOrders = data.data.filter((o: any) => o && (o.totalAmount || o.total));
+        setOrders((prev) => {
+          if (notifyIfNew && prev.length > 0) {
+            const prevIds = new Set(prev.map(p => p.id || p.orderNumber));
+            const newIncoming = validOrders.filter((d: any) => !prevIds.has(d.id || d.orderNumber));
+            if (newIncoming.length > 0) {
+              playOrderAlertSound(0.9);
+              const latest = newIncoming[0];
+              setToastMessage(`🚨 تنبيه المالك: وصل طلب جديد #${latest.orderNumber || latest.id} بقيمة ${(latest.totalAmount || latest.total || 0).toLocaleString()} ريال!`);
+              setTimeout(() => setToastMessage(null), 8000);
+            }
+          }
+          safeSetLocalStorage('bg_saved_orders', JSON.stringify(validOrders));
+          return validOrders;
+        });
+      }
+    } catch (e) {
+      console.warn('Orders refresh note:', e);
+    }
+  };
+
+  // Periodic orders sync for owner / mandoub / active dashboard
+  useEffect(() => {
+    if (!adminOpen && !mandoubOpen && userRole !== 'owner' && userRole !== 'mandoub') return;
+
+    const intervalId = setInterval(() => {
+      fetchLatestOrders(true);
+    }, 12000);
+
+    return () => clearInterval(intervalId);
+  }, [adminOpen, mandoubOpen, userRole]);
+
   const handleOrderPlaced = (newOrder: Order) => {
     setOrders((prev) => {
-      const updated = [newOrder, ...prev];
+      const cleanPrev = prev.filter(o => o && (o.totalAmount || o.total));
+      const updated = [newOrder, ...cleanPrev];
       safeSetLocalStorage('bg_saved_orders', JSON.stringify(updated));
       return updated;
     });
     setCart([]);
+    setConfirmedOrder(newOrder);
+    setConfirmationOpen(true);
     playOrderAlertSound(0.85);
-    setToastMessage(`🔔 تم وصول وإرسال الطلب ${newOrder.orderNumber} للمندوب في صنعاء بنجاح! 🎉`);
+    setToastMessage(`🔔 تم استلام وتأكيد طلبك #${newOrder.orderNumber || newOrder.id} بنجاح!`);
     setTimeout(() => setToastMessage(null), 6000);
+  };
+
+  const handleCleanOldOrders = () => {
+    setOrders((prev) => {
+      const cleaned = prev.filter(o => {
+        const hasTotal = (o.totalAmount && o.totalAmount > 0) || (o.total && o.total > 0);
+        return hasTotal;
+      });
+      safeSetLocalStorage('bg_saved_orders', JSON.stringify(cleaned));
+      return cleaned;
+    });
+    setToastMessage('✅ تم تنظيف السجل التجريبي القديم بنجاح!');
+    setTimeout(() => setToastMessage(null), 3000);
   };
 
   const handleUpdateOrderStatus = async (orderId: string, status: Order['status'], driverNotes?: string) => {
@@ -1099,9 +1168,24 @@ export default function App() {
           orders={orders}
           lang={lang}
           userName={userName}
+          focusOrderId={trackingFocusOrderId}
+          onCleanOldOrders={handleCleanOldOrders}
           onShopNow={() => {
             setOrdersOpen(false);
             window.scrollTo({ top: 400, behavior: 'smooth' });
+          }}
+        />
+
+        <OrderConfirmationModal
+          isOpen={confirmationOpen}
+          onClose={() => setConfirmationOpen(false)}
+          order={confirmedOrder}
+          lang={lang}
+          whatsappNumber={storeSettings.whatsappNumber || '967775000150'}
+          onTrackOrder={(ord) => {
+            setTrackingFocusOrderId(ord.orderNumber || ord.id);
+            setConfirmationOpen(false);
+            setOrdersOpen(true);
           }}
         />
 
@@ -1127,6 +1211,7 @@ export default function App() {
           products={products}
           orders={orders}
           reviews={reviews}
+          onRefreshOrders={() => fetchLatestOrders(false)}
           onAddProduct={handleAddProduct}
           onUpdateProduct={handleUpdateProduct}
           onDeleteProduct={handleDeleteProduct}

@@ -328,42 +328,43 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                 )}
               </div>
 
-              {/* Financial Calculation Summary */}
-              <div className="p-4 rounded-2xl bg-slate-950/95 border border-slate-800 space-y-2 text-xs">
-                <div className="flex justify-between text-slate-300">
-                  <span>المجموع الفرعي للمنتجات:</span>
-                  <span className="font-bold font-mono">{subtotal.toLocaleString()} YER</span>
-                </div>
-                <div className="flex justify-between text-slate-300">
-                  <span>رسوم التوصيل السريع (صنعاء):</span>
-                  <span className="font-bold font-mono">{shippingFee.toLocaleString()} YER</span>
-                </div>
-                {discountVal > 0 && (
-                  <div className="flex justify-between text-emerald-400 font-bold">
-                    <span>الخصم المطبق:</span>
-                    <span className="font-mono">- {discountVal.toLocaleString()} YER</span>
-                  </div>
-                )}
-                <div className="flex justify-between text-white font-black text-sm pt-2.5 border-t border-slate-800">
-                  <span>المبلغ الإجمالي المطلوب بالريال:</span>
-                  <span className="text-amber-400 text-base sm:text-lg font-mono font-black">
-                    {total.toLocaleString()} YER
-                  </span>
-                </div>
-              </div>
-
             </div>
           )}
 
         </div>
 
-        {/* Sticky Action Footer Bar (Safe padding to prevent mobile cut-off) */}
+        {/* Sticky Action Footer Bar - Perfectly couples Financial Summary with Action Buttons without dead space */}
         {cart.length > 0 && (
-          <div className="p-4 sm:p-5 border-t border-slate-800 bg-[#12121B] shrink-0 space-y-2.5 pb-24 sm:pb-5">
+          <div className="p-4 sm:p-5 border-t border-slate-800 bg-[#12121B] shrink-0 space-y-3 pb-6 sm:pb-5 shadow-2xl">
+            {/* Financial Calculation Summary */}
+            <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2 text-xs">
+              <div className="flex justify-between text-slate-300">
+                <span>المجموع الفرعي للمنتجات:</span>
+                <span className="font-bold font-mono">{subtotal.toLocaleString()} YER</span>
+              </div>
+              <div className="flex justify-between text-slate-300">
+                <span>رسوم التوصيل السريع (صنعاء):</span>
+                <span className="font-bold font-mono">{shippingFee.toLocaleString()} YER</span>
+              </div>
+              {discountVal > 0 && (
+                <div className="flex justify-between text-emerald-400 font-bold">
+                  <span>الخصم المطبق:</span>
+                  <span className="font-mono">- {discountVal.toLocaleString()} YER</span>
+                </div>
+              )}
+              <div className="flex justify-between text-white font-black text-sm pt-2 border-t border-slate-800">
+                <span>المبلغ الإجمالي المطلوب بالريال:</span>
+                <span className="text-amber-400 text-base sm:text-lg font-mono font-black">
+                  {total.toLocaleString()} YER
+                </span>
+              </div>
+            </div>
+
+            {/* Primary Action Button */}
             <button
               type="button"
               onClick={() => onProceedToCheckout(shippingFee, discountVal, customerNotes, selectedAddress?.district || 'صنعاء')}
-              className="w-full py-3.5 rounded-2xl gold-gradient-bg text-slate-950 font-black text-sm hover:brightness-110 transition-all flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20 cursor-pointer"
+              className="w-full py-3.5 rounded-xl bg-gradient-to-r from-amber-500 via-amber-400 to-amber-500 hover:from-amber-400 hover:to-amber-300 text-slate-950 font-black text-sm transition-all flex items-center justify-center gap-2 shadow-lg shadow-amber-500/25 cursor-pointer active:scale-[0.99]"
             >
               <span>متابعة إتمام الطلب وتأكيد الفاتورة</span>
               {lang === 'ar' ? <ArrowLeft className="w-4 h-4" /> : <ArrowRight className="w-4 h-4" />}
@@ -375,7 +376,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
               )}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="w-full py-2.5 rounded-xl bg-emerald-600/90 hover:bg-emerald-600 text-white font-black text-xs flex items-center justify-center gap-2 transition-all border border-emerald-500/40 cursor-pointer"
+              className="w-full py-2.5 rounded-xl bg-emerald-600/90 hover:bg-emerald-600 text-white font-black text-xs flex items-center justify-center gap-2 transition-all border border-emerald-500/40 cursor-pointer active:scale-[0.99]"
             >
               <MessageSquare className="w-4 h-4" />
               <span>أو الطلب السريع الفوري عبر الواتساب (WhatsApp) 💬</span>

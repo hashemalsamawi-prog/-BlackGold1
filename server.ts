@@ -794,16 +794,32 @@ app.get("/api/orders", (req: AuthenticatedRequest, res) => {
   return res.status(403).json({ success: false, message: "ليس لديك صلاحية لعرض قائمة الطلبات" });
 });
 
-// Customer's Personal Orders (My Orders)
+// Customer's Personal Orders (My Orders with Strict JWT Ownership)
 app.get("/api/my-orders", (req: AuthenticatedRequest, res) => {
-  const phone = (req.query.phone as string) || req.user?.phone;
-  if (!phone) {
-    return res.json({ success: true, data: [] });
+  if (!req.user) {
+    return res.status(401).json({ success: false, message: "يتطلب عرض طلباتي تسجيل الدخول" });
   }
 
-  const clean = phone.replace(/\D/g, '');
-  const myOrders = db.getOrders().filter(o => o.customerPhone?.replace(/\D/g, '') === clean);
-  res.json({ success: true, data: myOrders });
+  const allOrders = db.getOrders();
+
+  // Management can view all or filtered
+  if (['owner', 'admin', 'employee'].includes(req.user.role)) {
+    const phone = req.query.phone as string;
+    if (phone) {
+      const clean = phone.replace(/\D/g, '');
+      return res.json({ success: true, data: allOrders.filter(o => o.customerPhone?.replace(/\D/g, '') === clean) });
+    }
+    return res.json({ success: true, data: allOrders });
+  }
+
+  // Customer must only see orders belonging to their authenticated JWT phone
+  if (req.user.role === 'customer' && req.user.phone) {
+    const clean = req.user.phone.replace(/\D/g, '');
+    const myOrders = allOrders.filter(o => o.customerPhone?.replace(/\D/g, '') === clean);
+    return res.json({ success: true, data: myOrders });
+  }
+
+  return res.status(403).json({ success: false, message: "غير مصرح لك بعرض هذه الطلبات" });
 });
 
 // Order Public Tracking (Single Order Status & Timeline by Order Number or ID)
@@ -841,6 +857,32 @@ app.get("/api/orders/track/:query", trackingRateLimiter, (req, res) => {
       timeline: order.timeline || []
     }
   });
+});
+
+// Get Single Order by ID (Strict Ownership & RBAC)
+app.get("/api/orders/:id", (req: AuthenticatedRequest, res) => {
+  if (!req.user) {
+    return res.status(401).json({ success: false, message: "يتطلب الوصول إلى تفاصيل الطلب تسجيل الدخول" });
+  }
+
+  const order = db.findOrderById(req.params.id);
+  if (!order) {
+    return res.status(404).json({ success: false, message: "الطلب غير موجود" });
+  }
+
+  const isManagement = ['owner', 'admin', 'employee'].includes(req.user.role);
+  const isCustomerOwner = req.user.role === 'customer' && req.user.phone && order.customerPhone && (
+    req.user.phone.replace(/\D/g, '') === order.customerPhone.replace(/\D/g, '')
+  );
+  const isDriver = req.user.role === 'delivery' && (
+    order.driverId === req.user.userId || (req.user.phone && order.driverPhone === req.user.phone)
+  );
+
+  if (!isManagement && !isCustomerOwner && !isDriver) {
+    return res.status(403).json({ success: false, message: "غير مصرح لك بعرض تفاصيل هذا الطلب" });
+  }
+
+  res.json({ success: true, data: order });
 });
 
 // Relational Order Items from D1 (Protected with RBAC)

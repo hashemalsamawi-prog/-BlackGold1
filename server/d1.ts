@@ -472,9 +472,12 @@ class D1DatabaseAccessLayer {
           deliveryFee: r.shipping_fee || 0,
           discount: r.discount,
           total: r.total,
+          totalAmount: r.total,
+          district: r.delivery_district,
           paymentMethod: r.payment_method,
           status: r.status,
           date: r.created_at,
+          createdAt: r.created_at,
           driverId: r.driver_id || undefined,
           driverName: r.driver_name || undefined,
           driverPhone: r.driver_phone || undefined,
@@ -958,12 +961,15 @@ class D1DatabaseAccessLayer {
             id: row.id,
             orderNumber: row.order_number,
             date: row.created_at,
+            createdAt: row.created_at,
             status: row.status,
             items: typeof row.items_json === 'string' ? JSON.parse(row.items_json || '[]') : (row.items_json || []),
             subtotal: row.subtotal,
             shippingFee: row.shipping_fee || 0,
             discount: row.discount || 0,
             total: row.total,
+            totalAmount: row.total,
+            district: row.delivery_district,
             address: {
               id: `addr-${row.id}`,
               title: row.delivery_district,
@@ -1024,6 +1030,9 @@ class D1DatabaseAccessLayer {
       );
 
       // 3. Insert order
+      const idempSql = orderData.idempotencyKey ? `'${sqlEsc(orderData.idempotencyKey)}'` : 'NULL';
+      const couponSql = orderData.couponCode ? `'${sqlEsc(orderData.couponCode)}'` : 'NULL';
+
       statements.push(
         `INSERT INTO orders (` +
         `id, order_number, customer_id, customer_name, customer_phone, delivery_district, delivery_address, items_json, subtotal, shipping_fee, discount, total, payment_method, payment_status, status, is_stock_rolled_back, idempotency_key, coupon_code, driver_id, driver_name, driver_phone, notes, driver_notes, timeline_json, created_at, updated_at` +
@@ -1031,7 +1040,7 @@ class D1DatabaseAccessLayer {
         `'${orderData.orderId}', '${orderData.orderNumber}', '${customerId}', '${sqlEsc(orderData.customerName)}', '${sqlEsc(cleanPhone)}', ` +
         `'${sqlEsc(orderData.address.district)}', '${sqlEsc(orderData.address.street || orderData.address.district)}', '${sqlEsc(JSON.stringify(orderData.validatedItems))}', ` +
         `${orderData.subtotal}, ${orderData.shippingFee}, ${orderData.discount}, ${orderData.total}, ` +
-        `'${sqlEsc(orderData.paymentMethod || 'cash')}', 'pending', 'received', 0, '${sqlEsc(orderData.idempotencyKey || '')}', '${sqlEsc(orderData.couponCode || '')}', ` +
+        `'${sqlEsc(orderData.paymentMethod || 'cash')}', 'pending', 'received', 0, ${idempSql}, ${couponSql}, ` +
         `'${sqlEsc(orderData.assignedDriver.id)}', '${sqlEsc(orderData.assignedDriver.name)}', '${sqlEsc(orderData.assignedDriver.phone)}', ` +
         `'${sqlEsc(orderData.notes || '')}', '', '${sqlEsc(JSON.stringify(orderData.timeline))}', datetime('now'), datetime('now')` +
         `);`
@@ -1111,12 +1120,15 @@ class D1DatabaseAccessLayer {
       id: orderData.orderId,
       orderNumber: orderData.orderNumber,
       date: orderData.date,
-      status: "received",
+      createdAt: orderData.date,
+      status: "pending",
       items: orderData.validatedItems,
       subtotal: orderData.subtotal,
       shippingFee: orderData.shippingFee,
       discount: orderData.discount,
       total: orderData.total,
+      totalAmount: orderData.total,
+      district: orderData.address.district,
       address: {
         id: `addr-${orderData.orderId}`,
         title: orderData.address.district,
