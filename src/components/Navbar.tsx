@@ -13,6 +13,8 @@ interface NavbarProps {
   deviceMode: 'web' | 'android';
   onDeviceModeToggle: () => void;
   cartCount: number;
+  ordersCount?: number;
+  pendingOrdersCount?: number;
   onOpenCart: () => void;
   onOpenMap: () => void;
   onOpenOrders: () => void;
@@ -46,6 +48,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   deviceMode,
   onDeviceModeToggle,
   cartCount,
+  ordersCount = 0,
+  pendingOrdersCount = 0,
   onOpenCart,
   onOpenMap,
   onOpenOrders,
@@ -160,21 +164,31 @@ export const Navbar: React.FC<NavbarProps> = ({
             {/* Orders Tracker */}
             <button
               onClick={onOpenOrders}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-zinc-900/80 border border-zinc-800 text-zinc-300 text-xs font-semibold hover:border-amber-500/40 hover:text-white transition-all"
+              className="relative flex items-center gap-1.5 px-3 py-2 rounded-xl bg-zinc-900/80 border border-zinc-800 text-zinc-300 text-xs font-semibold hover:border-amber-500/40 hover:text-white transition-all"
               title="تتبع الطلبات"
             >
               <Package className="w-4 h-4 text-amber-400" />
               <span className="hidden sm:inline">طلباتي</span>
+              {ordersCount > 0 && (
+                <span className="bg-amber-500 text-black text-[10px] font-black rounded-full h-4 min-w-4 px-1 flex items-center justify-center">
+                  {ordersCount}
+                </span>
+              )}
             </button>
 
             {/* Role / Portals */}
             {userRole === 'owner' && (
               <button
                 onClick={onOpenAdmin}
-                className="flex items-center gap-1 px-3 py-2 rounded-xl bg-amber-500 text-black text-xs font-black hover:bg-amber-400 shadow-md shadow-amber-500/20 transition-all"
+                className="relative flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-500 text-black text-xs font-black hover:bg-amber-400 shadow-md shadow-amber-500/20 transition-all"
               >
                 <ShieldAlert className="w-4 h-4" />
                 <span className="hidden sm:inline">لوحة الإدارة</span>
+                {pendingOrdersCount > 0 && (
+                  <span className="bg-red-600 text-white text-[10px] font-black rounded-full h-4.5 min-w-4.5 px-1.5 flex items-center justify-center border border-white/30 animate-pulse">
+                    {pendingOrdersCount}
+                  </span>
+                )}
               </button>
             )}
 

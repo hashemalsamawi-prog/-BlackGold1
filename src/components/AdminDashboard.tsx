@@ -28,7 +28,12 @@ interface AdminDashboardProps {
   onAddProduct: (p: any) => void;
   onUpdateProduct: (id: string, p: any) => void;
   onDeleteProduct: (id: string) => void;
-  onUpdateOrderStatus: (id: string, status: Order['status'], driverNotes?: string) => void;
+  onUpdateOrderStatus: (
+    id: string, 
+    status: Order['status'], 
+    driverNotes?: string,
+    driverInfo?: { driverId?: string; driverName?: string; driverPhone?: string }
+  ) => void;
   lang: Language;
   storeSettings: StoreSettings;
   onUpdateStoreSettings: (settings: StoreSettings) => void;
@@ -72,8 +77,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onUpdateGalleryItems,
   onRefreshOrders
 }) => {
-  if (!isOpen) return null;
-
   // Tabs: 11 distinct sections
   const [activeTab, setActiveTab] = useState<
     'dashboard' | 'orders' | 'products' | 'inventory' | 'customers' | 'fleet' | 'coupons' | 'reviews' | 'marketing' | 'reports' | 'settings'
@@ -446,8 +449,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       originalPrice: prod.originalPrice || prod.price,
       discountPercent: prod.discountPercent || 0,
       descriptionAr: prod.descriptionAr,
-      burnDurationHours: prod.burnDurationHours,
-      ashPercentage: prod.ashPercentage,
+      burnDurationHours: String(prod.burnDurationHours || '6+ ساعات'),
+      ashPercentage: String(prod.ashPercentage || '< 1.5%'),
       stock: prod.stock || 100,
       imageUrl: prod.images?.[0] || '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg'
     });
@@ -552,12 +555,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   // KPI Calculations
-  const totalRevenue = orders.reduce((sum, o) => (o.status !== 'cancelled' ? sum + (o.totalAmount ?? o.total ?? 0) : sum), 0);
-  const totalOrdersCount = orders.length;
-  const newOrdersCount = orders.filter(o => o.status === 'pending' || o.status === 'received' || o.status === 'preparing').length;
-  const deliveringOrdersCount = orders.filter(o => o.status === 'shipped' || o.status === 'delivering' || o.status === 'on_way').length;
-  const completedOrdersCount = orders.filter(o => o.status === 'delivered').length;
-  const lowStockProducts = products.filter(p => p.stock < 50);
+  const safeOrders = (orders || []).filter(Boolean);
+  const safeProducts = (products || []).filter(Boolean);
+  const totalRevenue = safeOrders.reduce((sum, o) => (o && o.status !== 'cancelled' ? sum + (o.totalAmount ?? o.total ?? 0) : sum), 0);
+  const totalOrdersCount = safeOrders.length;
+  const newOrdersCount = safeOrders.filter(o => o && (o.status === 'pending' || o.status === 'received' || o.status === 'preparing')).length;
+  const deliveringOrdersCount = safeOrders.filter(o => o && (o.status === 'shipped' || o.status === 'delivering' || o.status === 'on_way')).length;
+  const completedOrdersCount = safeOrders.filter(o => o && o.status === 'delivered').length;
+  const lowStockProducts = safeProducts.filter(p => p && (p.stock || 0) < 50);
 
   // Revenue chart data
   const revenueChartData = [
@@ -567,7 +572,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     { day: 'الثلاثاء', sales: 71500, orders: 18 },
     { day: 'الأربعاء', sales: 89000, orders: 22 },
     { day: 'الخميس', sales: 124000, orders: 31 },
-    { day: 'الجمعة (اليوم)', sales: totalRevenue > 0 ? totalRevenue : 156000, orders: orders.length > 0 ? orders.length : 38 }
+    { day: 'الجمعة (اليوم)', sales: totalRevenue > 0 ? totalRevenue : 156000, orders: safeOrders.length > 0 ? safeOrders.length : 38 }
   ];
 
   // Print Thermal Invoice for Sanaa Courier
@@ -579,7 +584,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   // Filtered Orders
-  const filteredOrders = orders.filter(o => {
+  const filteredOrders = safeOrders.filter(o => {
+    if (!o) return false;
     const matchesStatus = orderStatusFilter === 'all' 
       || o.status === orderStatusFilter 
       || (orderStatusFilter === 'received' && o.status === 'pending')
@@ -591,6 +597,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const matchesQuery = !q || orderNum.includes(q) || custName.includes(q) || custPhone.includes(q);
     return matchesStatus && matchesQuery;
   });
+
+  const defaultAgents: DeliveryAgent[] = [
+    { id: 'drv-1', name: 'أحمد الكبسي', phone: '775000150', vehicleType: 'motorcycle', vehicle: 'دراجة نارية سريعة', assignedDistricts: ['حدة', 'السبعين'], zone: 'حدة والسبعين', isActive: true, status: 'active', activeOrdersCount: 2, completedToday: 8, rating: 4.9 },
+    { id: 'drv-2', name: 'محمد الحاشدي', phone: '770123456', vehicleType: 'van', vehicle: 'سيارة دباب توصيل', assignedDistricts: ['الستين', 'التحرير'], zone: 'الستين والتحرير', isActive: true, status: 'active', activeOrdersCount: 1, completedToday: 6, rating: 4.8 },
+    { id: 'drv-3', name: 'يحيى الصنعاني', phone: '777987654', vehicleType: 'motorcycle', vehicle: 'دراجة نارية سريعة', assignedDistricts: ['الحصبة', 'شعوب'], zone: 'الحصبة وشعوب', isActive: true, status: 'active', activeOrdersCount: 0, completedToday: 9, rating: 5.0 },
+  ];
+  const activeAgents = (deliveryAgents && deliveryAgents.length > 0) ? deliveryAgents : defaultAgents;
+
+  if (!isOpen) return null;
 
   return (
     <div 
@@ -856,23 +871,39 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </button>
                 </div>
                 <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-                  {orders.slice(0, 4).map(ord => (
-                    <div key={ord.id} className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between">
-                      <div>
-                        <div className="font-bold text-white text-xs">{ord.orderNumber} • {ord.customerName}</div>
-                        <div className="text-[11px] text-slate-400">{ord.address?.district} • {ord.items.length} أصناف</div>
+                  {safeOrders.slice(0, 4).map(ord => {
+                    if (!ord) return null;
+                    const safeTotal = ord.totalAmount ?? ord.total ?? 0;
+                    let itemCount = 1;
+                    try {
+                      if (Array.isArray(ord.items)) {
+                        itemCount = ord.items.length;
+                      } else if (typeof ord.items === 'string') {
+                        itemCount = (JSON.parse(ord.items || '[]') || []).length;
+                      }
+                    } catch {
+                      itemCount = 1;
+                    }
+                    return (
+                      <div key={ord.id} className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between">
+                        <div>
+                          <div className="font-bold text-white text-xs">{ord.orderNumber || ord.id} • {ord.customerName || 'عميل'}</div>
+                          <div className="text-[11px] text-slate-400">{ord.district || ord.address?.district || 'صنعاء'} • {itemCount} أصناف</div>
+                        </div>
+                        <div className="text-left">
+                          <div className="font-bold text-amber-400 font-mono">{safeTotal.toLocaleString()} YER</div>
+                          <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${
+                            ord.status === 'delivered' ? 'bg-emerald-500/20 text-emerald-300' :
+                            ord.status === 'delivering' || ord.status === 'on_way' || ord.status === 'shipped' ? 'bg-blue-500/20 text-blue-300' : 'bg-amber-500/20 text-amber-300'
+                          }`}>
+                            {ord.status === 'delivered' ? 'تم التسليم' : 
+                             ord.status === 'delivering' || ord.status === 'on_way' ? 'في الطريق' : 
+                             ord.status === 'shipped' ? 'مع المندوب' : 'جديد'}
+                          </span>
+                        </div>
                       </div>
-                      <div className="text-left">
-                        <div className="font-bold text-amber-400 font-mono">{ord.total.toLocaleString()} YER</div>
-                        <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${
-                          ord.status === 'delivered' ? 'bg-emerald-500/20 text-emerald-300' :
-                          ord.status === 'delivering' ? 'bg-blue-500/20 text-blue-300' : 'bg-amber-500/20 text-amber-300'
-                        }`}>
-                          {ord.status === 'delivered' ? 'تم التسليم' : ord.status === 'delivering' ? 'جاري التوصيل' : 'جديد'}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 
@@ -1088,6 +1119,119 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           <div className="text-slate-300 text-[11px] pt-1">
                             🛵 المندوب: <strong className="text-amber-300">{order.driverName || 'أحمد الكبسي'}</strong>
                           </div>
+                        </div>
+                      </div>
+
+                      {/* Driver Assignment, Fast Approval, and WhatsApp Dispatch Console */}
+                      <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800/90 flex flex-wrap items-center justify-between gap-2.5 pt-2.5">
+                        {/* Driver Selector & Fast Assign */}
+                        <div className="flex flex-wrap items-center gap-2">
+                          <div className="flex items-center gap-1 text-[11px] text-slate-300 font-bold">
+                            <Truck className="w-3.5 h-3.5 text-amber-400" />
+                            <span>المندوب:</span>
+                          </div>
+                          <select
+                            value={order.driverName || 'أحمد الكبسي'}
+                            onChange={async (e) => {
+                              const chosenDriverName = e.target.value;
+                              const chosenAgent = activeAgents.find(a => a.name === chosenDriverName);
+                              await onUpdateOrderStatus(
+                                order.id,
+                                order.status === 'pending' || order.status === 'received' ? 'shipped' : order.status,
+                                order.driverNotes,
+                                {
+                                  driverId: chosenAgent?.id || 'drv-custom',
+                                  driverName: chosenDriverName,
+                                  driverPhone: chosenAgent?.phone || '775000150'
+                                }
+                              );
+                            }}
+                            className="bg-slate-900 border border-slate-700 text-white rounded-xl px-2.5 py-1 text-xs font-bold outline-none focus:border-amber-500 cursor-pointer"
+                          >
+                            {activeAgents.map(ag => (
+                              <option key={ag.id} value={ag.name}>
+                                {ag.name} ({ag.vehicle} • {ag.phone})
+                              </option>
+                            ))}
+                          </select>
+
+                          {/* Direct Fast Approval Button */}
+                          {(order.status === 'pending' || order.status === 'received') && (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const currentDriver = activeAgents.find(a => a.name === (order.driverName || 'أحمد الكبسي')) || activeAgents[0];
+                                await onUpdateOrderStatus(
+                                  order.id,
+                                  'shipped',
+                                  'تم الاعتماد والتسليم للمندوب للتوصيل الفوري',
+                                  {
+                                    driverId: currentDriver.id,
+                                    driverName: currentDriver.name,
+                                    driverPhone: currentDriver.phone
+                                  }
+                                );
+                              }}
+                              className="px-3 py-1 rounded-xl bg-gradient-to-r from-amber-500 to-amber-400 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-md shadow-amber-500/20 hover:brightness-110 cursor-pointer active:scale-95"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              <span>⚡ اعتماد وتكليف المندوب</span>
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Dispatch WhatsApp to Driver & Customer Chat */}
+                        <div className="flex flex-wrap items-center gap-2">
+                          {/* WhatsApp to Driver */}
+                          {(() => {
+                            const assignedDriver = activeAgents.find(a => a.name === (order.driverName || 'أحمد الكبسي')) || activeAgents[0];
+                            const itemsText = orderItems.length > 0 
+                              ? orderItems.map((it: any) => `• ${it.productNameAr || it.product?.nameAr || 'فحم الذهب الأسود'} (${it.weight || it.selectedWeight || 'العبوة'}) × ${it.quantity || 1}`).join('\n')
+                              : (order.itemsSummary || 'فحم الذهب الأسود');
+                            const driverMsg = `*بوليصة شحنة فحم الذهب الأسود 👑🛵*\n---------------------------------\n📦 *رقم الطلب:* #${order.orderNumber || order.id}\n👤 *العميل:* ${order.customerName}\n📱 *هاتف العميل:* ${order.customerPhone}\n📍 *العنوان والحي:* ${order.district || order.address?.district || 'صنعاء'} - ${order.address?.street || 'أمانة العاصمة'}\n---------------------------------\n🛒 *الأصناف:*\n${itemsText}\n---------------------------------\n💰 *المبلغ المطلوب تحصيله نقداً:* ${safeTotal.toLocaleString()} ريال يمني\n(شامل رسوم التوصيل ${(order.shippingFee || 0).toLocaleString()} ريال)\n${order.notes ? `📝 *ملاحظات العميل:* ${order.notes}\n` : ''}---------------------------------\nيرجى التواصل مع العميل والتحرك للتسليم.`;
+                            
+                            const cleanDriverPhone = (assignedDriver.phone || '775000150').replace(/\D/g, '');
+
+                            return (
+                              <a
+                                href={`https://wa.me/967${cleanDriverPhone}?text=${encodeURIComponent(driverMsg)}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="px-2.5 py-1 rounded-xl bg-emerald-600/90 hover:bg-emerald-600 text-white text-[11px] font-bold flex items-center gap-1 transition-all border border-emerald-500/30 cursor-pointer"
+                                title={`إرسال البوليصة إلى واتساب المندوب (${assignedDriver.name})`}
+                              >
+                                <MessageSquare className="w-3.5 h-3.5" />
+                                <span>إرسال البوليصة للمندوب ({assignedDriver.name}) 📲</span>
+                              </a>
+                            );
+                          })()}
+
+                          {/* WhatsApp / Call Customer */}
+                          {order.customerPhone && (
+                            <a
+                              href={`https://wa.me/967${order.customerPhone.replace(/\D/g, '')}?text=${encodeURIComponent(
+                                `مرحباً بك أستاذ ${order.customerName}، معكم إدارة فحم الذهب الأسود 👑. بخصوص طلبكم رقم #${order.orderNumber} بقيمة ${safeTotal.toLocaleString()} ريال، تم اعتماد طلبكم وتكليفه للمندوب وسيتواصل معكم قريباً لتسليم الطلب.`
+                              )}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 text-[11px] font-bold flex items-center gap-1 border border-slate-700 cursor-pointer"
+                              title="مراسلة العميل عبر الواتساب"
+                            >
+                              <Phone className="w-3.5 h-3.5 text-amber-400" />
+                              <span>مراسلة العميل</span>
+                            </a>
+                          )}
+
+                          {/* Driver Screen Preview */}
+                          <button
+                            type="button"
+                            onClick={() => onOpenDriverScreen(order.driverName || 'أحمد الكبسي')}
+                            className="px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-bold flex items-center gap-1 border border-slate-700 cursor-pointer"
+                            title="معاينة شاشة المندوب الميدانية"
+                          >
+                            <Eye className="w-3.5 h-3.5 text-slate-400" />
+                            <span>معاينة شاشة الكابتن</span>
+                          </button>
                         </div>
                       </div>
                     </div>

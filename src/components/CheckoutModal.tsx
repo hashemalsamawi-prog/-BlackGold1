@@ -43,8 +43,6 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   onOpenTracking,
   whatsappNumber,
 }) => {
-  if (!isOpen) return null;
-
   const [customerName, setCustomerName] = useState(() => localStorage.getItem('bg_customer_name') || '');
   const [customerPhone, setCustomerPhone] = useState(() => localStorage.getItem('bg_customer_phone') || '');
   const [district, setDistrict] = useState(selectedDistrictName || 'حدة');
@@ -109,21 +107,31 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     const newOrder: Order = {
       id: 'ord-' + Date.now(),
       orderNumber: 'BG-' + Math.floor(1000 + Math.random() * 9000),
-      customerName: customerName.trim(),
-      customerPhone: customerPhone.trim(),
+      customerName: customerName.trim() || 'عميل المتجر',
+      customerPhone: customerPhone.trim() || '770000000',
       items: cart,
       itemsSummary: cart.map(i => `${i.product.nameAr} (${i.selectedWeight || 'العبوة'}) × ${i.quantity}`).join('، '),
       subtotal,
       shippingFee: currentShippingFee,
+      discount: discount,
       discountAmount: discount,
+      total: totalAmount,
       totalAmount,
       district,
-      addressDetails: addressDetails.trim(),
+      addressDetails: addressDetails.trim() || 'صنعاء',
+      address: {
+        district,
+        street: addressDetails.trim() || 'أمانة العاصمة',
+        landmark: ''
+      },
+      driverName: 'أحمد الكبسي',
+      driverPhone: '775000150',
       paymentMethod,
       paymentStatus: 'pending',
       status: 'pending',
       notes: notes.trim(),
       createdAt: new Date().toISOString(),
+      date: new Date().toISOString(),
     };
 
     try {
@@ -137,17 +145,21 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
         body: JSON.stringify(newOrder),
       });
       const data = await res.json();
-      if (data.success && data.data) {
+      if (res.ok && data.success && data.data) {
         onOrderPlaced(data.data);
+        setIsSubmitting(false);
+        onClose();
+        return;
       } else {
-        onOrderPlaced(newOrder);
+        setErrorMsg(data.message || 'فشل إرسال الطلب، يرجى المحاولة مرة أخرى');
+        setIsSubmitting(false);
+        return;
       }
-    } catch (e) {
-      onOrderPlaced(newOrder);
+    } catch (e: any) {
+      setErrorMsg('تعذر الاتصال بالخادم، يرجى التحقق من الشبكة وإعادة المحاولة');
+      setIsSubmitting(false);
+      return;
     }
-
-    setIsSubmitting(false);
-    onClose();
   };
 
   const handleSendWhatsAppOrder = async () => {
@@ -185,15 +197,25 @@ ${discount > 0 ? `🏷️ *خصم الكوبون:* -${discount.toLocaleString()}
       itemsSummary: cart.map(i => `${i.product.nameAr} (${i.selectedWeight || 'العبوة'}) × ${i.quantity}`).join('، '),
       subtotal,
       shippingFee: currentShippingFee,
+      discount: discount,
       discountAmount: discount,
+      total: totalAmount,
       totalAmount,
       district,
       addressDetails: addr,
+      address: {
+        district,
+        street: addr || 'صنعاء',
+        landmark: ''
+      },
+      driverName: 'أحمد الكبسي',
+      driverPhone: '775000150',
       paymentMethod,
       paymentStatus: 'pending',
       status: 'pending',
       notes: notes.trim() ? `${notes.trim()} (طلب تم إرساله عبر الواتساب)` : 'طلب مباشر عبر الواتساب',
       createdAt: new Date().toISOString(),
+      date: new Date().toISOString(),
     };
 
     try {

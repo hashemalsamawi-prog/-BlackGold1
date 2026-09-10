@@ -94,12 +94,14 @@ export interface NotificationRecord {
 }
 
 export const VALID_ORDER_STATUS_TRANSITIONS: Record<string, string[]> = {
-  received: ['pending', 'preparing', 'cancelled'],
-  pending: ['preparing', 'cancelled'],
-  preparing: ['shipped', 'on_way', 'delivering', 'cancelled'],
-  shipped: ['on_way', 'delivering', 'delivered', 'cancelled'],
-  on_way: ['delivering', 'delivered', 'cancelled'],
+  pending: ['confirmed', 'assigned', 'received', 'preparing', 'shipped', 'cancelled'],
+  received: ['confirmed', 'assigned', 'preparing', 'shipped', 'cancelled'],
+  confirmed: ['assigned', 'preparing', 'shipped', 'delivering', 'cancelled'],
+  assigned: ['preparing', 'shipped', 'delivering', 'on_way', 'delivered', 'cancelled'],
+  preparing: ['assigned', 'shipped', 'delivering', 'on_way', 'delivered', 'cancelled'],
+  shipped: ['delivering', 'on_way', 'delivered', 'cancelled'],
   delivering: ['delivered', 'cancelled'],
+  on_way: ['delivering', 'delivered', 'cancelled'],
   delivered: [],
   completed: [],
   cancelled: []
@@ -739,8 +741,151 @@ class D1DatabaseAccessLayer {
   }
 
   // ==========================================
+  // CLOUDFLARE D1 ROW MAPPERS (Pure Relational -> Domain Objects)
+  // ==========================================
+
+  public mapD1ProductToProduct(r: any): Product {
+    const images = typeof r.images === 'string' ? (JSON.parse(r.images || '[]') || []) : (r.images || []);
+    const primaryImg = images[0] || r.image || '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg';
+    const specs = typeof r.specs === 'string' ? (JSON.parse(r.specs || '[]') || []) : (r.specs || []);
+    const weightOptions = typeof r.weight_options === 'string' ? (JSON.parse(r.weight_options || '[]') || []) : (r.weight_options || []);
+
+    return {
+      id: r.id,
+      nameAr: r.name_ar || r.nameAr || 'فحم الذهب الأسود',
+      nameEn: r.name_en || r.nameEn || 'Black Gold Charcoal',
+      category: r.category || 'pouches',
+      price: Number(r.price),
+      originalPrice: r.original_price ? Number(r.original_price) : undefined,
+      discountPercent: r.discount_percent ? Number(r.discount_percent) : 0,
+      descriptionAr: r.description_ar || r.descriptionAr || '',
+      descriptionEn: r.description_en || r.descriptionEn || '',
+      image: primaryImg,
+      images: images.length > 0 ? images : [primaryImg],
+      specs,
+      weightOptions,
+      isFeatured: Boolean(r.is_featured),
+      isBestSeller: Boolean(r.is_best_seller),
+      stock: Number(r.stock ?? 0),
+      origin: r.origin || 'الذهب الأسود - صنعاء',
+      burnDurationHours: r.burn_duration_hours || '6+ ساعات متواصلة',
+      ashPercentage: r.ash_percentage || 'أقل من 1.5% رماد أبيض',
+      moisture: r.moisture || '< 2%',
+      rating: Number(r.rating || 5.0),
+      reviewCount: Number(r.review_count || 0),
+      updatedAt: r.updated_at
+    };
+  }
+
+  public mapD1OrderToOrder(r: any): Order {
+    const items = typeof r.items_json === 'string' ? (JSON.parse(r.items_json || '[]') || []) : (r.items_json || []);
+    const timeline = typeof r.timeline_json === 'string' ? (JSON.parse(r.timeline_json || '[]') || []) : (r.timeline_json || []);
+
+    return {
+      id: r.id,
+      orderNumber: r.order_number || r.orderNumber || r.id,
+      date: r.created_at || r.date || new Date().toISOString(),
+      createdAt: r.created_at || r.createdAt,
+      status: r.status,
+      items,
+      subtotal: Number(r.subtotal || 0),
+      shippingFee: Number(r.shipping_fee || 0),
+      discount: Number(r.discount || 0),
+      total: Number(r.total || 0),
+      totalAmount: Number(r.total || 0),
+      district: r.delivery_district || r.district || '',
+      address: {
+        id: `addr-${r.id}`,
+        title: r.delivery_district || '',
+        district: r.delivery_district || '',
+        street: r.delivery_address || '',
+        phone: r.customer_phone || '',
+        isDefault: true
+      },
+      customerName: r.customer_name || r.customerName || '',
+      customerPhone: r.customer_phone || r.customerPhone || '',
+      paymentMethod: r.payment_method || r.paymentMethod || 'cash',
+      notes: r.notes || '',
+      driverNotes: r.driver_notes || '',
+      driverId: r.driver_id || '',
+      driverName: r.driver_name || '',
+      driverPhone: r.driver_phone || '',
+      timeline,
+      idempotencyKey: r.idempotency_key || r.idempotencyKey,
+      isStockRolledBack: Boolean(r.is_stock_rolled_back)
+    };
+  }
+
+  public mapD1UserToUser(r: any): UserAccount {
+    return {
+      id: r.id,
+      name: r.name,
+      phone: r.phone,
+      role: r.role,
+      pinHash: r.pin_hash || r.pinHash,
+      passwordHash: r.password_hash || r.passwordHash,
+      createdAt: r.created_at || r.createdAt,
+      lastLogin: r.last_login || r.lastLogin
+    };
+  }
+
+  public mapD1CustomerToCustomer(r: any): CustomerRecord {
+    return {
+      id: r.id,
+      name: r.name,
+      phone: r.phone,
+      district: r.district || '',
+      street: r.street || '',
+      notes: r.notes || '',
+      totalOrders: Number(r.total_orders || 0),
+      totalSpent: Number(r.total_spent || 0),
+      loyaltyPoints: Number(r.loyalty_points || 0),
+      createdAt: r.created_at,
+      updatedAt: r.updated_at
+    };
+  }
+
+  public mapD1CouponToCoupon(r: any): Coupon {
+    return {
+      code: r.code,
+      discountPercent: Number(r.discount_percent || 0),
+      maxDiscount: r.max_discount ? Number(r.max_discount) : undefined,
+      minOrderAmount: Number(r.min_order_amount || 0),
+      isActive: Boolean(r.is_active),
+      validUntil: r.expiry_date || r.valid_until || undefined,
+      usageCount: Number(r.usage_count || 0)
+    };
+  }
+
+  public mapD1ReviewToReview(r: any): Review {
+    return {
+      id: r.id,
+      productId: r.product_id,
+      userName: r.user_name,
+      rating: Number(r.rating || 5),
+      comment: r.comment || '',
+      verifiedPurchase: Boolean(r.verified_purchase),
+      date: r.created_at
+    };
+  }
+
+  public mapD1DeliveryAgentToAgent(r: any): DeliveryAgent {
+    return {
+      id: r.id,
+      name: r.name,
+      phone: r.phone,
+      vehicleType: r.vehicle_type || 'motorcycle',
+      assignedDistricts: typeof r.assigned_districts === 'string' ? (JSON.parse(r.assigned_districts || '[]') || []) : (r.assigned_districts || []),
+      completedOrdersCount: Number(r.total_delivered_count || r.completed_orders_count || 0),
+      rating: Number(r.rating || 5.0),
+      isActive: Boolean(r.is_available !== undefined ? r.is_available : r.is_active)
+    };
+  }
+
+  // ==========================================
   // 1. PRODUCTS & CATEGORIES
   // ==========================================
+
   public getProducts(): Product[] {
     return this.tables.products.map(p => {
       const primaryImg = p.image || p.images?.[0] || '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg';
@@ -750,6 +895,22 @@ class D1DatabaseAccessLayer {
         images: (p.images && p.images.length > 0) ? p.images : [primaryImg]
       };
     });
+  }
+
+  public async getProductsAsync(): Promise<Product[]> {
+    if (this.isD1Configured()) {
+      try {
+        const rows = await this.executeCloudflareD1Query("SELECT * FROM products ORDER BY id ASC;");
+        if (Array.isArray(rows) && rows.length > 0) {
+          const prods = rows.map((r: any) => this.mapD1ProductToProduct(r));
+          this.tables.products = prods;
+          return prods;
+        }
+      } catch (e) {
+        console.warn('D1 getProductsAsync error, falling back to cache:', e);
+      }
+    }
+    return this.getProducts();
   }
 
   public findProductById(id: string): Product | undefined {
@@ -763,35 +924,68 @@ class D1DatabaseAccessLayer {
     };
   }
 
+  public async findProductByIdAsync(id: string): Promise<Product | undefined> {
+    if (this.isD1Configured()) {
+      try {
+        const rows = await this.executeCloudflareD1Query("SELECT * FROM products WHERE id = ? LIMIT 1;", [id]);
+        if (Array.isArray(rows) && rows.length > 0) {
+          return this.mapD1ProductToProduct(rows[0]);
+        }
+      } catch (e) {
+        console.warn('D1 findProductByIdAsync error:', e);
+      }
+    }
+    return this.findProductById(id);
+  }
+
   public addProduct(product: Product): Product {
     const primaryImg = product.image || product.images?.[0] || '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg';
     product.image = primaryImg;
     product.images = (product.images && product.images.length > 0) ? product.images : [primaryImg];
 
     this.tables.products.push(product);
-    this.tables.inventory.set(product.id, {
-      currentStock: product.stock,
-      reservedStock: 0,
-      minThreshold: 15,
-      lastCountedAt: new Date().toISOString()
-    });
-
-    // Log initial inventory entry
-    this.logInventoryTransaction({
-      id: `inv-init-${product.id}-${Date.now()}`,
-      productId: product.id,
-      productName: product.nameAr,
-      type: 'initial',
-      quantity: product.stock,
-      previousStock: 0,
-      newStock: product.stock,
-      reason: 'إضافة منتج جديد للمتجر',
-      performedBy: 'الإدارة',
-      createdAt: new Date().toISOString()
-    });
-
     this.saveLocal();
     return product;
+  }
+
+  public async addProductAsync(product: Product): Promise<Product> {
+    const primaryImg = product.image || product.images?.[0] || '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg';
+    product.image = primaryImg;
+    product.images = (product.images && product.images.length > 0) ? product.images : [primaryImg];
+
+    if (this.isD1Configured()) {
+      await this.executeCloudflareD1Query(
+        `INSERT INTO products (id, name_ar, name_en, category, price, original_price, discount_percent, description_ar, description_en, origin, burn_duration_hours, ash_percentage, moisture, rating, review_count, images, specs, weight_options, is_featured, is_best_seller, stock, created_at, updated_at) ` +
+        `VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'));`,
+        [
+          product.id,
+          product.nameAr,
+          product.nameEn || '',
+          product.category || 'pouches',
+          product.price,
+          product.originalPrice || product.price,
+          product.discountPercent || 0,
+          product.descriptionAr || '',
+          product.descriptionEn || '',
+          product.origin || 'الذهب الأسود - صنعاء',
+          product.burnDurationHours || '6+ ساعات متواصلة',
+          product.ashPercentage || 'أقل من 1.5% رماد أبيض',
+          product.moisture || '< 2%',
+          product.rating || 5.0,
+          product.reviewCount || 0,
+          JSON.stringify(product.images || [primaryImg]),
+          JSON.stringify(product.specs || []),
+          JSON.stringify(product.weightOptions || []),
+          product.isFeatured ? 1 : 0,
+          product.isBestSeller ? 1 : 0,
+          product.stock ?? 100
+        ]
+      );
+      const created = await this.findProductByIdAsync(product.id);
+      if (created) return created;
+    }
+
+    return this.addProduct(product);
   }
 
   public updateProduct(id: string, updates: Partial<Product>): Product | null {
@@ -809,52 +1003,134 @@ class D1DatabaseAccessLayer {
       images: finalImages
     };
     this.tables.products[idx] = updated;
-
-    if (updates.stock !== undefined) {
-      const inv = this.tables.inventory.get(id);
-      if (inv) {
-        inv.currentStock = updates.stock;
-        inv.lastCountedAt = new Date().toISOString();
-      }
-    }
-
-    if (CLOUDFLARE_CONFIG.accountId && CLOUDFLARE_CONFIG.apiToken && CLOUDFLARE_CONFIG.databaseId) {
-      this.executeCloudflareD1Query(
-        "UPDATE products SET name_ar = ?, price = ?, original_price = ?, images = ?, description_ar = ?, stock = ? WHERE id = ?;",
-        [updated.nameAr, updated.price, updated.originalPrice || updated.price, JSON.stringify(updated.images || [finalImage]), updated.descriptionAr, updated.stock, id]
-      ).catch(e => console.warn('D1 remote product update notice:', e));
-    }
-
     this.saveLocal();
     return updated;
+  }
+
+  public async updateProductAsync(id: string, updates: Partial<Product>): Promise<Product | null> {
+    if (this.isD1Configured()) {
+      const current = await this.findProductByIdAsync(id);
+      if (!current) return null;
+
+      const finalNameAr = updates.nameAr || current.nameAr;
+      const finalPrice = updates.price !== undefined ? updates.price : current.price;
+      const finalOrigPrice = updates.originalPrice !== undefined ? updates.originalPrice : (current.originalPrice || finalPrice);
+      const finalDescAr = updates.descriptionAr !== undefined ? updates.descriptionAr : current.descriptionAr;
+      const finalStock = updates.stock !== undefined ? updates.stock : current.stock;
+      const finalImages = updates.images || current.images;
+
+      await this.executeCloudflareD1Query(
+        "UPDATE products SET name_ar = ?, price = ?, original_price = ?, description_ar = ?, stock = ?, images = ?, updated_at = datetime('now') WHERE id = ?;",
+        [finalNameAr, finalPrice, finalOrigPrice, finalDescAr, finalStock, JSON.stringify(finalImages), id]
+      );
+
+      return await this.findProductByIdAsync(id) || null;
+    }
+
+    return this.updateProduct(id, updates);
   }
 
   public deleteProduct(id: string): boolean {
     const prevLen = this.tables.products.length;
     this.tables.products = this.tables.products.filter(p => p.id !== id);
-    this.tables.inventory.delete(id);
     this.saveLocal();
     return this.tables.products.length < prevLen;
+  }
+
+  public async deleteProductAsync(id: string): Promise<boolean> {
+    if (this.isD1Configured()) {
+      await this.executeCloudflareD1Query("DELETE FROM products WHERE id = ?;", [id]);
+      this.tables.products = this.tables.products.filter(p => p.id !== id);
+      return true;
+    }
+    return this.deleteProduct(id);
   }
 
   public getCategories() {
     return this.tables.categories;
   }
 
+  public async getCategoriesAsync(): Promise<any[]> {
+    if (this.isD1Configured()) {
+      try {
+        const rows = await this.executeCloudflareD1Query("SELECT * FROM categories ORDER BY sort_order ASC;");
+        if (Array.isArray(rows) && rows.length > 0) {
+          return rows.map((c: any) => ({
+            id: c.id,
+            nameAr: c.name_ar,
+            nameEn: c.name_en,
+            slug: c.slug,
+            sortOrder: c.sort_order,
+            isActive: Boolean(c.is_active)
+          }));
+        }
+      } catch (e) {
+        console.warn('D1 getCategoriesAsync error:', e);
+      }
+    }
+    return this.getCategories();
+  }
+
   // ==========================================
-  // 2. USERS & CUSTOMERS
+  // 2. USERS & CUSTOMERS (Pure D1 Authentication)
   // ==========================================
+
   public getUsers(): UserAccount[] {
     return this.tables.users;
+  }
+
+  public async getUsersAsync(): Promise<UserAccount[]> {
+    if (this.isD1Configured()) {
+      try {
+        const rows = await this.executeCloudflareD1Query("SELECT * FROM users;");
+        if (Array.isArray(rows) && rows.length > 0) {
+          const userAccounts = rows.map((r: any) => this.mapD1UserToUser(r));
+          this.tables.users = userAccounts;
+          return userAccounts;
+        }
+      } catch (e) {
+        console.warn('D1 getUsersAsync error:', e);
+      }
+    }
+    return this.getUsers();
   }
 
   public findUserById(id: string): UserAccount | undefined {
     return this.tables.users.find(u => u.id === id);
   }
 
+  public async findUserByIdAsync(id: string): Promise<UserAccount | undefined> {
+    if (this.isD1Configured()) {
+      try {
+        const rows = await this.executeCloudflareD1Query("SELECT * FROM users WHERE id = ? LIMIT 1;", [id]);
+        if (Array.isArray(rows) && rows.length > 0) {
+          return this.mapD1UserToUser(rows[0]);
+        }
+      } catch (e) {
+        console.warn('D1 findUserByIdAsync error:', e);
+      }
+    }
+    return this.findUserById(id);
+  }
+
   public findUserByPhone(phone: string): UserAccount | undefined {
     const clean = phone.replace(/\D/g, '');
     return this.tables.users.find(u => u.phone.replace(/\D/g, '') === clean);
+  }
+
+  public async findUserByPhoneAsync(phone: string): Promise<UserAccount | undefined> {
+    const clean = phone.replace(/\D/g, '');
+    if (this.isD1Configured()) {
+      try {
+        const rows = await this.executeCloudflareD1Query("SELECT * FROM users WHERE phone = ? LIMIT 1;", [clean]);
+        if (Array.isArray(rows) && rows.length > 0) {
+          return this.mapD1UserToUser(rows[0]);
+        }
+      } catch (e) {
+        console.warn('D1 findUserByPhoneAsync error:', e);
+      }
+    }
+    return this.findUserByPhone(phone);
   }
 
   public addUser(user: UserAccount): UserAccount {
@@ -869,8 +1145,58 @@ class D1DatabaseAccessLayer {
     return user;
   }
 
+  public async addUserAsync(user: UserAccount): Promise<UserAccount> {
+    const clean = user.phone.replace(/\D/g, '');
+    if (this.isD1Configured()) {
+      await this.executeCloudflareD1Query(
+        `INSERT INTO users (id, name, phone, role, pin_hash, password_hash, created_at, last_login) ` +
+        `VALUES (?, ?, ?, ?, ?, ?, ?, ?) ` +
+        `ON CONFLICT(phone) DO UPDATE SET name = excluded.name, last_login = excluded.last_login;`,
+        [user.id, user.name, clean, user.role, user.pinHash || null, user.passwordHash || null, user.createdAt || new Date().toISOString(), user.lastLogin || new Date().toISOString()]
+      );
+      const readBack = await this.findUserByPhoneAsync(clean);
+      if (readBack) return readBack;
+    }
+    return this.addUser(user);
+  }
+
+  public updateUser(id: string, updates: Partial<UserAccount>): UserAccount | null {
+    const user = this.tables.users.find(u => u.id === id);
+    if (!user) return null;
+    Object.assign(user, updates);
+    this.saveLocal();
+    return user;
+  }
+
+  public async updateUserAsync(id: string, updates: Partial<UserAccount>): Promise<UserAccount | null> {
+    if (this.isD1Configured()) {
+      await this.executeCloudflareD1Query(
+        `UPDATE users SET name = COALESCE(?, name), pin_hash = COALESCE(?, pin_hash), password_hash = COALESCE(?, password_hash), last_login = COALESCE(?, last_login) WHERE id = ?;`,
+        [updates.name || null, updates.pinHash || null, updates.passwordHash || null, updates.lastLogin || null, id]
+      );
+      return await this.findUserByIdAsync(id) || null;
+    }
+    return this.updateUser(id, updates);
+  }
+
   public getCustomers(): CustomerRecord[] {
     return this.tables.customers;
+  }
+
+  public async getCustomersAsync(): Promise<CustomerRecord[]> {
+    if (this.isD1Configured()) {
+      try {
+        const rows = await this.executeCloudflareD1Query("SELECT * FROM customers ORDER BY total_orders DESC;");
+        if (Array.isArray(rows) && rows.length > 0) {
+          const custs = rows.map((r: any) => this.mapD1CustomerToCustomer(r));
+          this.tables.customers = custs;
+          return custs;
+        }
+      } catch (e) {
+        console.warn('D1 getCustomersAsync error:', e);
+      }
+    }
+    return this.getCustomers();
   }
 
   public findOrCreateCustomer(name: string, phone: string, district?: string): CustomerRecord {
@@ -881,7 +1207,7 @@ class D1DatabaseAccessLayer {
       cust = {
         id: `cust-${cleanPhone}`,
         name: name.trim(),
-        phone: phone.trim(),
+        phone: cleanPhone,
         district: district || 'صنعاء',
         totalOrders: 0,
         totalSpent: 0,
@@ -905,6 +1231,30 @@ class D1DatabaseAccessLayer {
     return cust;
   }
 
+  public async findOrCreateCustomerAsync(name: string, phone: string, district?: string): Promise<CustomerRecord> {
+    const cleanPhone = phone.replace(/\D/g, '');
+    const custId = `cust-${cleanPhone}`;
+
+    if (this.isD1Configured()) {
+      await this.executeCloudflareD1Query(
+        `INSERT INTO customers (id, name, phone, district, total_orders, total_spent, loyalty_points, created_at, updated_at) ` +
+        `VALUES (?, ?, ?, ?, 0, 0, 0, datetime('now'), datetime('now')) ` +
+        `ON CONFLICT(phone) DO UPDATE SET ` +
+        `name = CASE WHEN ? != '' AND ? != 'عميل زائر' THEN ? ELSE customers.name END, ` +
+        `district = COALESCE(?, customers.district), ` +
+        `updated_at = datetime('now');`,
+        [custId, name.trim(), cleanPhone, district || 'صنعاء', name.trim(), name.trim(), name.trim(), district || null]
+      );
+
+      const rows = await this.executeCloudflareD1Query("SELECT * FROM customers WHERE phone = ? LIMIT 1;", [cleanPhone]);
+      if (Array.isArray(rows) && rows.length > 0) {
+        return this.mapD1CustomerToCustomer(rows[0]);
+      }
+    }
+
+    return this.findOrCreateCustomer(name, phone, district);
+  }
+
   // ==========================================
   // 3. ORDERS & RELATIONAL ORDER ITEMS
   // ==========================================
@@ -912,12 +1262,98 @@ class D1DatabaseAccessLayer {
     return this.tables.orders;
   }
 
+  public async getOrdersAsync(filter?: { phone?: string; driverId?: string }): Promise<Order[]> {
+    if (this.isD1Configured()) {
+      try {
+        let sql = "SELECT * FROM orders";
+        const params: any[] = [];
+        const conditions: string[] = [];
+
+        if (filter?.phone) {
+          conditions.push("customer_phone = ?");
+          params.push(filter.phone.replace(/\D/g, ''));
+        }
+        if (filter?.driverId) {
+          conditions.push("driver_id = ?");
+          params.push(filter.driverId);
+        }
+
+        if (conditions.length > 0) {
+          sql += " WHERE " + conditions.join(" AND ");
+        }
+        sql += " ORDER BY created_at DESC;";
+
+        const rows = await this.executeCloudflareD1Query(sql, params);
+        if (Array.isArray(rows)) {
+          return rows.map((r: any) => this.mapD1OrderToOrder(r));
+        }
+      } catch (e) {
+        console.warn('D1 getOrdersAsync error:', e);
+      }
+    }
+
+    let result = this.tables.orders;
+    if (filter?.phone) {
+      const clean = filter.phone.replace(/\D/g, '');
+      result = result.filter(o => o.customerPhone.replace(/\D/g, '') === clean);
+    }
+    if (filter?.driverId) {
+      result = result.filter(o => o.driverId === filter.driverId);
+    }
+    return result;
+  }
+
   public findOrderById(id: string): Order | undefined {
     return this.tables.orders.find(o => o.id === id || o.orderNumber === id);
   }
 
+  public async findOrderByIdAsync(id: string): Promise<Order | undefined> {
+    if (this.isD1Configured()) {
+      try {
+        const rows = await this.executeCloudflareD1Query(
+          "SELECT * FROM orders WHERE id = ? OR order_number = ? LIMIT 1;",
+          [id, id]
+        );
+        if (Array.isArray(rows) && rows.length > 0) {
+          return this.mapD1OrderToOrder(rows[0]);
+        }
+      } catch (e) {
+        console.warn('D1 findOrderByIdAsync error:', e);
+      }
+    }
+    return this.findOrderById(id);
+  }
+
   public getOrderItems(orderId: string): OrderItemRecord[] {
     return this.tables.order_items.filter(oi => oi.orderId === orderId);
+  }
+
+  public async getOrderItemsAsync(orderId: string): Promise<OrderItemRecord[]> {
+    if (this.isD1Configured()) {
+      try {
+        const rows = await this.executeCloudflareD1Query(
+          "SELECT * FROM order_items WHERE order_id = ?;",
+          [orderId]
+        );
+        if (Array.isArray(rows)) {
+          return rows.map((r: any) => ({
+            id: r.id,
+            orderId: r.order_id,
+            productId: r.product_id || r.productId,
+            productNameAr: r.product_name_ar,
+            productNameEn: r.product_name_en,
+            weightOption: r.weight_option,
+            quantity: r.quantity,
+            unitPrice: r.unit_price,
+            totalPrice: r.total_price,
+            createdAt: r.created_at
+          }));
+        }
+      } catch (e) {
+        console.warn('D1 getOrderItemsAsync error:', e);
+      }
+    }
+    return this.getOrderItems(orderId);
   }
 
   public async createOrderAtomic(orderData: {
@@ -997,98 +1433,114 @@ class D1DatabaseAccessLayer {
       }
     }
 
-    // If Cloudflare D1 is configured, execute atomic compound SQL directly on D1
+    // 1. ATOMIC CONDITIONAL STOCK CHECK & DEDUCTION (Cloudflare D1 or Local Fallback)
     if (this.isD1Configured()) {
-      const sqlEsc = (s: any) => String(s ?? '').replace(/'/g, "''");
-      const statements: string[] = [];
+      const successfullyDeducted: Array<{ productId: string; quantity: number; nameAr: string }> = [];
+      let stockError: string | null = null;
 
-      // 1. Stock check & conditional deduction for each item on BOTH products AND inventory tables
-      // Using CASE WHEN stock >= qty THEN stock - qty ELSE -1 END
-      // Combined with triggers `prevent_negative_stock` and `prevent_negative_inventory_stock`,
-      // any insufficient stock immediately aborts the compound batch atomically!
+      // Conditional SQL check & deduction:
+      // UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?
       for (const it of orderData.validatedItems) {
-        statements.push(
-          `UPDATE products SET stock = CASE WHEN stock >= ${it.quantity} THEN stock - ${it.quantity} ELSE -1 END, updated_at = datetime('now') WHERE id = '${sqlEsc(it.productId)}';`
+        const updateRes = await this.executeCloudflareD1Raw(
+          "UPDATE products SET stock = stock - ?, updated_at = datetime('now') WHERE id = ? AND stock >= ?;",
+          [it.quantity, it.productId, it.quantity]
         );
-        statements.push(
-          `UPDATE inventory SET current_stock = CASE WHEN current_stock >= ${it.quantity} THEN current_stock - ${it.quantity} ELSE -1 END, updated_at = datetime('now') WHERE product_id = '${sqlEsc(it.productId)}';`
-        );
+        const changes = updateRes.result?.[0]?.meta?.changes ?? 0;
+        if (!updateRes.success || changes === 0) {
+          stockError = `عذراً! الكمية المطلوبة من "${it.productNameAr}" تتجاوز المخزون المتاح حالياً.`;
+          break;
+        }
+        successfullyDeducted.push({ productId: it.productId, quantity: it.quantity, nameAr: it.productNameAr });
       }
 
-      // 2. Customer upsert
+      // If any item failed conditional stock check, rollback already-deducted items and abort!
+      if (stockError) {
+        for (const ded of successfullyDeducted) {
+          await this.executeCloudflareD1Query(
+            "UPDATE products SET stock = stock + ?, updated_at = datetime('now') WHERE id = ?;",
+            [ded.quantity, ded.productId]
+          );
+        }
+        return { success: false, message: stockError };
+      }
+
+      // 2. Customer Upsert on D1
       const customerId = `cust-${cleanPhone}`;
-      statements.push(
+      await this.executeCloudflareD1Query(
         `INSERT INTO customers (id, name, phone, district, street, notes, total_orders, total_spent, loyalty_points, created_at, updated_at) ` +
-        `VALUES ('${customerId}', '${sqlEsc(orderData.customerName)}', '${sqlEsc(cleanPhone)}', '${sqlEsc(orderData.address.district)}', '${sqlEsc(orderData.address.street || '')}', '${sqlEsc(orderData.notes || '')}', 1, ${orderData.total}, ${Math.floor(orderData.total / 100)}, datetime('now'), datetime('now')) ` +
+        `VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, datetime('now'), datetime('now')) ` +
         `ON CONFLICT(phone) DO UPDATE SET ` +
-        `name = excluded.name, ` +
-        `district = excluded.district, ` +
+        `name = CASE WHEN ? != '' AND ? != 'عميل زائر' THEN ? ELSE customers.name END, ` +
+        `district = COALESCE(?, customers.district), ` +
         `total_orders = customers.total_orders + 1, ` +
-        `total_spent = customers.total_spent + ${orderData.total}, ` +
-        `loyalty_points = customers.loyalty_points + ${Math.floor(orderData.total / 100)}, ` +
-        `updated_at = datetime('now');`
+        `total_spent = customers.total_spent + ?, ` +
+        `loyalty_points = customers.loyalty_points + ?, ` +
+        `updated_at = datetime('now');`,
+        [
+          customerId, orderData.customerName, cleanPhone, orderData.address.district, orderData.address.street || '', orderData.notes || '',
+          orderData.total, Math.floor(orderData.total / 100),
+          orderData.customerName, orderData.customerName, orderData.customerName,
+          orderData.address.district, orderData.total, Math.floor(orderData.total / 100)
+        ]
       );
 
-      // 3. Insert order
-      const idempSql = orderData.idempotencyKey ? `'${sqlEsc(orderData.idempotencyKey)}'` : 'NULL';
-      const couponSql = orderData.couponCode ? `'${sqlEsc(orderData.couponCode)}'` : 'NULL';
-
-      statements.push(
+      // 3. Insert Order on D1
+      await this.executeCloudflareD1Query(
         `INSERT INTO orders (` +
         `id, order_number, customer_id, customer_name, customer_phone, delivery_district, delivery_address, items_json, subtotal, shipping_fee, discount, total, payment_method, payment_status, status, is_stock_rolled_back, idempotency_key, coupon_code, driver_id, driver_name, driver_phone, notes, driver_notes, timeline_json, created_at, updated_at` +
-        `) VALUES (` +
-        `'${orderData.orderId}', '${orderData.orderNumber}', '${customerId}', '${sqlEsc(orderData.customerName)}', '${sqlEsc(cleanPhone)}', ` +
-        `'${sqlEsc(orderData.address.district)}', '${sqlEsc(orderData.address.street || orderData.address.district)}', '${sqlEsc(JSON.stringify(orderData.validatedItems))}', ` +
-        `${orderData.subtotal}, ${orderData.shippingFee}, ${orderData.discount}, ${orderData.total}, ` +
-        `'${sqlEsc(orderData.paymentMethod || 'cash')}', 'pending', 'received', 0, ${idempSql}, ${couponSql}, ` +
-        `'${sqlEsc(orderData.assignedDriver.id)}', '${sqlEsc(orderData.assignedDriver.name)}', '${sqlEsc(orderData.assignedDriver.phone)}', ` +
-        `'${sqlEsc(orderData.notes || '')}', '', '${sqlEsc(JSON.stringify(orderData.timeline))}', datetime('now'), datetime('now')` +
-        `);`
+        `) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'received', 0, ?, ?, ?, ?, ?, ?, '', ?, datetime('now'), datetime('now'));`,
+        [
+          orderData.orderId, orderData.orderNumber, customerId, orderData.customerName, cleanPhone,
+          orderData.address.district, orderData.address.street || orderData.address.district,
+          JSON.stringify(orderData.validatedItems),
+          orderData.subtotal, orderData.shippingFee, orderData.discount, orderData.total,
+          orderData.paymentMethod || 'cash',
+          orderData.idempotencyKey || null,
+          orderData.couponCode || null,
+          orderData.assignedDriver.id, orderData.assignedDriver.name, orderData.assignedDriver.phone,
+          orderData.notes || '',
+          JSON.stringify(orderData.timeline)
+        ]
       );
 
-      // 4. Insert order items (both product_id and productId for relational integrity)
+      // 4. Insert Relational Order Items & Inventory Logs on D1
       for (const it of orderData.validatedItems) {
         const itemRowId = `oi-${orderData.orderId}-${it.productId}-${Math.random().toString(36).substring(2, 7)}`;
-        statements.push(
+        await this.executeCloudflareD1Query(
           `INSERT INTO order_items (id, order_id, product_id, productId, product_name_ar, product_name_en, weight_option, quantity, unit_price, total_price, created_at) ` +
-          `VALUES ('${itemRowId}', '${orderData.orderId}', '${sqlEsc(it.productId)}', '${sqlEsc(it.productId)}', '${sqlEsc(it.productNameAr)}', '${sqlEsc(it.productNameEn || '')}', '${sqlEsc(it.weight)}', ${it.quantity}, ${it.unitPrice}, ${it.unitPrice * it.quantity}, datetime('now'));`
+          `VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'));`,
+          [itemRowId, orderData.orderId, it.productId, it.productId, it.productNameAr, it.productNameEn || '', it.weight, it.quantity, it.unitPrice, it.unitPrice * it.quantity]
         );
-      }
 
-      // 5. Insert inventory logs
-      for (const it of orderData.validatedItems) {
         const logId = `tx-sale-${Date.now()}-${it.productId}-${Math.random().toString(36).substring(2, 6)}`;
         const p = this.findProductById(it.productId);
         const prevStock = p ? p.stock : 0;
         const newStock = Math.max(0, prevStock - it.quantity);
-        statements.push(
+        await this.executeCloudflareD1Query(
           `INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, order_id, performed_by, created_at) ` +
-          `VALUES ('${logId}', '${sqlEsc(it.productId)}', '${sqlEsc(it.productNameAr)}', 'sale', -${it.quantity}, ${prevStock}, ${newStock}, 'مبيعات طلب جديد #${orderData.orderNumber}', '${orderData.orderId}', 'نظام الطلبات الآلي', datetime('now'));`
+          `VALUES (?, ?, ?, 'sale', ?, ?, ?, ?, ?, 'نظام الطلبات الآلي', datetime('now'));`,
+          [logId, it.productId, it.productNameAr, -it.quantity, prevStock, newStock, `مبيعات طلب جديد #${orderData.orderNumber}`, orderData.orderId]
         );
       }
 
-      // 6. If coupon used, update usage_count safely
+      // 5. If coupon used, increment usage count safely on D1
       if (orderData.couponCode) {
-        statements.push(
-          `UPDATE coupons SET usage_count = usage_count + 1 WHERE code = '${sqlEsc(orderData.couponCode)}' AND (max_uses IS NULL OR usage_count < max_uses);`
+        await this.executeCloudflareD1Query(
+          "UPDATE coupons SET usage_count = usage_count + 1 WHERE code = ? AND (max_uses IS NULL OR usage_count < max_uses);",
+          [orderData.couponCode]
         );
       }
 
-      const compoundSql = statements.join(' ');
-      const rawRes = await this.executeCloudflareD1Raw(compoundSql);
-
-      if (!rawRes.success) {
-        const errMsg = rawRes.errors?.[0]?.message || 'فشلت عملية إنشاء الطلب في D1';
-        if (errMsg.includes('Insufficient stock') || errMsg.includes('negative')) {
-          return {
-            success: false,
-            message: 'عذراً! الكمية المطلوبة تتجاوز المخزون المتاح حالياً (Insufficient stock).'
-          };
+      // 6. Read back the newly created order directly from Cloudflare D1
+      const createdFromD1 = await this.findOrderByIdAsync(orderData.orderId);
+      if (createdFromD1) {
+        // Sync to in-memory cache
+        this.tables.orders.unshift(createdFromD1);
+        for (const it of orderData.validatedItems) {
+          const p = this.findProductById(it.productId);
+          if (p) p.stock = Math.max(0, p.stock - it.quantity);
         }
-        return {
-          success: false,
-          message: `خطأ أثناء تنفيذ العملية في D1: ${errMsg}`
-        };
+        return { success: true, order: createdFromD1 };
       }
     } else {
       // Local fallback verification: ensure sufficient stock before modifying
@@ -1239,7 +1691,7 @@ class D1DatabaseAccessLayer {
    * Guaranteed idempotency to prevent double-restoration of inventory
    */
   public async executeStockRollback(order: Order, actor: string = 'نظام إدارة الطلبات'): Promise<boolean> {
-    // 1. Guard against duplicate rollback execution
+    // 1. Guard against duplicate rollback execution in memory
     if (order.isStockRolledBack) {
       console.log(`[D1 Stock Rollback] Order ${order.id} was already rolled back previously. Skipping.`);
       return false;
@@ -1255,14 +1707,30 @@ class D1DatabaseAccessLayer {
       return false;
     }
 
-    // 2. Mark order as rolled back immediately to ensure transactional idempotency
+    // 2. Atomic Idempotent Update on Cloudflare D1:
+    // UPDATE orders SET is_stock_rolled_back = 1, status = 'cancelled' WHERE id = ? AND is_stock_rolled_back = 0;
+    if (this.isD1Configured()) {
+      const rollbackRes = await this.executeCloudflareD1Raw(
+        "UPDATE orders SET is_stock_rolled_back = 1, status = 'cancelled', cancelled_at = datetime('now'), updated_at = datetime('now') WHERE (id = ? OR order_number = ?) AND (is_stock_rolled_back = 0 OR is_stock_rolled_back IS NULL);",
+        [order.id, order.orderNumber || order.id]
+      );
+      const changes = rollbackRes.result?.[0]?.meta?.changes ?? 0;
+      if (!rollbackRes.success || changes === 0) {
+        order.isStockRolledBack = true;
+        console.log(`[D1 Stock Rollback] Order ${order.id} was already marked rolled back in D1. Skipping duplicate.`);
+        return false;
+      }
+    }
+
+    // Mark order as rolled back immediately to ensure transactional idempotency
     order.isStockRolledBack = true;
+    order.status = 'cancelled';
     order.cancelledAt = new Date().toISOString();
 
     // 3. Resolve order items: check in-order items array or relational order_items table
     let itemsToRollback = order.items;
     if (!itemsToRollback || itemsToRollback.length === 0) {
-      const relationalItems = this.getOrderItems(order.id);
+      const relationalItems = await this.getOrderItemsAsync(order.id);
       if (relationalItems && relationalItems.length > 0) {
         itemsToRollback = relationalItems.map(ri => ({
           productId: ri.productId,
@@ -1280,34 +1748,33 @@ class D1DatabaseAccessLayer {
       return true;
     }
 
-    const sqlEsc = (s: any) => String(s ?? '').replace(/'/g, "''");
-    const statements: string[] = [];
-
-    // 4. Iterate over all items in the order and restore stock
+    // 4. Iterate over all items in the order and restore stock on Cloudflare D1
     for (const it of itemsToRollback) {
-      const product = this.findProductById(it.productId);
+      const product = await this.findProductByIdAsync(it.productId);
       const prevStock = product ? product.stock : 0;
       const restoredQty = Number(it.quantity) || 1;
       const newStock = prevStock + restoredQty;
-      if (product) {
-        product.stock = newStock;
+      const logId = `tx-rollback-${Date.now()}-${it.productId}-${Math.random().toString(36).substring(2, 6)}`;
 
-        // Update In-Memory / Local Inventory Map
-        const existingInv = this.tables.inventory.get(product.id) || {
-          currentStock: prevStock,
-          reservedStock: 0,
-          minThreshold: 15
-        };
-        this.tables.inventory.set(product.id, {
-          ...existingInv,
-          currentStock: newStock,
-          lastCountedAt: new Date().toISOString()
-        });
+      if (this.isD1Configured()) {
+        await this.executeCloudflareD1Query(
+          "UPDATE products SET stock = stock + ?, updated_at = datetime('now') WHERE id = ?;",
+          [restoredQty, it.productId]
+        );
+        await this.executeCloudflareD1Query(
+          `INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, order_id, performed_by, created_at) ` +
+          `VALUES (?, ?, ?, 'STOCK_ROLLBACK', ?, ?, ?, ?, ?, ?, datetime('now'));`,
+          [logId, it.productId, it.productNameAr, restoredQty, prevStock, newStock, `استرجاع مخزون لإلغاء الطلب #${order.orderNumber || order.id}`, order.id, actor]
+        );
       }
 
-      // Create and register audit transaction in inventory_logs
+      if (product) {
+        product.stock = newStock;
+      }
+
+      // Create and register audit transaction in in-memory inventory_logs
       const logRecord: InventoryLogRecord = {
-        id: `tx-rollback-${Date.now()}-${it.productId}-${Math.random().toString(36).substring(2, 6)}`,
+        id: logId,
         productId: it.productId,
         productName: it.productNameAr,
         type: 'STOCK_ROLLBACK',
@@ -1320,34 +1787,6 @@ class D1DatabaseAccessLayer {
         createdAt: new Date().toISOString()
       };
       this.tables.inventory_logs.unshift(logRecord);
-
-      statements.push(
-        `UPDATE products SET stock = stock + ${restoredQty}, updated_at = datetime('now') WHERE id = '${sqlEsc(it.productId)}';`
-      );
-      statements.push(
-        `UPDATE inventory SET current_stock = current_stock + ${restoredQty}, updated_at = datetime('now') WHERE product_id = '${sqlEsc(it.productId)}';`
-      );
-      statements.push(
-        `INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, order_id, performed_by, created_at) ` +
-        `VALUES ('${logRecord.id}', '${sqlEsc(it.productId)}', '${sqlEsc(it.productNameAr)}', 'STOCK_ROLLBACK', ${restoredQty}, ${prevStock}, ${newStock}, '${sqlEsc(logRecord.reason)}', '${order.id}', '${sqlEsc(actor)}', datetime('now'));`
-      );
-    }
-
-    statements.push(
-      `UPDATE orders SET status = 'cancelled', is_stock_rolled_back = 1, cancelled_at = datetime('now'), updated_at = datetime('now') WHERE id = '${order.id}' AND is_stock_rolled_back = 0;`
-    );
-
-    const notifId = `notif-cancel-${Date.now()}`;
-    statements.push(
-      `INSERT INTO notifications (id, recipient_role, title, message, type, is_read, link, created_at) ` +
-      `VALUES ('${notifId}', 'admin', 'استرجاع مخزون - إلغاء طلب', 'تم إلغاء الطلب #${order.orderNumber || order.id} وإعادة الكميات تلقائيًا للمخزون', 'stock', 0, '/admin/orders/${order.id}', datetime('now'));`
-    );
-
-    if (this.isD1Configured()) {
-      const rollbackRes = await this.executeCloudflareD1Raw(statements.join(' '));
-      if (!rollbackRes.success) {
-        console.error('D1 Stock Rollback raw execution warning:', rollbackRes.errors);
-      }
     }
 
     // 5. Update payment status if exists to cancelled / failed
@@ -1374,8 +1813,48 @@ class D1DatabaseAccessLayer {
     return true;
   }
 
-  public async updateOrderStatus(orderId: string, status: Order['status'], driverNotes?: string, actor: string = 'الإدارة'): Promise<Order | null> {
-    const order = this.findOrderById(orderId);
+  public async updateOrderDriverAsync(orderId: string, driverId: string, driverName?: string, driverPhone?: string): Promise<Order | null> {
+    const order = await this.findOrderByIdAsync(orderId) || this.findOrderById(orderId);
+    if (!order) return null;
+
+    // Verify driver from active delivery agents
+    const agents = await this.getDeliveryAgentsAsync();
+    const verifiedAgent = agents.find(a => a.id === driverId || (driverName && a.name.trim() === driverName.trim()));
+
+    const finalDriverId = verifiedAgent ? verifiedAgent.id : driverId;
+    const finalDriverName = verifiedAgent ? verifiedAgent.name : (driverName || order.driverName || 'أحمد الكبسي');
+    const finalDriverPhone = verifiedAgent ? verifiedAgent.phone : (driverPhone || order.driverPhone || '775000150');
+
+    order.driverId = finalDriverId;
+    order.driverName = finalDriverName;
+    order.driverPhone = finalDriverPhone;
+
+    const inMem = this.findOrderById(orderId);
+    if (inMem) {
+      inMem.driverId = finalDriverId;
+      inMem.driverName = finalDriverName;
+      inMem.driverPhone = finalDriverPhone;
+    }
+
+    if (this.isD1Configured()) {
+      await this.executeCloudflareD1Query(
+        `UPDATE orders SET driver_id = ?, driver_name = ?, driver_phone = ?, updated_at = datetime('now') WHERE id = ? OR order_number = ?;`,
+        [finalDriverId, finalDriverName, finalDriverPhone, order.id, order.orderNumber || order.id]
+      );
+    }
+
+    this.saveLocal();
+    return order;
+  }
+
+  public async updateOrderStatus(
+    orderId: string, 
+    status: Order['status'], 
+    driverNotes?: string, 
+    actor: string = 'الإدارة',
+    driverInfo?: { driverId?: string; driverName?: string; driverPhone?: string }
+  ): Promise<Order | null> {
+    const order = await this.findOrderByIdAsync(orderId) || this.findOrderById(orderId);
     if (!order) return null;
 
     const previousStatus = order.status;
@@ -1401,6 +1880,12 @@ class D1DatabaseAccessLayer {
       order.driverNotes = driverNotes;
     }
 
+    if (driverInfo) {
+      if (driverInfo.driverId) order.driverId = driverInfo.driverId;
+      if (driverInfo.driverName) order.driverName = driverInfo.driverName;
+      if (driverInfo.driverPhone) order.driverPhone = driverInfo.driverPhone;
+    }
+
     const now = new Date();
     const timeFormatted = now.toLocaleTimeString("ar-YE", { hour: "2-digit", minute: "2-digit" });
 
@@ -1409,9 +1894,13 @@ class D1DatabaseAccessLayer {
     }
 
     const titleMap: Record<string, { ar: string; en: string }> = {
+      pending: { ar: "تم استلام الطلب بانتظار التأكيد", en: "Order Pending" },
       received: { ar: "تم استلام الطلب وتأكيده بالنظام", en: "Order Received" },
+      confirmed: { ar: "تم تأكيد واعتماد الطلب من الإدارة", en: "Order Confirmed" },
+      assigned: { ar: `تم تكليف المندوب (${order.driverName || 'المعتمد'}) للتوصيل`, en: "Driver Assigned" },
       preparing: { ar: "جاري تجهيز وتعبئة الفحم في المستودع", en: "Preparing Charcoal" },
-      shipped: { ar: "خرج الفحم مع المندوب للتوصيل", en: "Out for Delivery" },
+      shipped: { ar: "خرج الفحم مع المندوب للتوصيل المباشر", en: "Out for Delivery" },
+      on_way: { ar: "المندوب في الطريق إلى موقع العميل", en: "Driver On The Way" },
       delivering: { ar: "المندوب في الحي وقريب من موقعك", en: "Near Delivery Location" },
       delivered: { ar: "تم تسليم الطلب للعميل بنجاح", en: "Delivered Successfully" },
       cancelled: { ar: "تم إلغاء الطلب واسترجاع المخزون", en: "Order Cancelled & Stock Rolled Back" }
@@ -1437,11 +1926,22 @@ class D1DatabaseAccessLayer {
 
     // Sync order status to Cloudflare D1 SQL
     if (this.isD1Configured()) {
-      const sqlEsc = (s: any) => String(s ?? '').replace(/'/g, "''");
       const compDateCol = status === 'delivered' ? ", completed_at = datetime('now')" : (status === 'cancelled' ? ", cancelled_at = datetime('now')" : "");
-      await this.executeCloudflareD1Raw(
-        `UPDATE orders SET status = '${status}', driver_notes = '${sqlEsc(order.driverNotes || '')}', timeline_json = '${sqlEsc(JSON.stringify(order.timeline))}'${compDateCol}, updated_at = datetime('now') WHERE id = '${order.id}' OR order_number = '${order.orderNumber}';`
+      await this.executeCloudflareD1Query(
+        `UPDATE orders SET status = ?, driver_notes = COALESCE(?, driver_notes), driver_id = COALESCE(?, driver_id), driver_name = COALESCE(?, driver_name), driver_phone = COALESCE(?, driver_phone), timeline_json = ?${compDateCol}, updated_at = datetime('now') WHERE id = ? OR order_number = ?;`,
+        [status, driverNotes || null, order.driverId || null, order.driverName || null, order.driverPhone || null, JSON.stringify(order.timeline), order.id, order.orderNumber || order.id]
       );
+    }
+
+    const inMem = this.findOrderById(orderId);
+    if (inMem) {
+      inMem.status = status;
+      if (driverNotes) inMem.driverNotes = driverNotes;
+      if (order.driverId) inMem.driverId = order.driverId;
+      if (order.driverName) inMem.driverName = order.driverName;
+      if (order.driverPhone) inMem.driverPhone = order.driverPhone;
+      inMem.timeline = order.timeline;
+      if (status === 'cancelled') inMem.isStockRolledBack = true;
     }
 
     this.saveLocal();
@@ -1494,14 +1994,27 @@ class D1DatabaseAccessLayer {
     const txId = 'tx-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
     const sqlEsc = (s: any) => String(s ?? '').replace(/'/g, "''");
 
-    // Execute on Cloudflare D1 with trigger protection
+    // Execute on Cloudflare D1 with proper parameterized queries
     if (this.isD1Configured()) {
-      const statements = [
-        `UPDATE products SET stock = ${params.newStock}, updated_at = datetime('now') WHERE id = '${sqlEsc(params.productId)}';`,
-        `INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, performed_by, created_at) ` +
-        `VALUES ('${txId}', '${sqlEsc(params.productId)}', '${sqlEsc(product.nameAr)}', '${params.type}', ${params.quantity}, ${params.previousStock}, ${params.newStock}, '${sqlEsc(params.reason)}', '${sqlEsc(params.performedBy)}', datetime('now'));`
-      ];
-      await this.executeCloudflareD1Raw(statements.join(' '));
+      await this.executeCloudflareD1Query(
+        "UPDATE products SET stock = ?, updated_at = datetime('now') WHERE id = ?;",
+        [params.newStock, params.productId]
+      );
+      await this.executeCloudflareD1Query(
+        "INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, performed_by, created_at) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'));",
+        [
+          txId,
+          params.productId,
+          product.nameAr,
+          params.type,
+          params.quantity,
+          params.previousStock,
+          params.newStock,
+          params.reason,
+          params.performedBy
+        ]
+      );
     }
 
     // Update in-memory state
@@ -1533,6 +2046,32 @@ class D1DatabaseAccessLayer {
     return { product, transaction: logRecord };
   }
 
+  public async getInventoryTransactionsAsync(): Promise<InventoryLogRecord[]> {
+    if (this.isD1Configured()) {
+      try {
+        const rows = await this.executeCloudflareD1Query("SELECT * FROM inventory_logs ORDER BY created_at DESC LIMIT 500;");
+        if (Array.isArray(rows) && rows.length > 0) {
+          return rows.map((l: any) => ({
+            id: l.id,
+            productId: l.product_id,
+            productName: l.product_name,
+            type: l.type,
+            quantity: l.quantity,
+            previousStock: l.previous_stock,
+            newStock: l.new_stock,
+            reason: l.reason,
+            orderId: l.order_id || undefined,
+            performedBy: l.performed_by,
+            createdAt: l.created_at
+          }));
+        }
+      } catch (err) {
+        console.error('Error fetching inventory_logs from D1:', err);
+      }
+    }
+    return this.tables.inventory_logs;
+  }
+
   // ==========================================
   // 5. DELIVERY AGENTS
   // ==========================================
@@ -1540,10 +2079,79 @@ class D1DatabaseAccessLayer {
     return this.tables.delivery_agents;
   }
 
+  public async getDeliveryAgentsAsync(): Promise<DeliveryAgent[]> {
+    if (this.isD1Configured()) {
+      try {
+        const rows = await this.executeCloudflareD1Query("SELECT * FROM delivery_agents;");
+        if (Array.isArray(rows) && rows.length > 0) {
+          return rows.map((da: any) => ({
+            id: da.id,
+            name: da.name,
+            phone: da.phone,
+            vehicleType: da.vehicle_type || da.vehicle || 'motorcycle',
+            assignedDistricts: typeof da.assigned_districts === 'string' ? JSON.parse(da.assigned_districts || '[]') : (da.assigned_districts || []),
+            completedOrdersCount: da.total_delivered_count || da.completed_orders_count || 0,
+            rating: da.rating || 5.0,
+            isActive: da.is_available !== undefined ? Boolean(da.is_available) : (da.is_active !== undefined ? Boolean(da.is_active) : true)
+          }));
+        }
+      } catch (err) {
+        console.error('Error fetching delivery_agents from D1:', err);
+      }
+    }
+    return this.tables.delivery_agents;
+  }
+
+  public async updateDeliveryAgentsAsync(agents: DeliveryAgent[]): Promise<DeliveryAgent[]> {
+    this.tables.delivery_agents = agents;
+    this.saveLocal();
+
+    if (this.isD1Configured()) {
+      for (const da of agents) {
+        await this.executeCloudflareD1Query(
+          `INSERT INTO delivery_agents (id, name, phone, vehicle_type, assigned_districts, total_delivered_count, rating, is_available, created_at, updated_at) ` +
+          `VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now')) ` +
+          `ON CONFLICT(id) DO UPDATE SET ` +
+          `name = excluded.name, phone = excluded.phone, vehicle_type = excluded.vehicle_type, assigned_districts = excluded.assigned_districts, ` +
+          `total_delivered_count = excluded.total_delivered_count, rating = excluded.rating, is_available = excluded.is_available, updated_at = datetime('now');`,
+          [
+            da.id, da.name, da.phone, da.vehicleType, JSON.stringify(da.assignedDistricts),
+            da.completedOrdersCount, da.rating, da.isActive ? 1 : 0
+          ]
+        );
+      }
+    }
+
+    return agents;
+  }
+
   // ==========================================
   // 6. REVIEWS & COUPONS
   // ==========================================
   public getReviews(): Review[] {
+    return this.tables.reviews;
+  }
+
+  public async getReviewsAsync(): Promise<Review[]> {
+    if (this.isD1Configured()) {
+      try {
+        const rows = await this.executeCloudflareD1Query("SELECT * FROM reviews ORDER BY created_at DESC;");
+        if (Array.isArray(rows) && rows.length > 0) {
+          return rows.map((rv: any) => ({
+            id: rv.id,
+            productId: rv.product_id,
+            userName: rv.user_name,
+            userPhone: rv.user_phone || undefined,
+            rating: rv.rating,
+            comment: rv.comment,
+            verifiedPurchase: Boolean(rv.verified_purchase),
+            date: rv.created_at
+          }));
+        }
+      } catch (err) {
+        console.error('Error fetching reviews from D1:', err);
+      }
+    }
     return this.tables.reviews;
   }
 
@@ -1561,12 +2169,110 @@ class D1DatabaseAccessLayer {
     return review;
   }
 
+  public async addReviewAsync(review: Review): Promise<Review> {
+    this.addReview(review);
+
+    if (this.isD1Configured()) {
+      try {
+        await this.executeCloudflareD1Query(
+          `INSERT INTO reviews (id, product_id, user_name, user_phone, rating, comment, verified_purchase, created_at) ` +
+          `VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'));`,
+          [review.id, review.productId, review.userName, (review as any).userPhone || null, review.rating, review.comment, review.verifiedPurchase ? 1 : 0]
+        );
+      } catch (err) {
+        console.error('Error adding review to D1:', err);
+      }
+    }
+
+    return review;
+  }
+
   public getCoupons(): Coupon[] {
+    return this.tables.coupons;
+  }
+
+  public async getCouponsAsync(): Promise<Coupon[]> {
+    if (this.isD1Configured()) {
+      try {
+        const rows = await this.executeCloudflareD1Query("SELECT * FROM coupons;");
+        if (Array.isArray(rows) && rows.length > 0) {
+          return rows.map((cp: any) => ({
+            code: cp.code,
+            discountPercent: cp.discount_percent,
+            maxDiscount: cp.max_discount,
+            minOrderAmount: cp.min_order_amount,
+            isActive: Boolean(cp.is_active),
+            validUntil: cp.expiry_date || cp.valid_until || undefined,
+            usageCount: cp.usage_count || 0
+          }));
+        }
+      } catch (err) {
+        console.error('Error fetching coupons from D1:', err);
+      }
+    }
     return this.tables.coupons;
   }
 
   public findCoupon(code: string): Coupon | undefined {
     return this.tables.coupons.find(c => c.code.toUpperCase() === code.trim().toUpperCase() && c.isActive);
+  }
+
+  public async findCouponAsync(code: string): Promise<Coupon | undefined> {
+    const cleanCode = code.trim().toUpperCase();
+    if (this.isD1Configured()) {
+      try {
+        const rows = await this.executeCloudflareD1Query("SELECT * FROM coupons WHERE UPPER(code) = ? AND is_active = 1 LIMIT 1;", [cleanCode]);
+        if (Array.isArray(rows) && rows.length > 0) {
+          const cp = rows[0];
+          return {
+            code: cp.code,
+            discountPercent: cp.discount_percent,
+            maxDiscount: cp.max_discount,
+            minOrderAmount: cp.min_order_amount,
+            isActive: Boolean(cp.is_active),
+            validUntil: cp.expiry_date || cp.valid_until || undefined,
+            usageCount: cp.usage_count || 0
+          };
+        }
+      } catch (err) {
+        console.error('Error finding coupon in D1:', err);
+      }
+    }
+    return this.findCoupon(cleanCode);
+  }
+
+  public async addCouponAsync(coupon: Coupon): Promise<Coupon> {
+    const existingIdx = this.tables.coupons.findIndex(c => c.code.toUpperCase() === coupon.code.trim().toUpperCase());
+    if (existingIdx >= 0) {
+      this.tables.coupons[existingIdx] = coupon;
+    } else {
+      this.tables.coupons.push(coupon);
+    }
+    this.saveLocal();
+
+    if (this.isD1Configured()) {
+      await this.executeCloudflareD1Query(
+        `INSERT INTO coupons (code, discount_percent, max_discount, min_order_amount, is_active, expiry_date, usage_count, created_at) ` +
+        `VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now')) ` +
+        `ON CONFLICT(code) DO UPDATE SET ` +
+        `discount_percent = excluded.discount_percent, max_discount = excluded.max_discount, min_order_amount = excluded.min_order_amount, ` +
+        `is_active = excluded.is_active, expiry_date = excluded.expiry_date;`,
+        [coupon.code.toUpperCase(), coupon.discountPercent, coupon.maxDiscount, coupon.minOrderAmount, coupon.isActive ? 1 : 0, coupon.validUntil || (coupon as any).expiryDate || null, coupon.usageCount || 0]
+      );
+    }
+
+    return coupon;
+  }
+
+  public async deleteCouponAsync(code: string): Promise<boolean> {
+    const cleanCode = code.trim().toUpperCase();
+    this.tables.coupons = this.tables.coupons.filter(c => c.code.toUpperCase() !== cleanCode);
+    this.saveLocal();
+
+    if (this.isD1Configured()) {
+      await this.executeCloudflareD1Query("DELETE FROM coupons WHERE UPPER(code) = ?;", [cleanCode]);
+    }
+    return true;
   }
 
   // ==========================================
@@ -1576,10 +2282,67 @@ class D1DatabaseAccessLayer {
     return this.tables.store_settings;
   }
 
+  public async getSettingsAsync(): Promise<StoreSettings> {
+    if (this.isD1Configured()) {
+      try {
+        const rows = await this.executeCloudflareD1Query("SELECT * FROM store_settings WHERE id = 'default_settings';");
+        if (Array.isArray(rows) && rows.length > 0) {
+          const st = rows[0];
+          return {
+            ...this.tables.store_settings,
+            storeNameAr: st.store_name_ar || this.tables.store_settings.storeNameAr,
+            storeNameEn: st.store_name_en || this.tables.store_settings.storeNameEn,
+            whatsappPhone: st.whatsapp_phone || this.tables.store_settings.whatsappPhone,
+            supportPhone: st.support_phone || this.tables.store_settings.supportPhone,
+            deliveryDistricts: typeof st.delivery_districts === 'string' ? JSON.parse(st.delivery_districts) : (st.delivery_districts || this.tables.store_settings.deliveryDistricts),
+            workingHoursAr: st.working_hours_ar || (typeof st.working_hours === 'string' ? JSON.parse(st.working_hours)?.ar : undefined) || this.tables.store_settings.workingHoursAr,
+            workingHoursEn: st.working_hours_en || (typeof st.working_hours === 'string' ? JSON.parse(st.working_hours)?.en : undefined) || this.tables.store_settings.workingHoursEn
+          };
+        }
+      } catch (err) {
+        console.error('Error fetching store_settings from D1:', err);
+      }
+    }
+    return this.tables.store_settings;
+  }
+
   public updateSettings(newSettings: Partial<StoreSettings>): StoreSettings {
     this.tables.store_settings = { ...this.tables.store_settings, ...newSettings };
     this.saveLocal();
     return this.tables.store_settings;
+  }
+
+  public async updateSettingsAsync(newSettings: Partial<StoreSettings>): Promise<StoreSettings> {
+    const updated = this.updateSettings(newSettings);
+
+    if (this.isD1Configured()) {
+      try {
+        await this.executeCloudflareD1Query(
+          `UPDATE store_settings SET ` +
+          `store_name_ar = COALESCE(?, store_name_ar), ` +
+          `store_name_en = COALESCE(?, store_name_en), ` +
+          `whatsapp_phone = COALESCE(?, whatsapp_phone), ` +
+          `support_phone = COALESCE(?, support_phone), ` +
+          `delivery_districts = COALESCE(?, delivery_districts), ` +
+          `working_hours_ar = COALESCE(?, working_hours_ar), ` +
+          `working_hours_en = COALESCE(?, working_hours_en), ` +
+          `updated_at = datetime('now') WHERE id = 'default_settings';`,
+          [
+            newSettings.storeNameAr || null,
+            newSettings.storeNameEn || null,
+            newSettings.whatsappPhone || null,
+            newSettings.supportPhone || null,
+            newSettings.deliveryDistricts ? JSON.stringify(newSettings.deliveryDistricts) : null,
+            newSettings.workingHoursAr || null,
+            newSettings.workingHoursEn || null
+          ]
+        );
+      } catch (err) {
+        console.error('Error updating store_settings in D1:', err);
+      }
+    }
+
+    return updated;
   }
 
   public getGalleryItems(): GalleryItem[] {

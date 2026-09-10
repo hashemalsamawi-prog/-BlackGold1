@@ -20,6 +20,7 @@ import { OrderTrackerModal } from './components/OrderTrackerModal';
 import { OrderConfirmationModal } from './components/OrderConfirmationModal';
 import { MandoubPortal } from './components/MandoubPortal';
 import { AdminDashboard } from './components/AdminDashboard';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { AiAdvisorModal } from './components/AiAdvisorModal';
 import { AuthModal } from './components/AuthModal';
 import { WelcomeModal } from './components/WelcomeModal';
@@ -445,9 +446,12 @@ export default function App() {
             const prevIds = new Set(prev.map(p => p.id || p.orderNumber));
             const newIncoming = validOrders.filter((d: any) => !prevIds.has(d.id || d.orderNumber));
             if (newIncoming.length > 0) {
-              playOrderAlertSound(0.9);
+              if (storeSettings?.soundAlertsEnabled !== false) {
+                playOrderAlertSound(0.9);
+              }
               const latest = newIncoming[0];
-              setToastMessage(`🚨 تنبيه المالك: وصل طلب جديد #${latest.orderNumber || latest.id} بقيمة ${(latest.totalAmount || latest.total || 0).toLocaleString()} ريال!`);
+              const custName = latest.customerName || 'عميل المتجر';
+              setToastMessage(`🚨 طلب جديد #${latest.orderNumber || latest.id} - العميل: ${custName} بقيمة ${(latest.totalAmount || latest.total || 0).toLocaleString()} ريال`);
               setTimeout(() => setToastMessage(null), 8000);
             }
           }
@@ -499,22 +503,47 @@ export default function App() {
     setTimeout(() => setToastMessage(null), 3000);
   };
 
-  const handleUpdateOrderStatus = async (orderId: string, status: Order['status'], driverNotes?: string) => {
+  const handleUpdateOrderStatus = async (
+    orderId: string, 
+    status: Order['status'], 
+    driverNotes?: string,
+    driverInfo?: { driverId?: string; driverName?: string; driverPhone?: string }
+  ) => {
     setOrders((prev) => {
-      const updated = prev.map((o) => (o.id === orderId ? { ...o, status, driverNotes: driverNotes || o.driverNotes } : o));
+      const updated = prev.map((o) => {
+        if (o.id !== orderId) return o;
+        return { 
+          ...o, 
+          status, 
+          driverNotes: driverNotes !== undefined ? driverNotes : o.driverNotes,
+          driverId: driverInfo?.driverId || o.driverId,
+          driverName: driverInfo?.driverName || o.driverName,
+          driverPhone: driverInfo?.driverPhone || o.driverPhone
+        };
+      });
       safeSetLocalStorage('bg_saved_orders', JSON.stringify(updated));
       return updated;
     });
 
     try {
       const token = authStorage.getToken();
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      const headers: Record<string, string> = { 
+        'Content-Type': 'application/json',
+        'x-user-role': userRole || 'owner'
+      };
       if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const payload: any = { status, driverNotes };
+      if (driverInfo) {
+        if (driverInfo.driverId) payload.driverId = driverInfo.driverId;
+        if (driverInfo.driverName) payload.driverName = driverInfo.driverName;
+        if (driverInfo.driverPhone) payload.driverPhone = driverInfo.driverPhone;
+      }
 
       const res = await fetch(`/api/orders/${orderId}/status`, {
         method: 'PATCH',
         headers,
-        body: JSON.stringify({ status, driverNotes })
+        body: JSON.stringify(payload)
       });
       const data = await res.json();
       if (data.success && data.data) {
@@ -754,7 +783,7 @@ export default function App() {
         p.nameEn.toLowerCase().includes(q) ||
         p.descriptionAr.toLowerCase().includes(q) ||
         p.origin.toLowerCase().includes(q) ||
-        (p.weight && p.weight.toLowerCase().includes(q));
+        (p.weight && String(p.weight).toLowerCase().includes(q));
 
       // Price range filter
       const matchesMin = minPrice === '' || p.price >= Number(minPrice);
@@ -779,6 +808,8 @@ export default function App() {
   }, [products, activeCategory, searchQuery, minPrice, maxPrice, sortBy]);
 
   const hasActiveFilters = searchQuery.trim() !== '' || minPrice !== '' || maxPrice !== '' || sortBy !== 'popular';
+  const uncompletedOrdersCount = orders.filter(o => o && o.status !== 'delivered' && o.status !== 'cancelled').length;
+  const totalOrdersCount = orders.length;
 
   return (
     <AndroidSimulatorWrapper deviceMode={deviceMode} onToggleDeviceMode={() => setDeviceMode(deviceMode === 'web' ? 'android' : 'web')}>
@@ -802,6 +833,8 @@ export default function App() {
           deviceMode={deviceMode}
           onDeviceModeToggle={() => setDeviceMode(deviceMode === 'web' ? 'android' : 'web')}
           cartCount={cart.reduce((sum, item) => sum + item.quantity, 0)}
+          ordersCount={totalOrdersCount}
+          pendingOrdersCount={uncompletedOrdersCount}
           onOpenCart={() => setCartOpen(true)}
           onOpenMap={() => setMapOpen(true)}
           onOpenOrders={() => setOrdersOpen(true)}
@@ -1205,37 +1238,39 @@ export default function App() {
           }}
         />
 
-        <AdminDashboard
-          isOpen={adminOpen}
-          onClose={() => setAdminOpen(false)}
-          products={products}
-          orders={orders}
-          reviews={reviews}
-          onRefreshOrders={() => fetchLatestOrders(false)}
-          onAddProduct={handleAddProduct}
-          onUpdateProduct={handleUpdateProduct}
-          onDeleteProduct={handleDeleteProduct}
-          onUpdateOrderStatus={handleUpdateOrderStatus}
-          lang={lang}
-          storeSettings={storeSettings}
-          onUpdateStoreSettings={handleUpdateStoreSettings}
-          deliveryAgents={deliveryAgents}
-          onUpdateDeliveryAgents={(d) => setDeliveryAgents(d)}
-          campaigns={campaigns}
-          onUpdateCampaigns={(c) => setCampaigns(c)}
-          onOpenDriverScreen={(driverName) => {
-            setSelectedDriverName(driverName);
-            setIsOwnerDriverPreview(true);
-            setAdminOpen(false);
-            setMandoubOpen(true);
-          }}
-          userRole={userRole}
-          onChangeUserRole={(r) => setUserRole(r)}
-          theme={theme}
-          onToggleTheme={toggleTheme}
-          galleryItems={galleryItems}
-          onUpdateGalleryItems={handleUpdateGalleryItems}
-        />
+        <ErrorBoundary fallbackTitle="لوحة تحكم إدارة المتجر والمناديب" onReset={() => setAdminOpen(false)}>
+          <AdminDashboard
+            isOpen={adminOpen}
+            onClose={() => setAdminOpen(false)}
+            products={products}
+            orders={orders}
+            reviews={reviews}
+            onRefreshOrders={() => fetchLatestOrders(false)}
+            onAddProduct={handleAddProduct}
+            onUpdateProduct={handleUpdateProduct}
+            onDeleteProduct={handleDeleteProduct}
+            onUpdateOrderStatus={handleUpdateOrderStatus}
+            lang={lang}
+            storeSettings={storeSettings}
+            onUpdateStoreSettings={handleUpdateStoreSettings}
+            deliveryAgents={deliveryAgents}
+            onUpdateDeliveryAgents={(d) => setDeliveryAgents(d)}
+            campaigns={campaigns}
+            onUpdateCampaigns={(c) => setCampaigns(c)}
+            onOpenDriverScreen={(driverName) => {
+              setSelectedDriverName(driverName);
+              setIsOwnerDriverPreview(true);
+              setAdminOpen(false);
+              setMandoubOpen(true);
+            }}
+            userRole={userRole}
+            onChangeUserRole={(r) => setUserRole(r)}
+            theme={theme}
+            onToggleTheme={toggleTheme}
+            galleryItems={galleryItems}
+            onUpdateGalleryItems={handleUpdateGalleryItems}
+          />
+        </ErrorBoundary>
 
         <AiAdvisorModal
           isOpen={aiAdvisorOpen}
@@ -1312,6 +1347,8 @@ export default function App() {
         {/* Mobile Sticky Bottom Nav Bar */}
         <MobileBottomNav
           cartCount={cart.reduce((sum, item) => sum + item.quantity, 0)}
+          ordersCount={totalOrdersCount}
+          pendingOrdersCount={uncompletedOrdersCount}
           onOpenCart={() => setCartOpen(true)}
           onOpenOrders={() => setOrdersOpen(true)}
           onOpenAdmin={() => setAdminOpen(true)}

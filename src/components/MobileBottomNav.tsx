@@ -7,6 +7,8 @@ import {
 
 interface MobileBottomNavProps {
   cartCount: number;
+  ordersCount?: number;
+  pendingOrdersCount?: number;
   onOpenCart: () => void;
   onOpenOrders: () => void;
   onOpenAdmin: () => void;
@@ -20,6 +22,8 @@ interface MobileBottomNavProps {
 
 export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
   cartCount,
+  ordersCount = 0,
+  pendingOrdersCount = 0,
   onOpenCart,
   onOpenOrders,
   onOpenAdmin,
@@ -45,10 +49,15 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
         {/* Orders Tracker */}
         <button
           onClick={onOpenOrders}
-          className="flex flex-col items-center gap-1 p-1 text-zinc-400 hover:text-amber-400 transition-colors"
+          className="relative flex flex-col items-center gap-1 p-1 text-zinc-400 hover:text-amber-400 transition-colors"
         >
           <Package className="w-5 h-5" />
           <span className="text-[10px] font-bold">طلباتي</span>
+          {ordersCount > 0 && (
+            <span className="absolute top-0 right-1 bg-amber-500 text-black font-black text-[9px] min-w-3.5 h-3.5 px-0.5 rounded-full flex items-center justify-center">
+              {ordersCount}
+            </span>
+          )}
         </button>
 
         {/* Central Cart Icon */}
@@ -68,10 +77,15 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
         {userRole === 'owner' ? (
           <button
             onClick={onOpenAdmin}
-            className="flex flex-col items-center gap-1 p-1 text-amber-400 font-black"
+            className="relative flex flex-col items-center gap-1 p-1 text-amber-400 font-black"
           >
             <ShieldAlert className="w-5 h-5" />
             <span className="text-[10px]">الإدارة</span>
+            {pendingOrdersCount > 0 && (
+              <span className="absolute top-0 right-1 bg-red-600 text-white font-black text-[9px] min-w-3.5 h-3.5 px-0.5 rounded-full flex items-center justify-center border border-black animate-pulse">
+                {pendingOrdersCount}
+              </span>
+            )}
           </button>
         ) : (
           <button

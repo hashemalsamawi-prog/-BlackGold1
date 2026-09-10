@@ -35,9 +35,24 @@ export const MandoubPortal: React.FC<MandoubPortalProps> = ({
   const [activeTab, setActiveTab] = useState<'pending' | 'active' | 'completed'>('active');
   const [driverNoteInput, setDriverNoteInput] = useState<Record<string, string>>({});
 
-  const activeOrders = orders.filter((o) => o.status === 'preparing' || o.status === 'on_way');
-  const pendingOrders = orders.filter((o) => o.status === 'pending');
-  const completedOrders = orders.filter((o) => o.status === 'delivered');
+  const currentDriverObj = availableDrivers.find(d => d.name === driverName);
+  const isAssignedToThisDriver = (o: Order) => {
+    if (!driverName) return true;
+    return o.driverName === driverName || (currentDriverObj && o.driverId === currentDriverObj.id) || !o.driverName;
+  };
+
+  const activeOrders = orders.filter((o) => 
+    ['assigned', 'preparing', 'shipped', 'on_way', 'delivering'].includes(o.status) &&
+    isAssignedToThisDriver(o)
+  );
+  const pendingOrders = orders.filter((o) => 
+    ['pending', 'received', 'confirmed'].includes(o.status) &&
+    isAssignedToThisDriver(o)
+  );
+  const completedOrders = orders.filter((o) => 
+    o.status === 'delivered' && 
+    (o.driverName === driverName || (currentDriverObj && o.driverId === currentDriverObj.id))
+  );
 
   const displayedOrders = activeTab === 'active' ? activeOrders : activeTab === 'pending' ? pendingOrders : completedOrders;
 
@@ -157,29 +172,39 @@ export const MandoubPortal: React.FC<MandoubPortalProps> = ({
                 {/* Status Action Buttons */}
                 <div className="pt-2 border-t border-zinc-800 flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
-                    {order.status === 'pending' && (
+                    {['pending', 'received', 'confirmed'].includes(order.status) && (
                       <button
-                        onClick={() => onUpdateOrderStatus(order.id, 'preparing', 'تم استلام وتجهيز الطلب من المستودع')}
-                        className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-black text-xs"
+                        onClick={() => onUpdateOrderStatus(order.id, 'assigned', `استلم المندوب (${driverName}) الشحنة`)}
+                        className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-black text-xs cursor-pointer"
                       >
-                        قبول وتجهيز الشحنة
+                        قبول واستلام الشحنة
                       </button>
                     )}
 
-                    {order.status === 'preparing' && (
+                    {['assigned', 'preparing'].includes(order.status) && (
                       <button
-                        onClick={() => onUpdateOrderStatus(order.id, 'on_way', 'المندوب انطلق متجهاً لموقع العميل')}
-                        className="px-3.5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs flex items-center gap-1.5"
+                        onClick={() => onUpdateOrderStatus(order.id, 'shipped', `خرج المندوب (${driverName}) ومعه الشحنة متوجهاً للعميل`)}
+                        className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Truck className="w-3.5 h-3.5" />
+                        <span>استلام الشحنة وبدء التوصيل</span>
+                      </button>
+                    )}
+
+                    {order.status === 'shipped' && (
+                      <button
+                        onClick={() => onUpdateOrderStatus(order.id, 'on_way', 'المندوب انطلق في مسار التوصيل المباشر')}
+                        className="px-3.5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer"
                       >
                         <Navigation className="w-3.5 h-3.5" />
                         <span>الانطلاق نحو العميل (في الطريق)</span>
                       </button>
                     )}
 
-                    {order.status === 'on_way' && (
+                    {['on_way', 'delivering'].includes(order.status) && (
                       <button
-                        onClick={() => onUpdateOrderStatus(order.id, 'delivered', 'تم تسليم الفحم واستلام المبلغ')}
-                        className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs flex items-center gap-1.5"
+                        onClick={() => onUpdateOrderStatus(order.id, 'delivered', 'تم تسليم الفحم واستلام المبلغ نقداً بنجاح')}
+                        className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs flex items-center gap-1.5 cursor-pointer"
                       >
                         <CheckCircle2 className="w-4 h-4" />
                         <span>تم تسليم الطلب واستلام المبلغ ✅</span>

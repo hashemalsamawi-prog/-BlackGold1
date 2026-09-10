@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { CartItem, Language, DeliveryAddress } from '../types';
-import { X, Trash2, ShoppingBag, MapPin, Tag, ArrowLeft, ArrowRight, MessageSquare, AlertCircle, ChevronRight, CheckCircle2, Plus } from 'lucide-react';
+import { X, Trash2, ShoppingBag, MapPin, Tag, ArrowLeft, ArrowRight, MessageSquare, AlertCircle, ChevronRight, CheckCircle2, Plus, ShieldCheck, Truck, Flame, Clock, Sparkles } from 'lucide-react';
 import { resolveAsset, ASSETS } from '../assets/images';
 
 interface CartDrawerProps {
@@ -326,6 +326,57 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                 {couponMsg && (
                   <p className="text-[11px] text-amber-300 font-semibold px-1">{couponMsg}</p>
                 )}
+              </div>
+
+              {/* Royal Charcoal Guarantee & Sana'a Express Delivery Card */}
+              <div className="p-3.5 rounded-2xl bg-gradient-to-br from-slate-900 via-slate-900/95 to-amber-950/30 border border-amber-500/20 space-y-3 shadow-lg">
+                <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400">
+                      <Sparkles className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-black text-white">ضمان الذهب الأسود الملكي</h4>
+                      <p className="text-[10px] text-amber-400/90 font-medium">جودة مضمونة 100% بصنعاء</p>
+                    </div>
+                  </div>
+                  <div className="w-10 h-10 rounded-xl overflow-hidden bg-slate-950 border border-amber-500/30 shrink-0">
+                    <img
+                      src={resolveAsset(ASSETS.pouchPair)}
+                      alt="فحم الذهب الأسود"
+                      className="w-full h-full object-cover"
+                      referrerPolicy="no-referrer"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 text-[11px]">
+                  <div className="flex items-center gap-1.5 text-slate-300">
+                    <Truck className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span>توصيل 30-45 دقيقة</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-slate-300">
+                    <Flame className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span>جمر مشتعل +4 ساعات</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-slate-300">
+                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                    <span>طبيعي بدون شرار</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-slate-300">
+                    <Clock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span>خدمة 24/7 بصنعاء</span>
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between text-[10px] text-slate-400">
+                  <span>طرق الدفع:</span>
+                  <div className="flex items-center gap-1.5 font-bold text-slate-300">
+                    <span className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700">كاش عند الاستلام</span>
+                    <span className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700">الكريمي</span>
+                    <span className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700">ون كاش</span>
+                  </div>
+                </div>
               </div>
 
             </div>

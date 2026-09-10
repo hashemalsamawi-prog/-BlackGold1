@@ -1,6 +1,6 @@
 export type Language = 'ar' | 'en';
 export type ThemeMode = 'dark' | 'light';
-export type ProductSortOption = 'popular' | 'price-asc' | 'price-desc' | 'rating' | 'stock';
+export type ProductSortOption = 'popular' | 'price-asc' | 'price-desc' | 'rating' | 'stock' | 'newest';
 
 export interface ProductWeightOption {
   weightGrams?: number;
@@ -48,6 +48,8 @@ export interface Product {
   discountPercent?: number;
   featuresAr?: string[];
   featuresEn?: string[];
+  weight?: string | number;
+  salesCount?: number;
   reviewsCount?: number;
   reviewCount?: number;
   rating?: number;
@@ -59,7 +61,7 @@ export interface CartItem {
   productId?: string;
   product: Product;
   quantity: number;
-  selectedWeight?: number;
+  selectedWeight?: number | string;
   unitPrice?: number;
 }
 
@@ -161,11 +163,19 @@ export interface DeliveryAgent {
   name: string;
   phone: string;
   vehicleType: 'motorcycle' | 'car' | 'van' | string;
+  vehicle?: string;
+  vehiclePlate?: string;
   assignedDistricts: string[];
+  zone?: string;
+  districtZone?: string;
   isActive: boolean;
+  status?: 'active' | 'busy' | 'offline' | string;
   currentLatitude?: number;
   currentLongitude?: number;
   completedOrdersCount?: number;
+  completedToday?: number;
+  deliveredCount?: number;
+  activeOrdersCount?: number;
   rating?: number;
 }
 
@@ -176,10 +186,12 @@ export interface MarketingCampaign {
   descriptionAr: string;
   descriptionEn: string;
   discountPercentage: number;
+  discountPercent?: number;
   bannerImage: string;
   targetCategory?: string;
   isActive: boolean;
   validUntil: string;
+  minOrderAmount?: number;
   code?: string;
 }
 
@@ -200,6 +212,7 @@ export interface StoreSettings {
   whatsappPhone?: string;
   whatsappNumber: string;
   supportEmail: string;
+  contactEmail?: string;
   minOrderAmount: number;
   freeShippingThreshold: number;
   freeDeliveryThreshold?: number;
@@ -220,6 +233,7 @@ export interface StoreSettings {
   heroBannerPrice?: number;
   heroBannerOldPrice?: number;
   enableAnimations?: boolean;
+  soundAlertsEnabled?: boolean;
   logoAnimation?: 'pulse' | 'glow' | 'none';
   bannerAnimation?: 'float' | 'glow' | 'zoom' | 'none';
 }

@@ -5,7 +5,7 @@ import { Flame, Plus, Star, Check, Sparkles, Clock, ShieldCheck, ShoppingCart } 
 
 interface ProductCardProps {
   product: Product;
-  onAddToCart: (product: Product, selectedWeightGrams: number, quantity: number, price: number) => void;
+  onAddToCart: (product: Product, selectedWeightGrams: number | string, quantity: number, price: number) => void;
   onOpenDetails: (product: Product) => void;
   lang: Language;
 }

@@ -6,10 +6,14 @@ import { X, MapPin, Navigation, Clock, ShieldCheck, Phone, Truck } from 'lucide-
 interface InteractiveMapModalProps {
   isOpen: boolean;
   onClose: () => void;
-  addresses: DeliveryAddress[];
-  onSelectAddress: (addr: DeliveryAddress) => void;
-  storeSettings: StoreSettings;
-  lang: Language;
+  addresses?: DeliveryAddress[];
+  onSaveAddress?: (addr: any) => void;
+  onUpdateAddress?: (idOrAddr: any, addr?: any) => void;
+  onDeleteAddress?: (id: string) => void;
+  selectedAddressId?: string;
+  onSelectAddress?: (addr: any) => void;
+  storeSettings?: StoreSettings;
+  lang?: Language;
 }
 
 export const InteractiveMapModal: React.FC<InteractiveMapModalProps> = ({

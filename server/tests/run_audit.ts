@@ -5,12 +5,20 @@ const BASE_URL = 'http://localhost:3000';
 
 async function req(url: string, options: any = {}) {
   const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
-  const res = await fetch(`${BASE_URL}${url}`, { ...options, headers });
-  const text = await res.text();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
   try {
-    return { status: res.status, ok: res.ok, json: JSON.parse(text) };
-  } catch {
-    return { status: res.status, ok: res.ok, text };
+    const res = await fetch(`${BASE_URL}${url}`, { ...options, headers, signal: controller.signal });
+    clearTimeout(timeoutId);
+    const text = await res.text();
+    try {
+      return { status: res.status, ok: res.ok, json: JSON.parse(text) };
+    } catch {
+      return { status: res.status, ok: res.ok, text };
+    }
+  } catch (err: any) {
+    clearTimeout(timeoutId);
+    return { status: 500, ok: false, json: { success: false, message: err.message } };
   }
 }
 

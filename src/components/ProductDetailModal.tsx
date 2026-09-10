@@ -9,7 +9,7 @@ import {
 interface ProductDetailModalProps {
   product: Product | null;
   onClose: () => void;
-  onAddToCart: (product: Product, selectedWeight: number, quantity: number, price: number) => void;
+  onAddToCart: (product: Product, selectedWeight: number | string, quantity: number, price: number) => void;
   reviews: Review[];
   onAddReview: (productId: string, rating: number, comment: string, name: string) => void;
   lang: Language;

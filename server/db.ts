@@ -32,24 +32,48 @@ class DatabaseProxy {
     return d1.getProducts();
   }
 
+  public async getProductsAsync(): Promise<Product[]> {
+    return d1.getProductsAsync();
+  }
+
   public findProductById(id: string): Product | undefined {
     return d1.findProductById(id);
+  }
+
+  public async findProductByIdAsync(id: string): Promise<Product | undefined> {
+    return d1.findProductByIdAsync(id);
   }
 
   public addProduct(p: Product): Product {
     return d1.addProduct(p);
   }
 
+  public async addProductAsync(p: Product): Promise<Product> {
+    return d1.addProductAsync(p);
+  }
+
   public updateProduct(id: string, p: Partial<Product>): Product | null {
     return d1.updateProduct(id, p);
+  }
+
+  public async updateProductAsync(id: string, p: Partial<Product>): Promise<Product | null> {
+    return d1.updateProductAsync(id, p);
   }
 
   public deleteProduct(id: string): boolean {
     return d1.deleteProduct(id);
   }
 
+  public async deleteProductAsync(id: string): Promise<boolean> {
+    return d1.deleteProductAsync(id);
+  }
+
   public getCategories() {
     return d1.getCategories();
+  }
+
+  public async getCategoriesAsync() {
+    return d1.getCategoriesAsync();
   }
 
   // Users
@@ -57,16 +81,32 @@ class DatabaseProxy {
     return d1.getUsers();
   }
 
+  public async getUsersAsync(): Promise<UserAccount[]> {
+    return d1.getUsersAsync();
+  }
+
   public findUserById(id: string): UserAccount | undefined {
     return d1.findUserById(id);
+  }
+
+  public async findUserByIdAsync(id: string): Promise<UserAccount | undefined> {
+    return d1.findUserByIdAsync(id);
   }
 
   public findUserByPhone(phone: string): UserAccount | undefined {
     return d1.findUserByPhone(phone);
   }
 
+  public async findUserByPhoneAsync(phone: string): Promise<UserAccount | undefined> {
+    return d1.findUserByPhoneAsync(phone);
+  }
+
   public addUser(user: UserAccount): UserAccount {
     return d1.addUser(user);
+  }
+
+  public async addUserAsync(user: UserAccount): Promise<UserAccount> {
+    return d1.addUserAsync(user);
   }
 
   public updateUser(id: string, updates: Partial<UserAccount>): UserAccount | null {
@@ -81,6 +121,10 @@ class DatabaseProxy {
     return d1.getCustomers();
   }
 
+  public async getCustomersAsync(): Promise<CustomerRecord[]> {
+    return d1.getCustomersAsync();
+  }
+
   public findOrCreateCustomer(name: string, phone: string, district?: string): CustomerRecord {
     return d1.findOrCreateCustomer(name, phone, district);
   }
@@ -90,12 +134,24 @@ class DatabaseProxy {
     return d1.getOrders();
   }
 
+  public async getOrdersAsync(filter?: { phone?: string; customerId?: string; status?: string }): Promise<Order[]> {
+    return d1.getOrdersAsync(filter);
+  }
+
   public findOrderById(id: string): Order | undefined {
     return d1.findOrderById(id);
   }
 
+  public async findOrderByIdAsync(id: string): Promise<Order | undefined> {
+    return d1.findOrderByIdAsync(id);
+  }
+
   public getOrderItems(orderId: string): OrderItemRecord[] {
     return d1.getOrderItems(orderId);
+  }
+
+  public async getOrderItemsAsync(orderId: string): Promise<OrderItemRecord[]> {
+    return d1.getOrderItemsAsync(orderId);
   }
 
   public addOrder(order: Order): Order {
@@ -106,8 +162,12 @@ class DatabaseProxy {
     return d1.createOrderAtomic(orderData);
   }
 
-  public async updateOrderStatus(id: string, status: Order['status'], driverNotes?: string, actor?: string): Promise<Order | null> {
-    return d1.updateOrderStatus(id, status, driverNotes, actor);
+  public async updateOrderStatus(id: string, status: Order['status'], driverNotes?: string, actor?: string, driverInfo?: { driverId?: string; driverName?: string; driverPhone?: string }): Promise<Order | null> {
+    return d1.updateOrderStatus(id, status, driverNotes, actor, driverInfo);
+  }
+
+  public async updateOrderDriverAsync(id: string, driverId: string, driverName?: string, driverPhone?: string): Promise<Order | null> {
+    return d1.updateOrderDriverAsync(id, driverId, driverName, driverPhone);
   }
 
   public updateOrderDriver(id: string, driverId: string, driverName: string, driverPhone: string): Order | null {
@@ -124,8 +184,16 @@ class DatabaseProxy {
     return d1.getReviews();
   }
 
+  public async getReviewsAsync(): Promise<Review[]> {
+    return d1.getReviewsAsync();
+  }
+
   public addReview(review: Review): Review {
     return d1.addReview(review);
+  }
+
+  public async addReviewAsync(review: Review): Promise<Review> {
+    return d1.addReviewAsync(review);
   }
 
   // Coupons
@@ -133,8 +201,16 @@ class DatabaseProxy {
     return d1.getCoupons();
   }
 
+  public async getCouponsAsync(): Promise<Coupon[]> {
+    return d1.getCouponsAsync();
+  }
+
   public findCoupon(code: string): Coupon | undefined {
     return d1.findCoupon(code);
+  }
+
+  public async findCouponAsync(code: string): Promise<Coupon | undefined> {
+    return d1.findCouponAsync(code);
   }
 
   public addCoupon(coupon: Coupon): Coupon {
@@ -147,6 +223,10 @@ class DatabaseProxy {
     return coupon;
   }
 
+  public async addCouponAsync(coupon: Coupon): Promise<Coupon> {
+    return d1.addCouponAsync(coupon);
+  }
+
   public deleteCoupon(code: string): boolean {
     const coupons = d1.getCoupons();
     const idx = coupons.findIndex(c => c.code.toUpperCase() === code.toUpperCase());
@@ -157,9 +237,17 @@ class DatabaseProxy {
     return false;
   }
 
+  public async deleteCouponAsync(code: string): Promise<boolean> {
+    return d1.deleteCouponAsync(code);
+  }
+
   // Delivery Agents
   public getDeliveryAgents(): DeliveryAgent[] {
     return d1.getDeliveryAgents();
+  }
+
+  public async getDeliveryAgentsAsync(): Promise<DeliveryAgent[]> {
+    return d1.getDeliveryAgentsAsync();
   }
 
   public updateDeliveryAgents(agents: DeliveryAgent[]): DeliveryAgent[] {
@@ -169,13 +257,25 @@ class DatabaseProxy {
     return current;
   }
 
+  public async updateDeliveryAgentsAsync(agents: DeliveryAgent[]): Promise<DeliveryAgent[]> {
+    return d1.updateDeliveryAgentsAsync(agents);
+  }
+
   // Store Settings
   public getSettings(): StoreSettings {
     return d1.getSettings();
   }
 
+  public async getSettingsAsync(): Promise<StoreSettings> {
+    return d1.getSettingsAsync();
+  }
+
   public updateSettings(settings: Partial<StoreSettings>): StoreSettings {
     return d1.updateSettings(settings);
+  }
+
+  public async updateSettingsAsync(settings: Partial<StoreSettings>): Promise<StoreSettings> {
+    return d1.updateSettingsAsync(settings);
   }
 
   // Gallery Items
@@ -208,6 +308,23 @@ class DatabaseProxy {
   // Inventory Transactions & Audit
   public getInventoryTransactions(): InventoryTransaction[] {
     return d1.getInventoryTransactions().map(tx => ({
+      id: tx.id,
+      productId: tx.productId,
+      productName: tx.productName,
+      type: tx.type,
+      quantity: tx.quantity,
+      previousStock: tx.previousStock,
+      newStock: tx.newStock,
+      reason: tx.reason,
+      orderId: tx.orderId,
+      performedBy: tx.performedBy,
+      date: tx.createdAt
+    }));
+  }
+
+  public async getInventoryTransactionsAsync(): Promise<InventoryTransaction[]> {
+    const list = await d1.getInventoryTransactionsAsync();
+    return list.map(tx => ({
       id: tx.id,
       productId: tx.productId,
       productName: tx.productName,
@@ -263,6 +380,19 @@ class DatabaseProxy {
     if (!customerPhone) return false;
     const cleanPhone = customerPhone.replace(/\D/g, '');
     return d1.getOrders().some(order => {
+      const orderPhone = order.customerPhone?.replace(/\D/g, '');
+      const isMatchPhone = orderPhone === cleanPhone;
+      const isDelivered = order.status === 'delivered';
+      const hasProduct = order.items.some(it => it.productId === productId);
+      return isMatchPhone && isDelivered && hasProduct;
+    });
+  }
+
+  public async hasDeliveredOrderForProductAsync(customerPhone: string, productId: string): Promise<boolean> {
+    if (!customerPhone) return false;
+    const cleanPhone = customerPhone.replace(/\D/g, '');
+    const orders = await d1.getOrdersAsync({ phone: cleanPhone });
+    return orders.some(order => {
       const orderPhone = order.customerPhone?.replace(/\D/g, '');
       const isMatchPhone = orderPhone === cleanPhone;
       const isDelivered = order.status === 'delivered';
