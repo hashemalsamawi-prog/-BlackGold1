@@ -30,8 +30,12 @@ export const onRequestPost: PagesFunction<PagesEnv> = async (context) => {
 
       for (const it of validatedItems) {
         stmts.push(
-          env.DB.prepare("UPDATE products SET stock = stock - ?, updated_at = datetime('now') WHERE id = ? AND stock >= ?;")
-            .bind(it.quantity, it.productId, it.quantity)
+          env.DB.prepare("UPDATE products SET stock = stock - ?, updated_at = datetime('now') WHERE id = ?;")
+            .bind(it.quantity, it.productId)
+        );
+        stmts.push(
+          env.DB.prepare("UPDATE inventory SET current_stock = current_stock - ?, updated_at = datetime('now') WHERE product_id = ?;")
+            .bind(it.quantity, it.productId)
         );
       }
 
@@ -83,21 +87,23 @@ export const onRequestPost: PagesFunction<PagesEnv> = async (context) => {
         );
       }
 
-      const batchResults = await env.DB.batch(stmts);
+      // Execute entire transaction atomically: triggers and CHECK constraints force total rollback on insufficient stock
+      await env.DB.batch(stmts);
 
-      for (let i = 0; i < validatedItems.length; i++) {
-        if (!batchResults[i]?.meta?.changes) {
-          return Response.json({ success: false, message: `الكمية غير متوفرة: ${validatedItems[i].productNameAr}` }, { status: 400 });
-        }
-      }
-
-      // Read after write
+      // Read after write directly from D1
       const order = await env.DB.prepare("SELECT * FROM orders WHERE id = ? LIMIT 1;").bind(orderId).first();
       return Response.json({ success: true, data: order });
     }
 
     return Response.json({ success: false, message: 'Invalid action' }, { status: 400 });
   } catch (err: any) {
+    const msg = err.message || '';
+    if (msg.includes('Insufficient stock') || msg.includes('prevent_negative_stock') || msg.includes('CHECK constraint failed')) {
+      return Response.json({ success: false, message: 'عذراً! الكمية المطلوبة تتجاوز المخزون المتاح حالياً.' }, { status: 400 });
+    }
+    if (msg.includes('Coupon usage limit') || msg.includes('prevent_coupon_overuse')) {
+      return Response.json({ success: false, message: 'عذراً! وصل هذا الكوبون للحد الأقصى من مرات الاستخدام المسموح بها.' }, { status: 400 });
+    }
     return Response.json({ success: false, message: err.message }, { status: 500 });
   }
 };

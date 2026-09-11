@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { CartItem, Language, DeliveryAddress, Order } from '../types';
 import { SANAA_DISTRICTS } from '../data/mockData';
 import { 
   X, Check, ShieldCheck, MapPin, Truck, Phone, User, 
-  CreditCard, Banknote, Clock, Sparkles, AlertCircle, MessageSquare
+  CreditCard, Banknote, Clock, Sparkles, AlertCircle, MessageSquare,
+  ArrowRight
 } from 'lucide-react';
 
 interface CheckoutModalProps {
@@ -51,6 +52,26 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const [notes, setNotes] = useState(customerNotes || '');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+
+  // Synchronize state when opened
+  useEffect(() => {
+    if (isOpen) {
+      if (selectedDistrictName) setDistrict(selectedDistrictName);
+      if (customerNotes) setNotes(customerNotes);
+      setErrorMsg('');
+    }
+  }, [isOpen, selectedDistrictName, customerNotes]);
+
+  // Handle ESC key to close modal
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isOpen) {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   // Dynamic shipping fee based on selected district
   const selectedDistrictObj = SANAA_DISTRICTS.find((d) => d.nameAr === district);
@@ -245,6 +266,8 @@ ${discount > 0 ? `🏷️ *خصم الكوبون:* -${discount.toLocaleString()}
     window.open(`https://wa.me/${targetWhatsApp.replace(/\D/g, '')}?text=${encodeURIComponent(message)}`, '_blank');
   };
 
+  if (!isOpen) return null;
+
   return (
     <div 
       className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md overflow-y-auto"
@@ -256,23 +279,29 @@ ${discount > 0 ? `🏷️ *خصم الكوبون:* -${discount.toLocaleString()}
         className="relative w-full max-w-2xl rounded-3xl bg-zinc-900 border border-zinc-700 shadow-2xl p-5 sm:p-7 my-auto max-h-[92vh] overflow-y-auto text-right animate-in fade-in zoom-in-95 duration-200"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Close Button */}
-        <button
-          onClick={onClose}
-          className="absolute top-5 left-5 p-2 rounded-xl bg-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-700 transition-colors cursor-pointer"
-          title="إغلاق"
-        >
-          <X className="w-5 h-5" />
-        </button>
+        {/* Top Header Bar with Prominent Close / Back Button */}
+        <div className="flex items-center justify-between gap-3 mb-5 pb-3 border-b border-zinc-800">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-amber-500 text-black flex items-center justify-center font-black shadow-lg shadow-amber-500/20 shrink-0">
+              <Truck className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-base sm:text-lg font-black text-white">إتمام طلب وتوصيل فحم الذهب الأسود</h2>
+              <p className="text-[11px] sm:text-xs text-zinc-400">تأكيد فوري وتوجيه مباشر لمندوب التوصيل في منطقتك بصنعاء</p>
+            </div>
+          </div>
 
-        <div className="flex items-center gap-3 mb-5">
-          <div className="w-10 h-10 rounded-2xl bg-amber-500 text-black flex items-center justify-center font-black shadow-lg shadow-amber-500/20 shrink-0">
-            <Truck className="w-5 h-5" />
-          </div>
-          <div>
-            <h2 className="text-base sm:text-lg font-black text-white">إتمام طلب وتوصيل فحم الذهب الأسود</h2>
-            <p className="text-[11px] sm:text-xs text-zinc-400">تأكيد فوري وتوجيه مباشر لمندوب التوصيل في منطقتك بصنعاء</p>
-          </div>
+          {/* Close & Return Button */}
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-600 text-zinc-300 hover:text-white border border-zinc-700 transition-colors cursor-pointer shrink-0"
+            title="إغلاق والرجوع للشاشة السابقة"
+            aria-label="إغلاق الشاشة والرجوع"
+          >
+            <span className="text-xs font-bold hidden sm:inline">رجوع</span>
+            <X className="w-5 h-5" />
+          </button>
         </div>
 
         {errorMsg && (
@@ -474,6 +503,15 @@ ${discount > 0 ? `🏷️ *خصم الكوبون:* -${discount.toLocaleString()}
             >
               <MessageSquare className="w-4 h-4 text-white fill-white" />
               <span>أو إرسال الطلب عبر الواتساب مباشرة (WhatsApp) 💬</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={onClose}
+              className="w-full py-2.5 rounded-2xl bg-zinc-800/80 hover:bg-zinc-800 text-zinc-300 hover:text-white font-bold text-xs flex items-center justify-center gap-2 transition-all border border-zinc-700/60 cursor-pointer active:scale-[0.99]"
+            >
+              <ArrowRight className="w-4 h-4 text-zinc-400" />
+              <span>إلغاء والرجوع للشاشة السابقة</span>
             </button>
           </div>
         </form>

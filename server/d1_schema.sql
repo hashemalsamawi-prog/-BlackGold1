@@ -305,3 +305,11 @@ WHEN NEW.current_stock < 0
 BEGIN
     SELECT RAISE(ABORT, 'Insufficient stock: inventory current_stock cannot be negative');
 END;
+
+CREATE TRIGGER IF NOT EXISTS prevent_coupon_overuse
+BEFORE UPDATE ON coupons
+FOR EACH ROW
+WHEN NEW.max_uses IS NOT NULL AND NEW.usage_count > NEW.max_uses
+BEGIN
+    SELECT RAISE(ABORT, 'Coupon usage limit exceeded');
+END;

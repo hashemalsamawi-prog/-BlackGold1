@@ -107,11 +107,15 @@ async function handleCreateOrderAtomic(db: D1Database, data: CreateOrderPayload)
   // 2. Prepare atomic batch statements
   const statements: D1PreparedStatement[] = [];
 
-  // Conditional stock decrement: UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?
+  // Stock decrement enforced by prevent_negative_stock trigger & CHECK(stock >= 0)
   for (const it of data.validatedItems) {
     statements.push(
-      db.prepare("UPDATE products SET stock = stock - ?, updated_at = datetime('now') WHERE id = ? AND stock >= ?;")
-        .bind(it.quantity, it.productId, it.quantity)
+      db.prepare("UPDATE products SET stock = stock - ?, updated_at = datetime('now') WHERE id = ?;")
+        .bind(it.quantity, it.productId)
+    );
+    statements.push(
+      db.prepare("UPDATE inventory SET current_stock = current_stock - ?, updated_at = datetime('now') WHERE product_id = ?;")
+        .bind(it.quantity, it.productId)
     );
   }
 
@@ -220,21 +224,14 @@ async function handleCreateOrderAtomic(db: D1Database, data: CreateOrderPayload)
   // Update coupon usage if provided
   if (data.couponCode) {
     statements.push(
-      db.prepare("UPDATE coupons SET usage_count = usage_count + 1 WHERE code = ? AND (max_uses IS NULL OR usage_count < max_uses);")
+      db.prepare("UPDATE coupons SET usage_count = usage_count + 1 WHERE code = ?;")
         .bind(data.couponCode)
     );
   }
 
-  // 3. Execute all statements in native D1 batch transaction
-  const batchResults = await db.batch(statements);
-
-  // Check that stock updates actually decremented rows (meta.changes > 0)
-  for (let i = 0; i < data.validatedItems.length; i++) {
-    const res = batchResults[i];
-    if (!res.meta || res.meta.changes === 0) {
-      throw new Error(`الكمية المطلوبة من ${data.validatedItems[i].productNameAr} تتجاوز المخزون المتاح`);
-    }
-  }
+  // 3. Execute all statements in native D1 batch transaction:
+  // Triggers and CHECK constraints guarantee complete atomic rollback if stock or coupon limits are violated
+  await db.batch(statements);
 
   // 4. Read-after-write from D1
   const createdOrder = await db.prepare("SELECT * FROM orders WHERE id = ? LIMIT 1;").bind(data.orderId).first();

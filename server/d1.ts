@@ -102,7 +102,7 @@ export const VALID_ORDER_STATUS_TRANSITIONS: Record<string, string[]> = {
   shipped: ['delivering', 'on_way', 'delivered', 'cancelled'],
   delivering: ['delivered', 'cancelled'],
   on_way: ['delivering', 'delivered', 'cancelled'],
-  delivered: [],
+  delivered: ['completed'],
   completed: [],
   cancelled: []
 };
@@ -665,7 +665,7 @@ class D1DatabaseAccessLayer {
   }
 
   /**
-   * Execute raw query or compound SQL batch directly on Cloudflare D1 HTTP REST API
+   * Execute raw query directly on Cloudflare D1 HTTP REST API
    */
   public async executeCloudflareD1Raw(sql: string, params: any[] = []): Promise<{ success: boolean; result?: any[]; errors?: any[]; messages?: any[] }> {
     if (!this.isD1Configured()) {
@@ -684,13 +684,48 @@ class D1DatabaseAccessLayer {
           'Authorization': `Bearer ${CLOUDFLARE_CONFIG.apiToken}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(body)
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(5000)
       });
 
       const json = await res.json();
       return json;
     } catch (err: any) {
       console.warn('Cloudflare D1 HTTP query error:', err);
+      return { success: false, errors: [{ code: 5000, message: err.message || 'Network error' }] };
+    }
+  }
+
+  /**
+   * Execute compound batch of SQL statements atomically on Cloudflare D1 HTTP REST API.
+   * If any statement fails (e.g. check constraint or prevent_negative_stock trigger),
+   * Cloudflare D1 rolls back the entire batch transaction and returns success: false.
+   */
+  public async executeCloudflareD1BatchRaw(
+    statements: Array<{ sql: string; params?: any[] }>
+  ): Promise<{ success: boolean; result?: any[]; errors?: any[]; messages?: any[] }> {
+    if (!this.isD1Configured()) {
+      return { success: false, errors: [{ code: 5000, message: 'Cloudflare D1 is not configured' }] };
+    }
+
+    try {
+      const endpoint = `https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_CONFIG.accountId}/d1/database/${CLOUDFLARE_CONFIG.databaseId}/query`;
+      // Cloudflare D1 batch endpoint accepts { batch: [{ sql, params }] }
+      const body: any = { batch: statements };
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${CLOUDFLARE_CONFIG.apiToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(5000)
+      });
+
+      const json = await res.json();
+      return json;
+    } catch (err: any) {
+      console.warn('Cloudflare D1 HTTP batch query error:', err);
       return { success: false, errors: [{ code: 5000, message: err.message || 'Network error' }] };
     }
   }
@@ -1433,63 +1468,48 @@ class D1DatabaseAccessLayer {
       }
     }
 
-    // 1. ATOMIC CONDITIONAL STOCK CHECK & DEDUCTION (Cloudflare D1 or Local Fallback)
+    // 1. ATOMIC BATCH EXECUTION ON CLOUDFLARE D1
     if (this.isD1Configured()) {
-      const successfullyDeducted: Array<{ productId: string; quantity: number; nameAr: string }> = [];
-      let stockError: string | null = null;
+      const batchStatements: Array<{ sql: string; params?: any[] }> = [];
 
-      // Conditional SQL check & deduction:
-      // UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?
+      // 1. Stock deduction statements (Enforced by database trigger prevent_negative_stock & CHECK(stock >= 0))
       for (const it of orderData.validatedItems) {
-        const updateRes = await this.executeCloudflareD1Raw(
-          "UPDATE products SET stock = stock - ?, updated_at = datetime('now') WHERE id = ? AND stock >= ?;",
-          [it.quantity, it.productId, it.quantity]
-        );
-        const changes = updateRes.result?.[0]?.meta?.changes ?? 0;
-        if (!updateRes.success || changes === 0) {
-          stockError = `عذراً! الكمية المطلوبة من "${it.productNameAr}" تتجاوز المخزون المتاح حالياً.`;
-          break;
-        }
-        successfullyDeducted.push({ productId: it.productId, quantity: it.quantity, nameAr: it.productNameAr });
+        batchStatements.push({
+          sql: "UPDATE products SET stock = stock - ?, updated_at = datetime('now') WHERE id = ?;",
+          params: [it.quantity, it.productId]
+        });
+        batchStatements.push({
+          sql: "UPDATE inventory SET current_stock = current_stock - ?, updated_at = datetime('now') WHERE product_id = ?;",
+          params: [it.quantity, it.productId]
+        });
       }
 
-      // If any item failed conditional stock check, rollback already-deducted items and abort!
-      if (stockError) {
-        for (const ded of successfullyDeducted) {
-          await this.executeCloudflareD1Query(
-            "UPDATE products SET stock = stock + ?, updated_at = datetime('now') WHERE id = ?;",
-            [ded.quantity, ded.productId]
-          );
-        }
-        return { success: false, message: stockError };
-      }
-
-      // 2. Customer Upsert on D1
+      // 2. Customer Upsert statement
       const customerId = `cust-${cleanPhone}`;
-      await this.executeCloudflareD1Query(
-        `INSERT INTO customers (id, name, phone, district, street, notes, total_orders, total_spent, loyalty_points, created_at, updated_at) ` +
-        `VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, datetime('now'), datetime('now')) ` +
-        `ON CONFLICT(phone) DO UPDATE SET ` +
-        `name = CASE WHEN ? != '' AND ? != 'عميل زائر' THEN ? ELSE customers.name END, ` +
-        `district = COALESCE(?, customers.district), ` +
-        `total_orders = customers.total_orders + 1, ` +
-        `total_spent = customers.total_spent + ?, ` +
-        `loyalty_points = customers.loyalty_points + ?, ` +
-        `updated_at = datetime('now');`,
-        [
+      batchStatements.push({
+        sql: `INSERT INTO customers (id, name, phone, district, street, notes, total_orders, total_spent, loyalty_points, created_at, updated_at) ` +
+          `VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, datetime('now'), datetime('now')) ` +
+          `ON CONFLICT(phone) DO UPDATE SET ` +
+          `name = CASE WHEN ? != '' AND ? != 'عميل زائر' THEN ? ELSE customers.name END, ` +
+          `district = COALESCE(?, customers.district), ` +
+          `total_orders = customers.total_orders + 1, ` +
+          `total_spent = customers.total_spent + ?, ` +
+          `loyalty_points = customers.loyalty_points + ?, ` +
+          `updated_at = datetime('now');`,
+        params: [
           customerId, orderData.customerName, cleanPhone, orderData.address.district, orderData.address.street || '', orderData.notes || '',
           orderData.total, Math.floor(orderData.total / 100),
           orderData.customerName, orderData.customerName, orderData.customerName,
           orderData.address.district, orderData.total, Math.floor(orderData.total / 100)
         ]
-      );
+      });
 
-      // 3. Insert Order on D1
-      await this.executeCloudflareD1Query(
-        `INSERT INTO orders (` +
-        `id, order_number, customer_id, customer_name, customer_phone, delivery_district, delivery_address, items_json, subtotal, shipping_fee, discount, total, payment_method, payment_status, status, is_stock_rolled_back, idempotency_key, coupon_code, driver_id, driver_name, driver_phone, notes, driver_notes, timeline_json, created_at, updated_at` +
-        `) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'received', 0, ?, ?, ?, ?, ?, ?, '', ?, datetime('now'), datetime('now'));`,
-        [
+      // 3. Insert Order statement
+      batchStatements.push({
+        sql: `INSERT INTO orders (` +
+          `id, order_number, customer_id, customer_name, customer_phone, delivery_district, delivery_address, items_json, subtotal, shipping_fee, discount, total, payment_method, payment_status, status, is_stock_rolled_back, idempotency_key, coupon_code, driver_id, driver_name, driver_phone, notes, driver_notes, timeline_json, created_at, updated_at` +
+          `) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'received', 0, ?, ?, ?, ?, ?, ?, '', ?, datetime('now'), datetime('now'));`,
+        params: [
           orderData.orderId, orderData.orderNumber, customerId, orderData.customerName, cleanPhone,
           orderData.address.district, orderData.address.street || orderData.address.district,
           JSON.stringify(orderData.validatedItems),
@@ -1501,40 +1521,49 @@ class D1DatabaseAccessLayer {
           orderData.notes || '',
           JSON.stringify(orderData.timeline)
         ]
-      );
+      });
 
-      // 4. Insert Relational Order Items & Inventory Logs on D1
+      // 4. Order items and inventory logs statements
       for (const it of orderData.validatedItems) {
         const itemRowId = `oi-${orderData.orderId}-${it.productId}-${Math.random().toString(36).substring(2, 7)}`;
-        await this.executeCloudflareD1Query(
-          `INSERT INTO order_items (id, order_id, product_id, productId, product_name_ar, product_name_en, weight_option, quantity, unit_price, total_price, created_at) ` +
-          `VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'));`,
-          [itemRowId, orderData.orderId, it.productId, it.productId, it.productNameAr, it.productNameEn || '', it.weight, it.quantity, it.unitPrice, it.unitPrice * it.quantity]
-        );
+        batchStatements.push({
+          sql: `INSERT INTO order_items (id, order_id, product_id, productId, product_name_ar, product_name_en, weight_option, quantity, unit_price, total_price, created_at) ` +
+            `VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'));`,
+          params: [itemRowId, orderData.orderId, it.productId, it.productId, it.productNameAr, it.productNameEn || '', it.weight, it.quantity, it.unitPrice, it.unitPrice * it.quantity]
+        });
 
         const logId = `tx-sale-${Date.now()}-${it.productId}-${Math.random().toString(36).substring(2, 6)}`;
-        const p = this.findProductById(it.productId);
-        const prevStock = p ? p.stock : 0;
-        const newStock = Math.max(0, prevStock - it.quantity);
-        await this.executeCloudflareD1Query(
-          `INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, order_id, performed_by, created_at) ` +
-          `VALUES (?, ?, ?, 'sale', ?, ?, ?, ?, ?, 'نظام الطلبات الآلي', datetime('now'));`,
-          [logId, it.productId, it.productNameAr, -it.quantity, prevStock, newStock, `مبيعات طلب جديد #${orderData.orderNumber}`, orderData.orderId]
-        );
+        batchStatements.push({
+          sql: `INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, order_id, performed_by, created_at) ` +
+            `VALUES (?, ?, ?, 'sale', ?, 0, 0, ?, ?, 'نظام الطلبات الذري', datetime('now'));`,
+          params: [logId, it.productId, it.productNameAr, -it.quantity, `مبيعات طلب جديد #${orderData.orderNumber}`, orderData.orderId]
+        });
       }
 
-      // 5. If coupon used, increment usage count safely on D1
+      // 5. Coupon usage statement
       if (orderData.couponCode) {
-        await this.executeCloudflareD1Query(
-          "UPDATE coupons SET usage_count = usage_count + 1 WHERE code = ? AND (max_uses IS NULL OR usage_count < max_uses);",
-          [orderData.couponCode]
-        );
+        batchStatements.push({
+          sql: "UPDATE coupons SET usage_count = usage_count + 1 WHERE code = ?;",
+          params: [orderData.couponCode]
+        });
       }
 
-      // 6. Read back the newly created order directly from Cloudflare D1
+      // 6. Execute entire transaction atomically on Cloudflare D1
+      const batchRes = await this.executeCloudflareD1BatchRaw(batchStatements);
+      if (!batchRes.success) {
+        const errStr = (batchRes.errors || []).map(e => e.message).join('; ');
+        let arabicErr = "فشلت عملية إنشاء الطلب لعدم توفر المخزون الكافي للمنتجات المطلوبة.";
+        if (errStr.includes('Insufficient stock') || errStr.includes('prevent_negative_stock') || errStr.includes('CHECK constraint failed')) {
+          arabicErr = "عذراً! الكمية المطلوبة تتجاوز المخزون المتاح حالياً.";
+        } else if (errStr.includes('Coupon usage limit') || errStr.includes('prevent_coupon_overuse')) {
+          arabicErr = "عذراً! وصل هذا الكوبون للحد الأقصى من مرات الاستخدام المسموح بها.";
+        }
+        return { success: false, message: arabicErr };
+      }
+
+      // Read back created order directly from D1
       const createdFromD1 = await this.findOrderByIdAsync(orderData.orderId);
       if (createdFromD1) {
-        // Sync to in-memory cache
         this.tables.orders.unshift(createdFromD1);
         for (const it of orderData.validatedItems) {
           const p = this.findProductById(it.productId);
@@ -1550,6 +1579,16 @@ class D1DatabaseAccessLayer {
           return {
             success: false,
             message: `عذراً! الكمية المطلوبة من "${it.productNameAr}" تتجاوز المخزون المتاح حالياً.`
+          };
+        }
+      }
+
+      if (orderData.couponCode) {
+        const c = this.findCoupon(orderData.couponCode);
+        if (c && c.maxUses && c.usageCount >= c.maxUses) {
+          return {
+            success: false,
+            message: 'عذراً! وصل هذا الكوبون للحد الأقصى من مرات الاستخدام المسموح بها.'
           };
         }
       }
@@ -1707,8 +1746,7 @@ class D1DatabaseAccessLayer {
       return false;
     }
 
-    // 2. Atomic Idempotent Update on Cloudflare D1:
-    // UPDATE orders SET is_stock_rolled_back = 1, status = 'cancelled' WHERE id = ? AND is_stock_rolled_back = 0;
+    // 2. Atomic Idempotent Update on Cloudflare D1 or In-Memory
     if (this.isD1Configured()) {
       const rollbackRes = await this.executeCloudflareD1Raw(
         "UPDATE orders SET is_stock_rolled_back = 1, status = 'cancelled', cancelled_at = datetime('now'), updated_at = datetime('now') WHERE (id = ? OR order_number = ?) AND (is_stock_rolled_back = 0 OR is_stock_rolled_back IS NULL);",
@@ -1748,7 +1786,9 @@ class D1DatabaseAccessLayer {
       return true;
     }
 
-    // 4. Iterate over all items in the order and restore stock on Cloudflare D1
+    // 4. Batch restoration statements for D1
+    const rollbackBatch: Array<{ sql: string; params?: any[] }> = [];
+
     for (const it of itemsToRollback) {
       const product = await this.findProductByIdAsync(it.productId);
       const prevStock = product ? product.stock : 0;
@@ -1757,15 +1797,19 @@ class D1DatabaseAccessLayer {
       const logId = `tx-rollback-${Date.now()}-${it.productId}-${Math.random().toString(36).substring(2, 6)}`;
 
       if (this.isD1Configured()) {
-        await this.executeCloudflareD1Query(
-          "UPDATE products SET stock = stock + ?, updated_at = datetime('now') WHERE id = ?;",
-          [restoredQty, it.productId]
-        );
-        await this.executeCloudflareD1Query(
-          `INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, order_id, performed_by, created_at) ` +
-          `VALUES (?, ?, ?, 'STOCK_ROLLBACK', ?, ?, ?, ?, ?, ?, datetime('now'));`,
-          [logId, it.productId, it.productNameAr, restoredQty, prevStock, newStock, `استرجاع مخزون لإلغاء الطلب #${order.orderNumber || order.id}`, order.id, actor]
-        );
+        rollbackBatch.push({
+          sql: "UPDATE products SET stock = stock + ?, updated_at = datetime('now') WHERE id = ?;",
+          params: [restoredQty, it.productId]
+        });
+        rollbackBatch.push({
+          sql: "UPDATE inventory SET current_stock = current_stock + ?, updated_at = datetime('now') WHERE product_id = ?;",
+          params: [restoredQty, it.productId]
+        });
+        rollbackBatch.push({
+          sql: `INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, order_id, performed_by, created_at) ` +
+            `VALUES (?, ?, ?, 'STOCK_ROLLBACK', ?, ?, ?, ?, ?, ?, datetime('now'));`,
+          params: [logId, it.productId, it.productNameAr, restoredQty, prevStock, newStock, `استرجاع مخزون لإلغاء الطلب #${order.orderNumber || order.id}`, order.id, actor]
+        });
       }
 
       if (product) {
@@ -1787,6 +1831,18 @@ class D1DatabaseAccessLayer {
         createdAt: new Date().toISOString()
       };
       this.tables.inventory_logs.unshift(logRecord);
+    }
+
+    // Restore coupon usage count if coupon was applied
+    if (order.couponCode && this.isD1Configured()) {
+      rollbackBatch.push({
+        sql: "UPDATE coupons SET usage_count = MAX(0, usage_count - 1) WHERE code = ?;",
+        params: [order.couponCode]
+      });
+    }
+
+    if (this.isD1Configured() && rollbackBatch.length > 0) {
+      await this.executeCloudflareD1BatchRaw(rollbackBatch);
     }
 
     // 5. Update payment status if exists to cancelled / failed
@@ -1817,13 +1873,17 @@ class D1DatabaseAccessLayer {
     const order = await this.findOrderByIdAsync(orderId) || this.findOrderById(orderId);
     if (!order) return null;
 
-    // Verify driver from active delivery agents
+    // Verify driver from active delivery agents strictly
     const agents = await this.getDeliveryAgentsAsync();
     const verifiedAgent = agents.find(a => a.id === driverId || (driverName && a.name.trim() === driverName.trim()));
 
-    const finalDriverId = verifiedAgent ? verifiedAgent.id : driverId;
-    const finalDriverName = verifiedAgent ? verifiedAgent.name : (driverName || order.driverName || 'أحمد الكبسي');
-    const finalDriverPhone = verifiedAgent ? verifiedAgent.phone : (driverPhone || order.driverPhone || '775000150');
+    if (!verifiedAgent) {
+      throw new Error("المندوب المحدد غير موجود في قاعدة بيانات المناديب المعتمدة");
+    }
+
+    const finalDriverId = verifiedAgent.id;
+    const finalDriverName = verifiedAgent.name;
+    const finalDriverPhone = verifiedAgent.phone;
 
     order.driverId = finalDriverId;
     order.driverName = finalDriverName;
@@ -1880,10 +1940,15 @@ class D1DatabaseAccessLayer {
       order.driverNotes = driverNotes;
     }
 
-    if (driverInfo) {
-      if (driverInfo.driverId) order.driverId = driverInfo.driverId;
-      if (driverInfo.driverName) order.driverName = driverInfo.driverName;
-      if (driverInfo.driverPhone) order.driverPhone = driverInfo.driverPhone;
+    if (driverInfo && driverInfo.driverId) {
+      const agents = await this.getDeliveryAgentsAsync();
+      const verified = agents.find(a => a.id === driverInfo.driverId);
+      if (!verified) {
+        throw new Error("المندوب المحدد غير موجود في سجل المناديب المعتمدين");
+      }
+      order.driverId = verified.id;
+      order.driverName = verified.name;
+      order.driverPhone = verified.phone;
     }
 
     const now = new Date();
@@ -1903,6 +1968,7 @@ class D1DatabaseAccessLayer {
       on_way: { ar: "المندوب في الطريق إلى موقع العميل", en: "Driver On The Way" },
       delivering: { ar: "المندوب في الحي وقريب من موقعك", en: "Near Delivery Location" },
       delivered: { ar: "تم تسليم الطلب للعميل بنجاح", en: "Delivered Successfully" },
+      completed: { ar: "تم إكمال الطلب وتأكيد الاستلام نهائياً", en: "Order Completed" },
       cancelled: { ar: "تم إلغاء الطلب واسترجاع المخزون", en: "Order Cancelled & Stock Rolled Back" }
     };
 

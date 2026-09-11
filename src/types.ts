@@ -111,6 +111,7 @@ export interface Order {
   cancelledAt?: string;
   isWholesale?: boolean;
   isStockRolledBack?: boolean;
+  couponCode?: string;
   idempotencyKey?: string;
   timeline?: Array<{ status: string; timestamp?: string; time?: string; titleAr?: string; titleEn?: string; note?: string }>;
 }

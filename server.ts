@@ -979,10 +979,13 @@ app.patch("/api/orders/:id/status", async (req: AuthenticatedRequest, res) => {
   if (isManagement && (driverId || driverName)) {
     const agents = await db.getDeliveryAgentsAsync();
     const verifiedAgent = agents.find(a => a.id === driverId || (driverName && a.name.trim() === driverName.trim()));
+    if (!verifiedAgent) {
+      return res.status(400).json({ success: false, message: "المندوب المحدد غير موجود في سجل المناديب المعتمدين" });
+    }
     driverInfo = {
-      driverId: verifiedAgent ? verifiedAgent.id : (driverId || 'dr-1'),
-      driverName: verifiedAgent ? verifiedAgent.name : (driverName || 'أحمد الكبسي'),
-      driverPhone: verifiedAgent ? verifiedAgent.phone : (driverPhone || '775000150')
+      driverId: verifiedAgent.id,
+      driverName: verifiedAgent.name,
+      driverPhone: verifiedAgent.phone
     };
     await db.updateOrderDriverAsync(id, driverInfo.driverId!, driverInfo.driverName!, driverInfo.driverPhone!);
   }
@@ -1025,15 +1028,11 @@ app.post("/api/orders/:id/assign-driver", async (req: AuthenticatedRequest, res)
   const agents = await db.getDeliveryAgentsAsync();
   const verifiedAgent = agents.find(a => a.id === driverId || (driverName && a.name.trim() === driverName.trim()));
 
-  if (!verifiedAgent && !driverId) {
-    return res.status(400).json({ success: false, message: "يرجى تحديد مندوب معتمد من القائمة" });
+  if (!verifiedAgent) {
+    return res.status(400).json({ success: false, message: "المندوب المحدد غير موجود في سجل المناديب المعتمدين" });
   }
 
-  const finalDriver = verifiedAgent || {
-    id: driverId,
-    name: driverName || 'مندوب الذهب الأسود',
-    phone: '775000150'
-  };
+  const finalDriver = verifiedAgent;
 
   const actor = `${req.user.name || req.user.role} (${req.user.phone || req.user.userId})`;
 
@@ -1093,12 +1092,14 @@ app.post("/api/orders/:id/cancel", async (req: AuthenticatedRequest, res) => {
     return res.status(403).json({ success: false, message: "غير مصرح لك بإلغاء هذا الطلب" });
   }
 
-  // Customers cannot cancel after dispatch
-  if (isCustomerOwner && !isManagement && ['shipped', 'on_way', 'delivering'].includes(order.status)) {
-    return res.status(400).json({ 
-      success: false, 
-      message: "لا يمكن إلغاء الطلب بعد خروجه مع المندوب للتوصيل. يرجى التواصل مع إدارة المتجر." 
-    });
+  // Customers can only cancel when status is 'pending' or 'received'
+  if (isCustomerOwner && !isManagement) {
+    if (!['pending', 'received'].includes(order.status)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "لا يمكن للعميل إلغاء الطلب إلا إذا كان في حالة قيد الانتظار أو مستلم (قبل التأكيد والتجهيز). يرجى التواصل مع إدارة المتجر للمساعدة." 
+      });
+    }
   }
 
   const actor = `${req.user.name || req.user.role} (${req.user.phone || req.user.userId})`;
