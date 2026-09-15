@@ -52,7 +52,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [customerName, setCustomerName] = useState(() => safeGetLocalStorage('bg_customer_name', ''));
   const [customerPhone, setCustomerPhone] = useState(() => safeGetLocalStorage('bg_customer_phone', ''));
   const [driverPhone, setDriverPhone] = useState('770099887');
-  const [driverPin, setDriverPin] = useState('1234');
+  const [driverPin, setDriverPin] = useState('');
   const [ownerPin, setOwnerPin] = useState('');
   const [pinError, setPinError] = useState<string | null>(null);
   const [phoneError, setPhoneError] = useState<string | null>(null);
@@ -584,7 +584,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                         type="button"
                         onClick={() => {
                           setDriverPhone(dr.phone);
-                          setDriverPin('1234');
                           if (driverError) setDriverError(null);
                         }}
                         className={`p-2 rounded-xl text-[11px] text-right border transition-all cursor-pointer ${
@@ -625,13 +624,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
                   <div>
                     <label className="block text-slate-300 font-bold mb-1">
-                      رمز دخول المندوب (PIN الافتراضي: 1234 أو 7777):
+                      رمز دخول المندوب (PIN):
                     </label>
                     <div className="relative">
                       <input
                         type="password"
                         maxLength={8}
-                        placeholder="1234"
+                        placeholder="رمز PIN السري"
                         value={driverPin}
                         onChange={(e) => {
                           setDriverPin(e.target.value);

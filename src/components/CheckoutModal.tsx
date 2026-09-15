@@ -117,6 +117,8 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
   const handleSubmitOrder = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+
     if (!customerName.trim()) {
       setErrorMsg('يرجى إدخال اسم المستلم');
       return;
@@ -148,6 +150,8 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       });
     }
 
+    const clientRequestId = `bg-ord-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+
     const orderPayload = {
       customerName: customerName.trim() || 'عميل المتجر',
       customerPhone: customerPhone.trim() || '770000000',
@@ -168,7 +172,8 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       },
       paymentMethod,
       notes: notes.trim(),
-      couponCode: couponCode || appliedCoupon?.code || undefined
+      couponCode: couponCode || appliedCoupon?.code || undefined,
+      idempotencyKey: clientRequestId
     };
 
     try {
@@ -180,7 +185,11 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
       const res = await fetch('/api/orders', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeader },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Idempotency-Key': clientRequestId,
+          ...authHeader
+        },
         body: JSON.stringify(orderPayload),
       });
       const data = await res.json();
@@ -205,6 +214,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   };
 
   const handleSendWhatsAppOrder = async () => {
+    if (isSubmitting) return;
     if (cart.length === 0) return;
     setErrorMsg('');
     setIsSubmitting(true);
@@ -212,6 +222,8 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     const clientName = customerName.trim() || 'عميل المتجر';
     const clientPhone = customerPhone.trim() || '770000000';
     const addr = addressDetails.trim() || 'صنعاء';
+
+    const clientRequestId = `bg-wa-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 
     const orderPayload = {
       customerName: clientName,
@@ -233,7 +245,8 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       },
       paymentMethod,
       notes: notes.trim() ? `${notes.trim()} (طلب مباشر عبر الواتساب)` : 'طلب مباشر عبر الواتساب',
-      couponCode: couponCode || appliedCoupon?.code || undefined
+      couponCode: couponCode || appliedCoupon?.code || undefined,
+      idempotencyKey: clientRequestId
     };
 
     try {
@@ -245,7 +258,11 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
       const res = await fetch('/api/orders', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeader },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Idempotency-Key': clientRequestId,
+          ...authHeader
+        },
         body: JSON.stringify(orderPayload),
       });
       const data = await res.json();
@@ -618,7 +635,8 @@ ${discount > 0 ? `🏷️ *خصم الكوبون:* -${discount.toLocaleString()}
               type="button"
               id="checkout-whatsapp-btn"
               onClick={handleSendWhatsAppOrder}
-              className="w-full py-3 rounded-2xl bg-[#25D366] hover:bg-[#20bd5a] text-white font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 transition-all border border-emerald-400/30 cursor-pointer active:scale-[0.99]"
+              disabled={isSubmitting}
+              className="w-full py-3 rounded-2xl bg-[#25D366] hover:bg-[#20bd5a] text-white font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 transition-all border border-emerald-400/30 cursor-pointer active:scale-[0.99] disabled:opacity-60 disabled:cursor-not-allowed"
             >
               <MessageSquare className="w-4 h-4 text-white fill-white" />
               <span>أو إرسال الطلب عبر الواتساب مباشرة (WhatsApp) 💬</span>

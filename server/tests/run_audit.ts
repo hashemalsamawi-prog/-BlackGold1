@@ -423,6 +423,136 @@ async function runAllTests() {
     `HTTP ${cancelAfterShipped.status}: ${cancelAfterShipped.json?.message}`
   );
 
+  // 23. Reject Hardcoded Fallback PINs in Admin Login
+  const fakeAdmin1 = await req('/api/auth/admin-login', {
+    method: 'POST',
+    body: JSON.stringify({ username: 'admin', password: '1234' })
+  });
+  const fakeAdmin2 = await req('/api/auth/admin-login', {
+    method: 'POST',
+    body: JSON.stringify({ username: 'admin', password: 'wrong-unauthorized-pin-0000' })
+  });
+  record(
+    '23. Reject Hardcoded Fallback PINs in Admin Login',
+    fakeAdmin1.status === 401 && fakeAdmin2.status === 401,
+    `Fallback PIN 1234 -> HTTP ${fakeAdmin1.status}, Unauthorized PIN -> HTTP ${fakeAdmin2.status}`
+  );
+
+  // 24. Reject Hardcoded Fallback PINs in Driver Login
+  const fakeDriver1 = await req('/api/auth/driver-login', {
+    method: 'POST',
+    body: JSON.stringify({ phone: '771122445', pin: '1234' })
+  });
+  const fakeDriver2 = await req('/api/auth/driver-login', {
+    method: 'POST',
+    body: JSON.stringify({ phone: '771122445', pin: 'wrong-unauthorized-pin-0000' })
+  });
+  record(
+    '24. Reject Hardcoded Fallback PINs in Driver Login',
+    fakeDriver1.status === 401 && fakeDriver2.status === 401,
+    `Fallback PIN 1234 -> HTTP ${fakeDriver1.status}, Unauthorized PIN -> HTTP ${fakeDriver2.status}`
+  );
+
+  // 25. Guest Isolation: Guest B Cannot Access Guest A's Order
+  const guestOrderResA = await req('/api/orders', {
+    method: 'POST',
+    headers: { 'x-idempotency-key': `GUEST-A-${Date.now()}` },
+    body: JSON.stringify({
+      customerName: 'الزائر أ',
+      customerPhone: '773333333',
+      address: { district: 'حدة' },
+      items: [{ productId: 'bg-prem-250g', quantity: 1 }]
+    })
+  });
+  const guestTokenA = guestOrderResA.json?.guestToken;
+  const guestOrderA = guestOrderResA.json?.data;
+
+  const guestOrderResB = await req('/api/orders', {
+    method: 'POST',
+    headers: { 'x-idempotency-key': `GUEST-B-${Date.now()}` },
+    body: JSON.stringify({
+      customerName: 'الزائر ب',
+      customerPhone: '774444444',
+      address: { district: 'السبعين' },
+      items: [{ productId: 'bg-prem-250g', quantity: 1 }]
+    })
+  });
+  const guestTokenB = guestOrderResB.json?.guestToken;
+  const guestOrderB = guestOrderResB.json?.data;
+
+  const guestBAccessA = await req(`/api/orders/${guestOrderA?.id}`, {
+    headers: { 'Authorization': `Bearer ${guestTokenB}` }
+  });
+  const guestAAccessA = await req(`/api/orders/${guestOrderA?.id}`, {
+    headers: { 'Authorization': `Bearer ${guestTokenA}` }
+  });
+  record(
+    '25. Guest Isolation: Single Order Access Protection',
+    guestBAccessA.status === 403 && guestAAccessA.status === 200,
+    `Guest B blocked with HTTP ${guestBAccessA.status}; Guest A authorized with HTTP ${guestAAccessA.status}`
+  );
+
+  // 26. Guest Isolation: My Orders Lists
+  const guestBMyOrders = await req('/api/my-orders', {
+    headers: { 'Authorization': `Bearer ${guestTokenB}` }
+  });
+  const guestBOrders = guestBMyOrders.json?.data || [];
+  const guestBSeesA = guestBOrders.some((o: any) => o.id === guestOrderA?.id || o.customerPhone === '773333333');
+  record(
+    '26. Guest Isolation: My-Orders List strictly isolated',
+    guestBMyOrders.json?.success === true && !guestBSeesA && guestBOrders.some((o: any) => o.id === guestOrderB?.id),
+    `Guest B sees only their order (${guestBOrders.length} total), zero leak of Guest A's order`
+  );
+
+  // 27. Driver Isolation: Driver A Cannot See Driver B's Orders
+  const driverAToken = generateToken({
+    userId: 'dr-1',
+    role: 'delivery',
+    phone: '770099887',
+    name: 'أحمد الكبسي'
+  });
+  const driverBToken = generateToken({
+    userId: 'dr-2',
+    role: 'delivery',
+    phone: '771122445',
+    name: 'محمد العنسي'
+  });
+
+  // Assign guestOrderA to Driver A and guestOrderB to Driver B via Admin
+  await req(`/api/orders/${guestOrderA?.id}/assign-driver`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${ownerToken}` },
+    body: JSON.stringify({ driverId: 'dr-1' })
+  });
+  await req(`/api/orders/${guestOrderB?.id}/assign-driver`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${ownerToken}` },
+    body: JSON.stringify({ driverId: 'dr-2' })
+  });
+
+  const driverAMyOrders = await req('/api/my-orders', {
+    headers: { 'Authorization': `Bearer ${driverAToken}` }
+  });
+  const driverAOrders = driverAMyOrders.json?.data || [];
+  const driverASeesB = driverAOrders.some((o: any) => o.id === guestOrderB?.id || o.driverId === 'dr-2');
+  record(
+    '27. Driver Isolation: Driver A cannot see Driver B orders',
+    driverAMyOrders.json?.success === true && !driverASeesB && driverAOrders.some((o: any) => o.id === guestOrderA?.id),
+    `Driver A sees only their assigned orders (${driverAOrders.length} orders), zero leak of Driver B's orders`
+  );
+
+  // 28. Driver Forbidden from modifying other driver's order
+  const driverBAttemptModifyA = await req(`/api/orders/${guestOrderA?.id}/status`, {
+    method: 'PATCH',
+    headers: { 'Authorization': `Bearer ${driverBToken}` },
+    body: JSON.stringify({ status: 'delivering' })
+  });
+  record(
+    '28. Driver RBAC: Blocked from updating other driver order',
+    driverBAttemptModifyA.status === 403,
+    `Driver B modifying Driver A's order blocked with HTTP ${driverBAttemptModifyA.status}: "${driverBAttemptModifyA.json?.message}"`
+  );
+
   // 22. D1 Health & Database Ping
   const pingD1 = await req('/api/health');
   record(

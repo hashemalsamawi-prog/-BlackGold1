@@ -213,10 +213,13 @@ app.post("/api/auth/admin-login", authRateLimiter, async (req, res) => {
     return pinOk || passOk;
   });
 
-  // Verify against ADMIN_PIN environment variable or default store PINs (1234 / 7777)
-  if (!matchedUser) {
-    const defaultPins = [process.env.ADMIN_PIN, '1234', '7777'].filter(Boolean).map(p => normalizeDigits(p as string).trim());
-    const isPinMatch = defaultPins.some(dp => timingSafeEqual(hashSecret(dp), hashedInput));
+  // Verify against dedicated ADMIN_PIN or ADMIN_PASSWORD environment secrets
+  // STRICT AUDIT: Zero hardcoded fallback PINs (no 1234, no 7777) allowed
+  if (!matchedUser && (process.env.ADMIN_PIN || process.env.ADMIN_PASSWORD)) {
+    const secureSecrets = [process.env.ADMIN_PIN, process.env.ADMIN_PASSWORD]
+      .filter(Boolean)
+      .map(p => normalizeDigits(p as string).trim());
+    const isPinMatch = secureSecrets.some(sec => timingSafeEqual(hashSecret(sec), hashedInput));
     if (isPinMatch) {
       let owner = users.find(u => u.role === 'owner');
       if (!owner) {
@@ -292,12 +295,17 @@ app.post("/api/auth/driver-login", authRateLimiter, async (req, res) => {
     const matchedAgent = agents.find(a => a.phone.replace(/\D/g, '') === cleanPhone);
 
     if (matchedAgent) {
-      // Validate secret against standard driver PINs or env variables
+      // Validate secret strictly against stored agent secret or dedicated environment secrets (no hardcoded fallback)
       const envDriverPin = process.env.DRIVER_PIN ? normalizeDigits(process.env.DRIVER_PIN.trim()) : '';
       const envAdminPin = process.env.ADMIN_PIN ? normalizeDigits(process.env.ADMIN_PIN.trim()) : '';
-      const validPins = [envDriverPin, envAdminPin, '1234', '2026', '7777'].filter(Boolean);
+      
+      const isAgentSecretValid = (matchedAgent as any).pinHash 
+        ? timingSafeEqual((matchedAgent as any).pinHash, hashedSecret) 
+        : ((matchedAgent as any).pin ? timingSafeEqual(hashSecret(normalizeDigits(String((matchedAgent as any).pin).trim())), hashedSecret) : false);
 
-      const isPinValid = validPins.some(p => timingSafeEqual(hashSecret(p), hashedSecret));
+      const isEnvSecretValid = [envDriverPin, envAdminPin].filter(Boolean).some(p => timingSafeEqual(hashSecret(p), hashedSecret));
+      const isPinValid = isAgentSecretValid || isEnvSecretValid;
+
       if (isPinValid) {
         // Upsert driver user account into users table for persistent auth
         const existingUser = allUsers.find(u => u.phone.replace(/\D/g, '') === cleanPhone);
@@ -825,7 +833,11 @@ app.post("/api/orders", orderRateLimiter, async (req: AuthenticatedRequest, res)
   let guestToken: string | undefined;
   if (!req.user || req.user.role === 'guest') {
     const existingOrderIds = (req.user as any)?.orderIds || [];
-    const mergedOrderIds = Array.from(new Set([...existingOrderIds, createdOrder.id]));
+    const mergedOrderIds = Array.from(new Set([
+      ...existingOrderIds,
+      createdOrder.id,
+      createdOrder.orderNumber
+    ].filter(Boolean)));
     guestToken = generateToken({
       userId: req.user?.userId || `guest-${cleanPhone}`,
       role: 'guest',
@@ -861,12 +873,13 @@ app.get("/api/orders", async (req: AuthenticatedRequest, res) => {
 
   const allOrders = await db.getOrdersAsync();
 
-  // If user role is delivery driver, filter only their assigned orders
-  if (req.user.role === 'delivery') {
+  // If user role is delivery driver / mandoub, filter strictly their assigned orders
+  if (['delivery', 'mandoub'].includes(req.user.role)) {
+    const cleanPhone = req.user.phone ? req.user.phone.replace(/\D/g, '') : '';
     const driverOrders = allOrders.filter(o => 
       o.driverId === req.user?.userId || 
-      o.driverName === req.user?.name || 
-      (req.user?.phone && o.driverPhone === req.user.phone)
+      (o.driverName && req.user?.name && o.driverName.trim() === req.user.name.trim()) || 
+      (cleanPhone && o.driverPhone && o.driverPhone.replace(/\D/g, '') === cleanPhone)
     );
     return res.json({ success: true, data: driverOrders });
   }
@@ -881,6 +894,15 @@ app.get("/api/orders", async (req: AuthenticatedRequest, res) => {
     const cleanPhone = req.user.phone.replace(/\D/g, '');
     const customerOrders = allOrders.filter(o => o.customerPhone && o.customerPhone.replace(/\D/g, '') === cleanPhone);
     return res.json({ success: true, data: customerOrders });
+  }
+
+  // If user role is guest, return strictly authorized orders
+  if (req.user.role === 'guest') {
+    const authorizedOrderIds = (req.user as any).orderIds || [];
+    const guestOrders = allOrders.filter(o => 
+      authorizedOrderIds.includes(o.id) || (o.orderNumber && authorizedOrderIds.includes(o.orderNumber))
+    );
+    return res.json({ success: true, data: guestOrders });
   }
 
   return res.status(403).json({ success: false, message: "ليس لديك صلاحية لعرض قائمة الطلبات" });
@@ -910,9 +932,10 @@ app.get("/api/my-orders", async (req: AuthenticatedRequest, res) => {
     if (!Array.isArray(authorizedOrderIds) || authorizedOrderIds.length === 0) {
       return res.json({ success: true, data: [] });
     }
-    const cleanPhone = req.user.phone ? req.user.phone.replace(/\D/g, '') : '';
-    const candidateOrders = await db.getOrdersAsync({ phone: cleanPhone || undefined });
-    const myOrders = candidateOrders.filter(o => authorizedOrderIds.includes(o.id));
+    const allOrders = await db.getOrdersAsync();
+    const myOrders = allOrders.filter(o => 
+      authorizedOrderIds.includes(o.id) || (o.orderNumber && authorizedOrderIds.includes(o.orderNumber))
+    );
     return res.json({ success: true, data: myOrders });
   }
 
@@ -923,7 +946,7 @@ app.get("/api/my-orders", async (req: AuthenticatedRequest, res) => {
     return res.json({ success: true, data: myOrders });
   }
 
-  // Delivery Driver / Mandoub: Can view orders assigned to them, plus pending/confirmed orders awaiting delivery
+  // Delivery Driver / Mandoub: Can view ONLY orders assigned to them (No visibility to other drivers or unassigned pool)
   if (['delivery', 'mandoub'].includes(req.user.role)) {
     const allOrders = await db.getOrdersAsync();
     const cleanPhone = req.user.phone ? req.user.phone.replace(/\D/g, '') : '';
@@ -931,9 +954,7 @@ app.get("/api/my-orders", async (req: AuthenticatedRequest, res) => {
       const isMine = o.driverId === req.user?.userId ||
                      (o.driverName && req.user?.name && o.driverName.trim() === req.user.name.trim()) ||
                      (cleanPhone && o.driverPhone && o.driverPhone.replace(/\D/g, '') === cleanPhone);
-      const isUnassignedPending = (!o.driverId || o.driverId === 'dr-unassigned') && 
-                                  ['received', 'confirmed', 'pending', 'preparing'].includes(o.status);
-      return isMine || isUnassignedPending;
+      return isMine;
     });
     return res.json({ success: true, data: driverOrders });
   }
@@ -995,10 +1016,12 @@ app.get("/api/orders/:id", async (req: AuthenticatedRequest, res) => {
     req.user.phone.replace(/\D/g, '') === order.customerPhone.replace(/\D/g, '')
   );
   const isGuestOwner = req.user.role === 'guest' && Array.isArray((req.user as any).orderIds) && (
-    (req.user as any).orderIds.includes(order.id)
+    (req.user as any).orderIds.includes(order.id) || (order.orderNumber && (req.user as any).orderIds.includes(order.orderNumber))
   );
-  const isDriver = req.user.role === 'delivery' && (
-    order.driverId === req.user.userId || (req.user.phone && order.driverPhone === req.user.phone)
+  const isDriver = ['delivery', 'mandoub'].includes(req.user.role) && (
+    order.driverId === req.user.userId || 
+    (order.driverName && req.user.name && order.driverName.trim() === req.user.name.trim()) ||
+    (req.user.phone && order.driverPhone && order.driverPhone.replace(/\D/g, '') === req.user.phone.replace(/\D/g, ''))
   );
 
   if (!isManagement && !isCustomerOwner && !isGuestOwner && !isDriver) {
@@ -1020,14 +1043,16 @@ app.get("/api/orders/:id/items", async (req: AuthenticatedRequest, res) => {
   }
 
   const isManagement = ['owner', 'admin', 'employee'].includes(req.user.role);
-  const isCustomerOwner = req.user.phone && order.customerPhone && (
+  const isCustomerOwner = req.user.role === 'customer' && req.user.phone && order.customerPhone && (
     req.user.phone.replace(/\D/g, '') === order.customerPhone.replace(/\D/g, '')
   );
   const isGuestOwner = req.user.role === 'guest' && Array.isArray((req.user as any).orderIds) && (
-    (req.user as any).orderIds.includes(order.id)
+    (req.user as any).orderIds.includes(order.id) || (order.orderNumber && (req.user as any).orderIds.includes(order.orderNumber))
   );
-  const isDriver = req.user.role === 'delivery' && (
-    order.driverId === req.user.userId || (req.user.phone && order.driverPhone === req.user.phone)
+  const isDriver = ['delivery', 'mandoub'].includes(req.user.role) && (
+    order.driverId === req.user.userId || 
+    (order.driverName && req.user.name && order.driverName.trim() === req.user.name.trim()) ||
+    (req.user.phone && order.driverPhone && order.driverPhone.replace(/\D/g, '') === req.user.phone.replace(/\D/g, ''))
   );
 
   if (!isManagement && !isCustomerOwner && !isGuestOwner && !isDriver) {
@@ -1056,17 +1081,19 @@ app.patch("/api/orders/:id/status", async (req: AuthenticatedRequest, res) => {
   const isDriverRole = ['delivery', 'mandoub'].includes(req.user.role);
   const isAssignedDriver = isDriverRole && (
     order.driverId === req.user.userId || 
-    order.driverName === req.user.name || 
-    (req.user.phone && order.driverPhone && order.driverPhone.replace(/\D/g, '') === req.user.phone.replace(/\D/g, '')) ||
-    // Also allow unassigned driver to claim/accept a pending/confirmed order
-    ((!order.driverId || order.driverId === 'dr-unassigned') && (status === 'assigned' || status === 'preparing' || status === 'shipped'))
+    (order.driverName && req.user.name && order.driverName.trim() === req.user.name.trim()) ||
+    (req.user.phone && order.driverPhone && order.driverPhone.replace(/\D/g, '') === req.user.phone.replace(/\D/g, ''))
   );
 
+  // Strict check: Non-management drivers CANNOT self-assign or claim unassigned orders
   if (!isManagement && !isAssignedDriver) {
-    return res.status(403).json({ success: false, message: "غير مصرح لك بتغيير حالة هذا الطلب. هذه العملية مقتصرة على الإدارة والمندوب المكلف." });
+    return res.status(403).json({ 
+      success: false, 
+      message: "غير مصرح لك بتغيير حالة هذا الطلب. فقط إدارة المتجر أو المندوب المسند إليه الطلب يمكنهما ذلك." 
+    });
   }
 
-  // Drivers can update full delivery lifecycle:
+  // Drivers can only update delivery lifecycle stages:
   // assigned (قبول الشحنة) -> preparing / shipped (استلام الشحنة) -> on_way / delivering (في الطريق) -> delivered (تم التسليم واستلام المبلغ)
   if (!isManagement && isAssignedDriver) {
     if (!['assigned', 'preparing', 'shipped', 'on_way', 'delivering', 'delivered'].includes(status)) {
@@ -1074,18 +1101,9 @@ app.patch("/api/orders/:id/status", async (req: AuthenticatedRequest, res) => {
     }
   }
 
-  // Auto-bind driver info if the driver is accepting/claiming the order
   let driverInfo: { driverId?: string; driverName?: string; driverPhone?: string } | undefined;
-  if (isDriverRole && (!order.driverId || order.driverId === 'dr-unassigned' || status === 'assigned')) {
-    driverInfo = {
-      driverId: req.user.userId,
-      driverName: req.user.name || 'مندوب التوصيل الميداني',
-      driverPhone: req.user.phone || ''
-    };
-    await db.updateOrderDriverAsync(id, driverInfo.driverId, driverInfo.driverName, driverInfo.driverPhone);
-  }
 
-  // Update Driver Assignment if requested by Admin
+  // Update Driver Assignment if requested by Admin/Management
   if (isManagement && (driverId || driverName)) {
     const agents = await db.getDeliveryAgentsAsync();
     const verifiedAgent = agents.find(a => a.id === driverId || (driverName && a.name.trim() === driverName.trim()));
@@ -1192,13 +1210,16 @@ app.post("/api/orders/:id/cancel", async (req: AuthenticatedRequest, res) => {
   const isCustomerOwner = req.user.role === 'customer' && req.user.phone && (
     order.customerPhone.replace(/\D/g, '') === req.user.phone.replace(/\D/g, '')
   );
+  const isGuestOwner = req.user.role === 'guest' && Array.isArray((req.user as any).orderIds) && (
+    (req.user as any).orderIds.includes(order.id) || (order.orderNumber && (req.user as any).orderIds.includes(order.orderNumber))
+  );
 
-  if (!isManagement && !isCustomerOwner) {
+  if (!isManagement && !isCustomerOwner && !isGuestOwner) {
     return res.status(403).json({ success: false, message: "غير مصرح لك بإلغاء هذا الطلب" });
   }
 
-  // Customers can only cancel when status is 'pending' or 'received'
-  if (isCustomerOwner && !isManagement) {
+  // Customers & Guests can only cancel when status is 'pending' or 'received'
+  if ((isCustomerOwner || isGuestOwner) && !isManagement) {
     if (!['pending', 'received'].includes(order.status)) {
       return res.status(400).json({ 
         success: false, 

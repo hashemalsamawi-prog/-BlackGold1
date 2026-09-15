@@ -1517,7 +1517,7 @@ class D1DatabaseAccessLayer {
           orderData.paymentMethod || 'cash',
           orderData.idempotencyKey || null,
           orderData.couponCode || null,
-          orderData.assignedDriver.id, orderData.assignedDriver.name, orderData.assignedDriver.phone,
+          orderData.assignedDriver?.id || 'dr-unassigned', orderData.assignedDriver?.name || 'غير مسند', orderData.assignedDriver?.phone || '',
           orderData.notes || '',
           JSON.stringify(orderData.timeline)
         ]
@@ -1632,9 +1632,9 @@ class D1DatabaseAccessLayer {
       customerPhone: cleanPhone,
       paymentMethod: orderData.paymentMethod || 'cash',
       notes: orderData.notes || '',
-      driverId: orderData.assignedDriver.id,
-      driverName: orderData.assignedDriver.name,
-      driverPhone: orderData.assignedDriver.phone,
+      driverId: orderData.assignedDriver?.id || 'dr-unassigned',
+      driverName: orderData.assignedDriver?.name || 'غير مسند',
+      driverPhone: orderData.assignedDriver?.phone || '',
       timeline: orderData.timeline,
       idempotencyKey: orderData.idempotencyKey,
       isStockRolledBack: false
