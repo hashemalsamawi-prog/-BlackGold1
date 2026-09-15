@@ -1,8 +1,9 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Order, Language } from '../types';
 import { 
   CheckCircle2, Package, MapPin, Phone, MessageSquare, 
-  ArrowRight, ArrowLeft, Clock, ShieldCheck, X, Truck, ExternalLink
+  ArrowRight, ArrowLeft, Clock, ShieldCheck, X, Truck, ExternalLink, Printer,
+  Copy, Check
 } from 'lucide-react';
 
 interface OrderConfirmationModalProps {
@@ -11,6 +12,8 @@ interface OrderConfirmationModalProps {
   order: Order | null;
   lang: Language;
   onTrackOrder: (order: Order) => void;
+  onOpenMyOrders?: () => void;
+  onOpenInvoice?: (order: Order) => void;
   whatsappNumber?: string;
 }
 
@@ -20,6 +23,8 @@ export const OrderConfirmationModal: React.FC<OrderConfirmationModalProps> = ({
   order,
   lang,
   onTrackOrder,
+  onOpenMyOrders,
+  onOpenInvoice,
   whatsappNumber = '967775000150',
 }) => {
   if (!isOpen || !order) return null;
@@ -32,6 +37,14 @@ export const OrderConfirmationModal: React.FC<OrderConfirmationModalProps> = ({
   const customerName = order.customerName || 'عميل فحم الذهب الأسود';
   const customerPhone = order.customerPhone || '';
   const isAr = lang === 'ar';
+
+  const [hasCopied, setHasCopied] = useState(false);
+
+  const handleCopyOrderNum = () => {
+    navigator.clipboard.writeText(orderNum);
+    setHasCopied(true);
+    setTimeout(() => setHasCopied(false), 2000);
+  };
 
   const handleWhatsAppSend = () => {
     const rawItems = Array.isArray(order.items)
@@ -68,7 +81,7 @@ ${order.notes ? `\n💬 *ملاحظات خاصة:* ${order.notes}` : ''}
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md overflow-y-auto">
+    <div id="order-confirmation-modal" className="fixed inset-0 z-[80] flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md overflow-y-auto">
       <div className="relative w-full max-w-lg rounded-3xl bg-zinc-950 border border-amber-500/30 shadow-2xl p-5 sm:p-6 my-6 text-right overflow-hidden">
         {/* Ambient Top Glow */}
         <div className="absolute top-0 right-0 left-0 h-1.5 bg-gradient-to-r from-amber-500 via-amber-300 to-amber-600" />
@@ -90,9 +103,51 @@ ${order.notes ? `\n💬 *ملاحظات خاصة:* ${order.notes}` : ''}
           <h2 className="text-xl sm:text-2xl font-black text-white">
             تم استلام وتأكيد طلبك بنجاح! 🎉
           </h2>
-          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-amber-500/15 border border-amber-500/40 text-amber-300 text-xs font-mono font-black">
-            <span>رقم الطلب:</span>
-            <span className="text-white text-sm">#{orderNum}</span>
+          <div className="flex items-center justify-center gap-2">
+            <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-amber-500/15 border border-amber-500/40 text-amber-300 text-xs font-mono font-black">
+              <span>رقم الطلب:</span>
+              <span className="text-white text-sm">#{orderNum}</span>
+            </div>
+            <button
+              type="button"
+              onClick={handleCopyOrderNum}
+              className="p-1.5 rounded-full bg-zinc-900 border border-zinc-700 hover:border-amber-500 text-zinc-300 hover:text-amber-400 transition-colors text-xs flex items-center gap-1 px-2.5 cursor-pointer"
+              title="نسخ رقم الطلب"
+            >
+              {hasCopied ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="text-[11px] text-emerald-400 font-bold">تم النسخ</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3.5 h-3.5" />
+                  <span className="text-[11px]">نسخ</span>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* 4-Step Progress Mini-Pipeline */}
+        <div className="p-3 rounded-2xl bg-zinc-900 border border-zinc-800 mb-3.5">
+          <div className="grid grid-cols-4 gap-1 text-center">
+            <div className="space-y-1">
+              <div className="h-1.5 rounded-full bg-emerald-500 shadow-sm shadow-emerald-500/50" />
+              <span className="text-[10px] text-emerald-400 font-bold block">1. مؤكد ✓</span>
+            </div>
+            <div className="space-y-1">
+              <div className="h-1.5 rounded-full bg-amber-500 animate-pulse" />
+              <span className="text-[10px] text-amber-400 font-bold block">2. قيد التجهيز</span>
+            </div>
+            <div className="space-y-1">
+              <div className="h-1.5 rounded-full bg-zinc-800" />
+              <span className="text-[10px] text-zinc-500 font-medium block">3. مع المندوب</span>
+            </div>
+            <div className="space-y-1">
+              <div className="h-1.5 rounded-full bg-zinc-800" />
+              <span className="text-[10px] text-zinc-500 font-medium block">4. تم التسليم</span>
+            </div>
           </div>
         </div>
 
@@ -143,6 +198,7 @@ ${order.notes ? `\n💬 *ملاحظات خاصة:* ${order.notes}` : ''}
           {/* WhatsApp Direct Confirmation */}
           <button
             type="button"
+            id="confirm-modal-whatsapp-btn"
             onClick={handleWhatsAppSend}
             className="w-full py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-2 transition-all shadow-lg shadow-emerald-600/20 cursor-pointer active:scale-[0.99]"
           >
@@ -153,9 +209,9 @@ ${order.notes ? `\n💬 *ملاحظات خاصة:* ${order.notes}` : ''}
           {/* Track This Single Order */}
           <button
             type="button"
+            id="confirm-modal-track-btn"
             onClick={() => {
               onTrackOrder(order);
-              onClose();
             }}
             className="w-full py-2.5 px-4 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-amber-300 font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer"
           >
@@ -163,9 +219,38 @@ ${order.notes ? `\n💬 *ملاحظات خاصة:* ${order.notes}` : ''}
             <span>متابعة تتبع هذا الطلب وحالة المندوب لحظة بلحظة</span>
           </button>
 
+          {/* Print / View Electronic Invoice */}
+          {onOpenInvoice && (
+            <button
+              type="button"
+              id="confirm-modal-invoice-btn"
+              onClick={() => onOpenInvoice(order)}
+              className="w-full py-2.5 px-4 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-amber-500/30 text-amber-300 font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer"
+            >
+              <Printer className="w-4 h-4 text-amber-400" />
+              <span>عرض وطباعة الفاتورة الرسمية (إيصال استلام) 🖨️</span>
+            </button>
+          )}
+
+          {/* View All Orders */}
+          {onOpenMyOrders && (
+            <button
+              type="button"
+              id="confirm-modal-my-orders-btn"
+              onClick={() => {
+                onOpenMyOrders();
+              }}
+              className="w-full py-2.5 px-4 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer"
+            >
+              <Package className="w-4 h-4 text-amber-400" />
+              <span>عرض سجل طلباتي (طلباتي)</span>
+            </button>
+          )}
+
           {/* Continue Shopping */}
           <button
             type="button"
+            id="confirm-modal-continue-shopping-btn"
             onClick={onClose}
             className="w-full py-2 text-zinc-400 hover:text-zinc-200 text-xs font-semibold text-center transition-colors cursor-pointer"
           >

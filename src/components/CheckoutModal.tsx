@@ -4,7 +4,7 @@ import { SANAA_DISTRICTS } from '../data/mockData';
 import { 
   X, Check, ShieldCheck, MapPin, Truck, Phone, User, 
   CreditCard, Banknote, Clock, Sparkles, AlertCircle, MessageSquare,
-  ArrowRight
+  ArrowRight, Package, Loader2
 } from 'lucide-react';
 
 interface CheckoutModalProps {
@@ -25,6 +25,8 @@ interface CheckoutModalProps {
   onOrderPlaced: (newOrder: Order) => void;
   onOpenTracking: () => void;
   whatsappNumber?: string;
+  appliedCoupon?: { code: string; discountPercent?: number } | null;
+  couponCode?: string;
 }
 
 export const CheckoutModal: React.FC<CheckoutModalProps> = ({
@@ -43,6 +45,8 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   onOrderPlaced,
   onOpenTracking,
   whatsappNumber,
+  appliedCoupon = null,
+  couponCode,
 }) => {
   const [customerName, setCustomerName] = useState(() => localStorage.getItem('bg_customer_name') || '');
   const [customerPhone, setCustomerPhone] = useState(() => localStorage.getItem('bg_customer_phone') || '');
@@ -59,8 +63,14 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       if (selectedDistrictName) setDistrict(selectedDistrictName);
       if (customerNotes) setNotes(customerNotes);
       setErrorMsg('');
+      const selectedAddr = addresses.find(a => a.id === selectedAddressId) || (addresses.length > 0 ? addresses[0] : null);
+      if (selectedAddr) {
+        if (selectedAddr.district) setDistrict(selectedAddr.district);
+        if (selectedAddr.street && !addressDetails) setAddressDetails(selectedAddr.street);
+        if (selectedAddr.phone && !customerPhone) setCustomerPhone(selectedAddr.phone);
+      }
     }
-  }, [isOpen, selectedDistrictName, customerNotes]);
+  }, [isOpen, selectedDistrictName, customerNotes, selectedAddressId, addresses]);
 
   // Handle ESC key to close modal
   useEffect(() => {
@@ -85,6 +95,19 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     one_cash: 'ون كاش OneCash 📱',
     floosak: 'فلوسك Floosak 📲'
   };
+
+  const getCarrierBadge = (phoneStr: string) => {
+    const clean = phoneStr.replace(/\D/g, '');
+    if (clean.startsWith('77') || clean.startsWith('78')) return { name: 'يمن موبايل', color: 'text-red-400 bg-red-500/10 border-red-500/30' };
+    if (clean.startsWith('73')) return { name: 'يو YOU', color: 'text-yellow-400 bg-yellow-500/10 border-yellow-500/30' };
+    if (clean.startsWith('71')) return { name: 'سبأفون', color: 'text-blue-400 bg-blue-500/10 border-blue-500/30' };
+    if (clean.startsWith('70')) return { name: 'واي Y', color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30' };
+    return null;
+  };
+
+  const carrier = getCarrierBadge(customerPhone);
+  const cleanPhone = customerPhone.replace(/\D/g, '');
+  const isPhoneValid = cleanPhone.length === 9 && (cleanPhone.startsWith('77') || cleanPhone.startsWith('78') || cleanPhone.startsWith('73') || cleanPhone.startsWith('71') || cleanPhone.startsWith('70'));
 
   const handleSelectSavedAddr = (addr: DeliveryAddress) => {
     if (addr.district) setDistrict(addr.district);
@@ -125,74 +148,159 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       });
     }
 
-    const newOrder: Order = {
-      id: 'ord-' + Date.now(),
-      orderNumber: 'BG-' + Math.floor(1000 + Math.random() * 9000),
+    const orderPayload = {
       customerName: customerName.trim() || 'عميل المتجر',
       customerPhone: customerPhone.trim() || '770000000',
-      items: cart,
-      itemsSummary: cart.map(i => `${i.product.nameAr} (${i.selectedWeight || 'العبوة'}) × ${i.quantity}`).join('، '),
+      items: cart.map(i => ({
+        productId: i.product.id,
+        quantity: i.quantity,
+        weight: i.selectedWeight || i.product.weight || '1kg'
+      })),
       subtotal,
       shippingFee: currentShippingFee,
-      discount: discount,
-      discountAmount: discount,
+      discount,
       total: totalAmount,
-      totalAmount,
       district,
-      addressDetails: addressDetails.trim() || 'صنعاء',
       address: {
         district,
         street: addressDetails.trim() || 'أمانة العاصمة',
         landmark: ''
       },
-      driverName: 'أحمد الكبسي',
-      driverPhone: '775000150',
       paymentMethod,
-      paymentStatus: 'pending',
-      status: 'pending',
       notes: notes.trim(),
-      createdAt: new Date().toISOString(),
-      date: new Date().toISOString(),
+      couponCode: couponCode || appliedCoupon?.code || undefined
     };
 
     try {
       const authHeader = typeof window !== 'undefined' && localStorage.getItem('bg_auth_token')
         ? { 'Authorization': `Bearer ${localStorage.getItem('bg_auth_token')}` }
-        : {};
+        : (typeof window !== 'undefined' && localStorage.getItem('bg_guest_token')
+            ? { 'Authorization': `Bearer ${localStorage.getItem('bg_guest_token')}` }
+            : {});
 
       const res = await fetch('/api/orders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeader },
-        body: JSON.stringify(newOrder),
+        body: JSON.stringify(orderPayload),
       });
       const data = await res.json();
       if (res.ok && data.success && data.data) {
+        if (data.guestToken && typeof window !== 'undefined') {
+          localStorage.setItem('bg_guest_token', data.guestToken);
+        }
         onOrderPlaced(data.data);
         setIsSubmitting(false);
         onClose();
         return;
       } else {
-        setErrorMsg(data.message || 'فشل إرسال الطلب، يرجى المحاولة مرة أخرى');
+        setErrorMsg(data.message || 'فشل إرسال الطلب، يرجى مراجعة بيانات الطلب والمحاولة مرة أخرى');
         setIsSubmitting(false);
         return;
       }
     } catch (e: any) {
-      setErrorMsg('تعذر الاتصال بالخادم، يرجى التحقق من الشبكة وإعادة المحاولة');
+      setErrorMsg('تعذر الاتصال بالخادم، يرجى التحقق من اتصال الشبكة وإعادة المحاولة');
       setIsSubmitting(false);
       return;
     }
   };
 
   const handleSendWhatsAppOrder = async () => {
-    const targetWhatsApp = whatsappNumber || '967775000150';
-    const itemsList = cart.map(i => `• ${i.product.nameAr} (${i.selectedWeight || 'العبوة'}) × ${i.quantity} = ${((i.unitPrice || i.product.price) * i.quantity).toLocaleString()} ريال`).join('\n');
-    
-    const clientName = customerName.trim() || 'عميل المتجر الإلكتروني';
-    const clientPhone = customerPhone.trim() || 'محدد في محادثة الواتساب';
-    const addr = addressDetails.trim() || 'سيتم تزويده في المحادثة أو إرسال اللوكيشن';
-    
-    const message = `*طلب شراء جديد - فحم الذهب الأسود* 👑
+    if (cart.length === 0) return;
+    setErrorMsg('');
+    setIsSubmitting(true);
+
+    const clientName = customerName.trim() || 'عميل المتجر';
+    const clientPhone = customerPhone.trim() || '770000000';
+    const addr = addressDetails.trim() || 'صنعاء';
+
+    const orderPayload = {
+      customerName: clientName,
+      customerPhone: clientPhone,
+      items: cart.map(i => ({
+        productId: i.product.id,
+        quantity: i.quantity,
+        weight: i.selectedWeight || i.product.weight || '1kg'
+      })),
+      subtotal,
+      shippingFee: currentShippingFee,
+      discount,
+      total: totalAmount,
+      district,
+      address: {
+        district,
+        street: addr,
+        landmark: ''
+      },
+      paymentMethod,
+      notes: notes.trim() ? `${notes.trim()} (طلب مباشر عبر الواتساب)` : 'طلب مباشر عبر الواتساب',
+      couponCode: couponCode || appliedCoupon?.code || undefined
+    };
+
+    try {
+      const authHeader = typeof window !== 'undefined' && localStorage.getItem('bg_auth_token')
+        ? { 'Authorization': `Bearer ${localStorage.getItem('bg_auth_token')}` }
+        : (typeof window !== 'undefined' && localStorage.getItem('bg_guest_token')
+            ? { 'Authorization': `Bearer ${localStorage.getItem('bg_guest_token')}` }
+            : {});
+
+      const res = await fetch('/api/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeader },
+        body: JSON.stringify(orderPayload),
+      });
+      const data = await res.json();
+
+      if (!res.ok || !data.success || !data.data) {
+        setErrorMsg(data.message || 'تعذر تأكيد الطلب في النظام قبل إرسال الواتساب. يرجى التحقق من توفر المخزون.');
+        setIsSubmitting(false);
+        return;
+      }
+
+      const verifiedOrder = data.data;
+
+      if (data.guestToken && typeof window !== 'undefined') {
+        localStorage.setItem('bg_guest_token', data.guestToken);
+      }
+
+      try {
+        const myIdsStr = localStorage.getItem('bg_my_order_ids') || '[]';
+        const myIds = JSON.parse(myIdsStr);
+        if (Array.isArray(myIds)) {
+          if (verifiedOrder.id && !myIds.includes(verifiedOrder.id)) myIds.unshift(verifiedOrder.id);
+          if (verifiedOrder.orderNumber && !myIds.includes(verifiedOrder.orderNumber)) myIds.unshift(verifiedOrder.orderNumber);
+          localStorage.setItem('bg_my_order_ids', JSON.stringify(myIds));
+        }
+
+        const myCacheStr = localStorage.getItem('bg_my_orders_cache') || '[]';
+        const myCache = JSON.parse(myCacheStr);
+        if (Array.isArray(myCache)) {
+          const updated = [verifiedOrder, ...myCache.filter((o: any) => o && o.id !== verifiedOrder.id && o.orderNumber !== verifiedOrder.orderNumber)];
+          localStorage.setItem('bg_my_orders_cache', JSON.stringify(updated));
+        }
+      } catch (err) {
+        console.warn('Storage sync error:', err);
+      }
+
+      if (customerName.trim()) localStorage.setItem('bg_customer_name', customerName.trim());
+      if (customerPhone.trim()) localStorage.setItem('bg_customer_phone', customerPhone.trim());
+      if (addressDetails.trim() && onSaveAddress) {
+        onSaveAddress({
+          id: 'addr-' + Date.now(),
+          title: customerName.trim(),
+          district,
+          street: addressDetails.trim(),
+          phone: customerPhone.trim(),
+          isDefault: true,
+        });
+      }
+
+      // Prepare official WhatsApp message with verified real server order number
+      const targetWhatsApp = whatsappNumber || '967775000150';
+      const itemsList = cart.map(i => `• ${i.product.nameAr} (${i.selectedWeight || 'العبوة'}) × ${i.quantity} = ${((i.unitPrice || i.product.price) * i.quantity).toLocaleString()} ريال`).join('\n');
+      
+      const message = `*طلب شراء جديد ومؤكد - فحم الذهب الأسود* 👑
 -------------------------------
+📦 *رقم الطلب الرسمي:* #${verifiedOrder.orderNumber}
 👤 *العميل:* ${clientName}
 📱 *الهاتف:* ${clientPhone}
 📍 *المنطقة في صنعاء:* ${district}
@@ -204,72 +312,27 @@ ${itemsList}
 -------------------------------
 💰 *مجموع المنتجات:* ${subtotal.toLocaleString()} ريال
 🚚 *رسوم التوصيل (${district}):* ${currentShippingFee.toLocaleString()} ريال
-${discount > 0 ? `🏷️ *خصم الكوبون:* -${discount.toLocaleString()} ريال\n` : ''}⭐ *المبلغ المطلوب:* ${totalAmount.toLocaleString()} ريال
+${discount > 0 ? `🏷️ *خصم الكوبون:* -${discount.toLocaleString()} ريال\n` : ''}⭐ *المبلغ الإجمالي:* ${totalAmount.toLocaleString()} ريال
 -------------------------------
-يرجى تأكيد واعتماد الطلب للتوصيل الفوري.`;
+تم تسجيل وتأكيد الطلب في نظام المتجر بنجاح. يرجى البدء في التجهيز والشحن السريع.`;
 
-    // Persist order in system so it shows up in dashboard
-    const waOrder: Order = {
-      id: 'ord-' + Date.now(),
-      orderNumber: 'BG-WA-' + Math.floor(1000 + Math.random() * 9000),
-      customerName: clientName,
-      customerPhone: clientPhone,
-      items: cart,
-      itemsSummary: cart.map(i => `${i.product.nameAr} (${i.selectedWeight || 'العبوة'}) × ${i.quantity}`).join('، '),
-      subtotal,
-      shippingFee: currentShippingFee,
-      discount: discount,
-      discountAmount: discount,
-      total: totalAmount,
-      totalAmount,
-      district,
-      addressDetails: addr,
-      address: {
-        district,
-        street: addr || 'صنعاء',
-        landmark: ''
-      },
-      driverName: 'أحمد الكبسي',
-      driverPhone: '775000150',
-      paymentMethod,
-      paymentStatus: 'pending',
-      status: 'pending',
-      notes: notes.trim() ? `${notes.trim()} (طلب تم إرساله عبر الواتساب)` : 'طلب مباشر عبر الواتساب',
-      createdAt: new Date().toISOString(),
-      date: new Date().toISOString(),
-    };
+      onOrderPlaced(verifiedOrder);
+      setIsSubmitting(false);
+      onClose();
 
-    try {
-      fetch('/api/orders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(waOrder),
-      }).catch(() => {});
-    } catch {}
-
-    onOrderPlaced(waOrder);
-
-    if (customerName.trim()) localStorage.setItem('bg_customer_name', customerName.trim());
-    if (customerPhone.trim()) localStorage.setItem('bg_customer_phone', customerPhone.trim());
-    if (addressDetails.trim() && onSaveAddress) {
-      onSaveAddress({
-        id: 'addr-' + Date.now(),
-        title: customerName.trim(),
-        district,
-        street: addressDetails.trim(),
-        phone: customerPhone.trim(),
-        isDefault: true,
-      });
+      const cleanWhatsApp = targetWhatsApp.replace(/\D/g, '');
+      window.open(`https://wa.me/${cleanWhatsApp}?text=${encodeURIComponent(message)}`, '_blank');
+    } catch (e: any) {
+      setErrorMsg('تعذر الاتصال بالخادم لإنشاء الطلب. يرجى المحاولة مرة أخرى.');
+      setIsSubmitting(false);
     }
-
-    onClose();
-    window.open(`https://wa.me/${targetWhatsApp.replace(/\D/g, '')}?text=${encodeURIComponent(message)}`, '_blank');
   };
 
   if (!isOpen) return null;
 
   return (
     <div 
+      id="checkout-modal"
       className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md overflow-y-auto"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
@@ -350,7 +413,14 @@ ${discount > 0 ? `🏷️ *خصم الكوبون:* -${discount.toLocaleString()}
             </div>
 
             <div>
-              <label className="block text-zinc-300 font-bold mb-1">رقم الهاتف (واتساب) *</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-zinc-300 font-bold">رقم الهاتف (واتساب) *</label>
+                {carrier && (
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${carrier.color}`}>
+                    {carrier.name}
+                  </span>
+                )}
+              </div>
               <div className="relative">
                 <input
                   type="tel"
@@ -358,10 +428,21 @@ ${discount > 0 ? `🏷️ *خصم الكوبون:* -${discount.toLocaleString()}
                   value={customerPhone}
                   onChange={(e) => setCustomerPhone(e.target.value)}
                   placeholder="77XXXXXXXX"
-                  className="w-full bg-zinc-950 border border-zinc-700 focus:border-amber-500 rounded-xl px-3 py-2.5 text-white pr-9 font-mono"
+                  className={`w-full bg-zinc-950 border rounded-xl px-3 py-2.5 text-white pr-9 font-mono transition-colors ${
+                    customerPhone.length > 0 && !isPhoneValid
+                      ? 'border-amber-500/80 focus:border-amber-400'
+                      : customerPhone.length > 0 && isPhoneValid
+                      ? 'border-emerald-500/80 focus:border-emerald-400'
+                      : 'border-zinc-700 focus:border-amber-500'
+                  }`}
                 />
                 <Phone className="w-4 h-4 text-zinc-500 absolute right-3 top-3" />
               </div>
+              {customerPhone.length > 0 && !isPhoneValid && (
+                <p className="text-[10px] text-amber-400 mt-1">
+                  * يرجى إدخال 9 أرقام تبدأ بـ 77 أو 78 أو 73 أو 71 أو 70
+                </p>
+              )}
             </div>
           </div>
 
@@ -463,6 +544,33 @@ ${discount > 0 ? `🏷️ *خصم الكوبون:* -${discount.toLocaleString()}
             />
           </div>
 
+          {/* Cart Items Preview */}
+          <div className="p-3.5 rounded-2xl bg-zinc-950 border border-zinc-800 space-y-2">
+            <div className="flex items-center justify-between text-xs text-zinc-400 pb-1.5 border-b border-zinc-800">
+              <span className="font-bold text-white flex items-center gap-1.5">
+                <Package className="w-3.5 h-3.5 text-amber-400" />
+                <span>محتويات طلبك ({cart.reduce((s, i) => s + i.quantity, 0)} عبوة):</span>
+              </span>
+              <span className="text-[11px] text-amber-400 font-mono font-bold">{subtotal.toLocaleString()} ر.ي</span>
+            </div>
+            <div className="max-h-36 overflow-y-auto space-y-1.5 pr-1 divide-y divide-zinc-900">
+              {cart.map((item, idx) => (
+                <div key={idx} className="flex items-center justify-between text-xs pt-1.5 first:pt-0 text-zinc-300">
+                  <div className="flex items-center gap-2">
+                    <span className="w-5 h-5 rounded-md bg-zinc-900 border border-zinc-800 flex items-center justify-center text-[10px] font-black text-amber-400 font-mono">
+                      {item.quantity}×
+                    </span>
+                    <span className="font-bold text-white line-clamp-1">{item.product.nameAr}</span>
+                    <span className="text-[10px] text-zinc-500 font-mono">({item.selectedWeight || '1kg'})</span>
+                  </div>
+                  <span className="font-mono font-bold text-zinc-300 text-[11px]">
+                    {(((item.unitPrice || item.product.price) * item.quantity)).toLocaleString()} ر.ي
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+
           {/* Summary */}
           <div className="p-4 rounded-2xl bg-zinc-950 border border-zinc-800 space-y-2">
             <div className="flex justify-between text-zinc-400">
@@ -489,15 +597,26 @@ ${discount > 0 ? `🏷️ *خصم الكوبون:* -${discount.toLocaleString()}
           <div className="space-y-2.5 pt-1">
             <button
               type="submit"
+              id="checkout-submit-btn"
               disabled={isSubmitting}
-              className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-black font-black text-sm flex items-center justify-center gap-2 shadow-xl shadow-amber-500/20 transition-all cursor-pointer active:scale-[0.99]"
+              className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-black font-black text-sm flex items-center justify-center gap-2 shadow-xl shadow-amber-500/20 transition-all cursor-pointer active:scale-[0.99] disabled:opacity-75"
             >
-              <Check className="w-5 h-5" />
-              <span>{isSubmitting ? 'جاري تأكيد الطلب...' : 'تأكيد وإرسال الطلب الآن ⚡'}</span>
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  <span>جاري تسجيل وتأكيد طلبك...</span>
+                </>
+              ) : (
+                <>
+                  <Check className="w-5 h-5" />
+                  <span>تأكيد وإرسال الطلب الآن ⚡</span>
+                </>
+              )}
             </button>
 
             <button
               type="button"
+              id="checkout-whatsapp-btn"
               onClick={handleSendWhatsAppOrder}
               className="w-full py-3 rounded-2xl bg-[#25D366] hover:bg-[#20bd5a] text-white font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 transition-all border border-emerald-400/30 cursor-pointer active:scale-[0.99]"
             >

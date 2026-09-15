@@ -2,7 +2,7 @@ import React from 'react';
 import { ThemeMode } from '../types';
 import { 
   Home, ShoppingBag, Package, ShieldAlert, User, 
-  Sun, Moon, Flame
+  Sun, Moon, Flame, Truck
 } from 'lucide-react';
 
 interface MobileBottomNavProps {
@@ -12,6 +12,7 @@ interface MobileBottomNavProps {
   onOpenCart: () => void;
   onOpenOrders: () => void;
   onOpenAdmin: () => void;
+  onOpenMandoub?: () => void;
   onOpenAuth: () => void;
   userName?: string;
   userRole?: 'owner' | 'mandoub' | 'customer';
@@ -27,6 +28,7 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
   onOpenCart,
   onOpenOrders,
   onOpenAdmin,
+  onOpenMandoub,
   onOpenAuth,
   userName,
   userRole,
@@ -77,7 +79,7 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
         {userRole === 'owner' ? (
           <button
             onClick={onOpenAdmin}
-            className="relative flex flex-col items-center gap-1 p-1 text-amber-400 font-black"
+            className="relative flex flex-col items-center gap-1 p-1 text-amber-400 font-black cursor-pointer"
           >
             <ShieldAlert className="w-5 h-5" />
             <span className="text-[10px]">الإدارة</span>
@@ -87,10 +89,23 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
               </span>
             )}
           </button>
+        ) : userRole === 'mandoub' ? (
+          <button
+            onClick={onOpenMandoub || onOpenAdmin}
+            className="relative flex flex-col items-center gap-1 p-1 text-emerald-400 font-black cursor-pointer"
+          >
+            <Truck className="w-5 h-5" />
+            <span className="text-[10px]">التوصيل</span>
+            {pendingOrdersCount > 0 && (
+              <span className="absolute top-0 right-1 bg-emerald-600 text-white font-black text-[9px] min-w-3.5 h-3.5 px-0.5 rounded-full flex items-center justify-center border border-black animate-pulse">
+                {pendingOrdersCount}
+              </span>
+            )}
+          </button>
         ) : (
           <button
             onClick={onOpenAuth}
-            className="flex flex-col items-center gap-1 p-1 text-zinc-400 hover:text-amber-400 transition-colors"
+            className="flex flex-col items-center gap-1 p-1 text-zinc-400 hover:text-amber-400 transition-colors cursor-pointer"
           >
             <User className="w-5 h-5" />
             <span className="text-[10px] font-bold">{userName ? 'حسابي' : 'دخول'}</span>

@@ -48,12 +48,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   onOpenOrders,
   onOpenMap
 }) => {
-  const [authTab, setAuthTab] = useState<'guest' | 'quick_phone' | 'owner_pin'>('quick_phone');
+  const [authTab, setAuthTab] = useState<'guest' | 'quick_phone' | 'driver_pin' | 'owner_pin'>('quick_phone');
   const [customerName, setCustomerName] = useState(() => safeGetLocalStorage('bg_customer_name', ''));
   const [customerPhone, setCustomerPhone] = useState(() => safeGetLocalStorage('bg_customer_phone', ''));
+  const [driverPhone, setDriverPhone] = useState('770099887');
+  const [driverPin, setDriverPin] = useState('1234');
   const [ownerPin, setOwnerPin] = useState('');
   const [pinError, setPinError] = useState<string | null>(null);
   const [phoneError, setPhoneError] = useState<string | null>(null);
+  const [driverError, setDriverError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isSuccessAnim, setIsSuccessAnim] = useState(false);
 
@@ -168,6 +171,47 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     } catch (err: any) {
       setIsLoading(false);
       setPinError(err.message || 'رمز الدخول غير صحيح');
+    }
+  };
+
+  // 4b. Driver / Mandoub Login Authentication
+  const handleDriverLoginSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanPhone = driverPhone.replace(/\D/g, '').trim();
+    const cleanPin = driverPin.trim();
+
+    if (!cleanPhone || cleanPhone.length < 6) {
+      setDriverError('يرجى إدخال رقم هاتف كابتن التوصيل');
+      return;
+    }
+    if (!cleanPin) {
+      setDriverError('يرجى إدخال رمز PIN لكابتن التوصيل');
+      return;
+    }
+
+    setDriverError(null);
+    setIsLoading(true);
+
+    try {
+      const res = await api.driverLogin({ phone: cleanPhone, pin: cleanPin });
+      if (res.token) {
+        authStorage.setToken(res.token);
+      }
+      safeSetLocalStorage('bg_customer_name', res.user.name);
+      safeSetLocalStorage('bg_customer_phone', res.user.phone);
+      safeSetLocalStorage('bg_user_role', 'mandoub');
+
+      setIsSuccessAnim(true);
+      setTimeout(() => {
+        onLoginSuccess(res.user.name, res.user.phone, 'mandoub');
+        setIsSuccessAnim(false);
+        setIsLoading(false);
+        onClose();
+        if (onOpenMandoub) onOpenMandoub();
+      }, 300);
+    } catch (err: any) {
+      setIsLoading(false);
+      setDriverError(err.message || 'رقم هاتف المندوب أو رمز PIN غير صحيح');
     }
   };
 
@@ -328,8 +372,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           /* NOT LOGGED IN - 3 CLEAR OPTIONS */
           <div className="space-y-4">
             
-            {/* 3 Main Tabs: Guest Shopping | Phone Login | Owner PIN */}
-            <div className="grid grid-cols-3 gap-1 p-1 bg-slate-950/80 rounded-2xl border border-slate-800 text-[11px] font-bold">
+            {/* 4 Main Tabs: Guest Shopping | Phone Login | Driver Login | Owner PIN */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1 p-1 bg-slate-950/80 rounded-2xl border border-slate-800 text-[11px] font-bold">
               <button
                 type="button"
                 onClick={() => setAuthTab('guest')}
@@ -358,6 +402,19 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
               <button
                 type="button"
+                onClick={() => setAuthTab('driver_pin')}
+                className={`py-2 px-1 rounded-xl transition-all flex items-center justify-center gap-1 cursor-pointer ${
+                  authTab === 'driver_pin'
+                    ? 'bg-amber-500 text-slate-950 font-black shadow-md'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Truck className="w-3 h-3" />
+                <span>المندوب 🛵</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setAuthTab('owner_pin')}
                 className={`py-2 px-1 rounded-xl transition-all flex items-center justify-center gap-1 cursor-pointer ${
                   authTab === 'owner_pin'
@@ -366,7 +423,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 }`}
               >
                 <Lock className="w-3 h-3" />
-                <span>المالك (PIN) 👑</span>
+                <span>المالك 👑</span>
               </button>
             </div>
 
@@ -499,7 +556,119 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               </div>
             )}
 
-            {/* TAB 3: OWNER / MANAGER ACCESS (PIN VERIFIED VIA BACKEND) */}
+            {/* TAB 3: DRIVER / MANDOUB ACCESS */}
+            {authTab === 'driver_pin' && (
+              <div className="space-y-3.5 animate-in fade-in duration-200">
+                <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-3.5 text-xs text-amber-300 flex items-start gap-2.5">
+                  <Truck className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                  <div>
+                    <h4 className="font-black text-white">بوابة كباتن التوصيل الميداني - صنعاء</h4>
+                    <p className="text-[11px] text-amber-300/80 mt-0.5">
+                      مخصصة لمندوبي توصيل فحم الذهب الأسود لتحديث مسار الشحنات وتحصيل المبالغ النقدية.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Quick Driver Preset Badges */}
+                <div className="space-y-1.5">
+                  <span className="text-slate-400 text-[10px] font-bold block">اختر الكابتن للتجربة السريعة:</span>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {[
+                      { name: 'أحمد الكبسي', phone: '770099887', zone: 'حدة والسبعين' },
+                      { name: 'محمد العنسي', phone: '771122334', zone: 'الصافية والتحرير' },
+                      { name: 'إبراهيم المؤيد', phone: '773344556', zone: 'شعوب والحصبة' },
+                      { name: 'سامي الحيمي', phone: '775566778', zone: 'معين وشملان' },
+                    ].map((dr) => (
+                      <button
+                        key={dr.phone}
+                        type="button"
+                        onClick={() => {
+                          setDriverPhone(dr.phone);
+                          setDriverPin('1234');
+                          if (driverError) setDriverError(null);
+                        }}
+                        className={`p-2 rounded-xl text-[11px] text-right border transition-all cursor-pointer ${
+                          driverPhone === dr.phone
+                            ? 'bg-amber-500/20 border-amber-500/60 text-amber-300 font-black'
+                            : 'bg-slate-900 border-slate-800 text-slate-300 hover:border-slate-700'
+                        }`}
+                      >
+                        <div className="font-bold text-white flex items-center gap-1">
+                          <Truck className="w-3 h-3 text-amber-400" />
+                          <span>{dr.name}</span>
+                        </div>
+                        <div className="text-[10px] text-slate-400 font-mono">{dr.phone} • {dr.zone}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <form onSubmit={handleDriverLoginSubmit} className="space-y-3 text-xs">
+                  <div>
+                    <label className="block text-slate-300 font-bold mb-1">
+                      رقم هاتف المندوب:
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="tel"
+                        placeholder="770099887"
+                        value={driverPhone}
+                        onChange={(e) => {
+                          setDriverPhone(e.target.value);
+                          if (driverError) setDriverError(null);
+                        }}
+                        className="w-full bg-slate-900 border border-slate-800 text-white py-2.5 px-9 rounded-xl outline-none focus:border-amber-500 font-mono font-bold text-xs"
+                      />
+                      <Phone className="w-4 h-4 text-slate-500 absolute right-3 top-3 pointer-events-none" />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-300 font-bold mb-1">
+                      رمز دخول المندوب (PIN الافتراضي: 1234 أو 7777):
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="password"
+                        maxLength={8}
+                        placeholder="1234"
+                        value={driverPin}
+                        onChange={(e) => {
+                          setDriverPin(e.target.value);
+                          if (driverError) setDriverError(null);
+                        }}
+                        dir="ltr"
+                        className="w-full bg-slate-900 border border-slate-800 text-white py-2.5 px-9 rounded-xl outline-none focus:border-amber-500 text-center font-mono text-base tracking-widest"
+                      />
+                      <Lock className="w-4 h-4 text-slate-500 absolute left-3 top-3 pointer-events-none" />
+                    </div>
+                    {driverError && (
+                      <p className="text-[11px] text-red-400 mt-1 flex items-center gap-1">
+                        <AlertCircle className="w-3 h-3" />
+                        <span>{driverError}</span>
+                      </p>
+                    )}
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={isLoading}
+                    className="w-full py-3 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 font-black hover:brightness-110 active:scale-98 transition-all flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20 cursor-pointer disabled:opacity-50"
+                  >
+                    {isLoading ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-slate-950" />
+                    ) : (
+                      <>
+                        <Truck className="w-4 h-4 text-slate-950 fill-slate-950" />
+                        <span>دخول كابتن التوصيل واستلام المهام 🛵</span>
+                      </>
+                    )}
+                  </button>
+                </form>
+              </div>
+            )}
+
+            {/* TAB 4: OWNER / MANAGER ACCESS (PIN VERIFIED VIA BACKEND) */}
             {authTab === 'owner_pin' && (
               <div className="space-y-3.5 animate-in fade-in duration-200">
                 <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-3.5 text-xs text-amber-300 flex items-start gap-2.5">

@@ -73,10 +73,19 @@ export function validateYemeniPhone(rawPhone: string): { isValid: boolean; norma
   return { isValid, normalized: clean };
 }
 
+export interface AuthTokenPayload {
+  userId: string;
+  role: string;
+  phone: string;
+  name: string;
+  orderIds?: string[];
+  isGuest?: boolean;
+}
+
 /**
  * Generate cryptographically signed JWT Token
  */
-export function generateToken(payload: { userId: string; role: string; phone: string; name: string }): string {
+export function generateToken(payload: AuthTokenPayload): string {
   const secret = getJwtSecret();
   const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
   const exp = Date.now() + (30 * 24 * 60 * 60 * 1000); // 30 days expiration
@@ -88,7 +97,7 @@ export function generateToken(payload: { userId: string; role: string; phone: st
 /**
  * Verify JWT Token and check expiration
  */
-export function verifyToken(token: string): { userId: string; role: string; phone: string; name: string } | null {
+export function verifyToken(token: string): AuthTokenPayload | null {
   try {
     if (!token || typeof token !== 'string') return null;
     const parts = token.split('.');

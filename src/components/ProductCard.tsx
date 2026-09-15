@@ -91,40 +91,89 @@ export const ProductCard: React.FC<ProductCardProps> = ({
         </div>
       </div>
 
-      {/* Pricing & Add to Cart Action */}
-      <div className="pt-4 mt-3 border-t border-zinc-800 flex items-center justify-between">
+      {/* Stock & Availability Indicator */}
+      <div className="mt-2.5 flex items-center justify-between text-[11px]">
+        <span className="text-emerald-400 font-bold flex items-center gap-1">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+          متوفر في المستودع بصنعاء
+        </span>
+        <span className="text-zinc-500 font-mono text-[10px]">
+          ضمان نقاوة 100%
+        </span>
+      </div>
+
+      {/* Pricing & Quantity Controls & Add to Cart Action */}
+      <div className="pt-3 mt-2.5 border-t border-zinc-800 flex flex-wrap items-center justify-between gap-2">
         <div>
-          <div className="flex items-baseline gap-1.5">
-            <span className="text-lg font-black text-amber-400">{product.price.toLocaleString()}</span>
-            <span className="text-xs font-bold text-zinc-400">ريال</span>
+          <div className="flex items-baseline gap-1">
+            <span className="text-lg font-black text-amber-400">{((product.price) * quantity).toLocaleString()}</span>
+            <span className="text-xs font-bold text-zinc-400">ر.ي</span>
           </div>
-          {product.originalPrice && product.originalPrice > product.price && (
-            <span className="text-xs text-zinc-500 line-through">
-              {product.originalPrice.toLocaleString()} ريال
+          {product.originalPrice && product.originalPrice > product.price ? (
+            <span className="text-[11px] text-zinc-500 line-through block">
+              {(product.originalPrice * quantity).toLocaleString()} ر.ي
             </span>
-          )}
+          ) : quantity > 1 ? (
+            <span className="text-[10px] text-zinc-500 block font-mono">
+              ({product.price.toLocaleString()} ر.ي / عبوة)
+            </span>
+          ) : null}
         </div>
 
-        <button
-          onClick={handleAdd}
-          className={`flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl font-black text-xs transition-all shadow-md ${
-            isAdded
-              ? 'bg-emerald-500 text-black'
-              : 'bg-amber-500 hover:bg-amber-400 text-black shadow-amber-500/20'
-          }`}
-        >
-          {isAdded ? (
-            <>
-              <Check className="w-4 h-4" />
-              <span>تمت الإضافة</span>
-            </>
-          ) : (
-            <>
-              <ShoppingCart className="w-4 h-4" />
-              <span>أضف للسلة</span>
-            </>
-          )}
-        </button>
+        <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+          {/* Quantity Stepper */}
+          <div className="flex items-center bg-zinc-950 border border-zinc-700/80 rounded-xl p-0.5">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setQuantity((q) => Math.max(1, q - 1));
+              }}
+              className="w-7 h-7 rounded-lg flex items-center justify-center text-zinc-400 hover:text-white hover:bg-zinc-800 active:bg-zinc-700 transition-colors text-xs font-bold"
+              title="تقليل الكمية"
+              aria-label="تقليل الكمية"
+            >
+              -
+            </button>
+            <span className="w-6 text-center font-black text-xs text-white font-mono">
+              {quantity}
+            </span>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setQuantity((q) => q + 1);
+              }}
+              className="w-7 h-7 rounded-lg flex items-center justify-center text-zinc-400 hover:text-white hover:bg-zinc-800 active:bg-zinc-700 transition-colors text-xs font-bold"
+              title="زيادة الكمية"
+              aria-label="زيادة الكمية"
+            >
+              +
+            </button>
+          </div>
+
+          <button
+            onClick={handleAdd}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl font-black text-xs transition-all shadow-md active:scale-95 ${
+              isAdded
+                ? 'bg-emerald-500 text-black'
+                : 'bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 text-black shadow-amber-500/20'
+            }`}
+            title="إضافة المنتج للسلة"
+          >
+            {isAdded ? (
+              <>
+                <Check className="w-3.5 h-3.5" />
+                <span>تمت ({quantity})</span>
+              </>
+            ) : (
+              <>
+                <ShoppingCart className="w-3.5 h-3.5" />
+                <span>أضف ({quantity})</span>
+              </>
+            )}
+          </button>
+        </div>
       </div>
     </div>
   );

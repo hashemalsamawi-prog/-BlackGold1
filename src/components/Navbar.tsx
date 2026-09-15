@@ -21,6 +21,7 @@ interface NavbarProps {
   onOpenAdmin: () => void;
   onOpenMandoub: () => void;
   onOpenAiAdvisor: () => void;
+  onOpenCalculator?: () => void;
   onOpenAuth: () => void;
   searchQuery: string;
   setSearchQuery: (q: string) => void;
@@ -56,6 +57,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenAdmin,
   onOpenMandoub,
   onOpenAiAdvisor,
+  onOpenCalculator,
   onOpenAuth,
   searchQuery,
   setSearchQuery,
@@ -113,7 +115,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onFocus={() => setSearchFocused(true)}
                 onBlur={() => setTimeout(() => setSearchFocused(false), 200)}
-                placeholder="ابحث عن الفحم الملكي، الأحجام، التوريد..."
+                placeholder={lang === 'ar' ? "ابحث عن الفحم الملكي، الأحجام، التوريد..." : "Search royal charcoal, sizes, packs..."}
                 className="w-full bg-zinc-900/90 border border-zinc-700/70 focus:border-amber-500 rounded-xl py-2 px-4 pr-10 text-sm text-white placeholder-zinc-400 focus:outline-none focus:ring-1 focus:ring-amber-500/50 transition-all"
               />
               <Search className="absolute left-3 top-2.5 w-4 h-4 text-zinc-400" />
@@ -129,10 +131,10 @@ export const Navbar: React.FC<NavbarProps> = ({
                       onSelectProduct(p);
                       setSearchQuery('');
                     }}
-                    className="w-full text-right p-2.5 rounded-lg hover:bg-amber-500/10 flex items-center justify-between text-xs text-zinc-200 transition-colors"
+                    className="w-full text-right p-2.5 rounded-lg hover:bg-amber-500/10 flex items-center justify-between text-xs text-zinc-200 transition-colors cursor-pointer"
                   >
-                    <span className="font-bold text-amber-400">{p.nameAr}</span>
-                    <span className="text-zinc-400">{p.price} ريال</span>
+                    <span className="font-bold text-amber-400">{lang === 'ar' ? p.nameAr : (p.nameEn || p.nameAr)}</span>
+                    <span className="text-zinc-400 font-mono">{p.price.toLocaleString()} {lang === 'ar' ? 'ريال' : 'YER'}</span>
                   </button>
                 ))}
               </div>
@@ -144,31 +146,44 @@ export const Navbar: React.FC<NavbarProps> = ({
             {/* AI Advisor Button */}
             <button
               onClick={onOpenAiAdvisor}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-gradient-to-r from-amber-500/10 to-amber-500/20 border border-amber-500/40 text-amber-300 text-xs font-bold hover:bg-amber-500/30 transition-all shadow-sm"
-              title="مستشار الفحم الذكي"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-gradient-to-r from-amber-500/10 to-amber-500/20 border border-amber-500/40 text-amber-300 text-xs font-bold hover:bg-amber-500/30 transition-all shadow-sm cursor-pointer"
+              title={lang === 'ar' ? "مستشار الفحم الذكي" : "AI Charcoal Advisor"}
             >
               <Bot className="w-4 h-4 text-amber-400 animate-pulse" />
-              <span className="hidden lg:inline">المستشار الذكي</span>
+              <span className="hidden lg:inline">{lang === 'ar' ? 'المستشار الذكي' : 'AI Advisor'}</span>
             </button>
+
+            {/* Smart Charcoal Calculator */}
+            {onOpenCalculator && (
+              <button
+                onClick={onOpenCalculator}
+                id="navbar-open-calc-btn"
+                className="hidden md:flex items-center gap-1.5 px-3 py-2 rounded-xl bg-zinc-900/80 border border-zinc-800 text-amber-300 text-xs font-bold hover:border-amber-500/50 hover:bg-amber-500/10 transition-all cursor-pointer"
+                title={lang === 'ar' ? "حاسبة استهلاك الفحم الذكية" : "Smart Charcoal Calculator"}
+              >
+                <Flame className="w-4 h-4 text-amber-400" />
+                <span className="hidden xl:inline">{lang === 'ar' ? 'حاسبة الفحم 🧮' : 'Calculator 🧮'}</span>
+              </button>
+            )}
 
             {/* Map & Delivery coverage */}
             <button
               onClick={onOpenMap}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-zinc-900/80 border border-zinc-800 text-zinc-300 text-xs font-semibold hover:border-amber-500/40 hover:text-white transition-all"
-              title="مناطق التوصيل في صنعاء"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-zinc-900/80 border border-zinc-800 text-zinc-300 text-xs font-semibold hover:border-amber-500/40 hover:text-white transition-all cursor-pointer"
+              title={lang === 'ar' ? "مناطق التوصيل في صنعاء" : "Delivery Zones in Sana'a"}
             >
               <MapPin className="w-4 h-4 text-amber-400" />
-              <span className="hidden sm:inline">صنعاء</span>
+              <span className="hidden sm:inline">{lang === 'ar' ? 'صنعاء' : "Sana'a"}</span>
             </button>
 
             {/* Orders Tracker */}
             <button
               onClick={onOpenOrders}
-              className="relative flex items-center gap-1.5 px-3 py-2 rounded-xl bg-zinc-900/80 border border-zinc-800 text-zinc-300 text-xs font-semibold hover:border-amber-500/40 hover:text-white transition-all"
-              title="تتبع الطلبات"
+              className="relative flex items-center gap-1.5 px-3 py-2 rounded-xl bg-zinc-900/80 border border-zinc-800 text-zinc-300 text-xs font-semibold hover:border-amber-500/40 hover:text-white transition-all cursor-pointer"
+              title={lang === 'ar' ? "تتبع الطلبات" : "Track Orders"}
             >
               <Package className="w-4 h-4 text-amber-400" />
-              <span className="hidden sm:inline">طلباتي</span>
+              <span className="hidden sm:inline">{lang === 'ar' ? 'طلباتي' : 'Orders'}</span>
               {ordersCount > 0 && (
                 <span className="bg-amber-500 text-black text-[10px] font-black rounded-full h-4 min-w-4 px-1 flex items-center justify-center">
                   {ordersCount}
@@ -180,10 +195,10 @@ export const Navbar: React.FC<NavbarProps> = ({
             {userRole === 'owner' && (
               <button
                 onClick={onOpenAdmin}
-                className="relative flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-500 text-black text-xs font-black hover:bg-amber-400 shadow-md shadow-amber-500/20 transition-all"
+                className="relative flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-500 text-black text-xs font-black hover:bg-amber-400 shadow-md shadow-amber-500/20 transition-all cursor-pointer"
               >
                 <ShieldAlert className="w-4 h-4" />
-                <span className="hidden sm:inline">لوحة الإدارة</span>
+                <span className="hidden sm:inline">{lang === 'ar' ? 'لوحة الإدارة' : 'Admin'}</span>
                 {pendingOrdersCount > 0 && (
                   <span className="bg-red-600 text-white text-[10px] font-black rounded-full h-4.5 min-w-4.5 px-1.5 flex items-center justify-center border border-white/30 animate-pulse">
                     {pendingOrdersCount}
@@ -195,27 +210,36 @@ export const Navbar: React.FC<NavbarProps> = ({
             {userRole === 'mandoub' && (
               <button
                 onClick={onOpenMandoub}
-                className="flex items-center gap-1 px-3 py-2 rounded-xl bg-amber-600 text-white text-xs font-bold hover:bg-amber-500 transition-all"
+                className="flex items-center gap-1 px-3 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-500 transition-all cursor-pointer shadow-md shadow-emerald-600/20"
               >
                 <Truck className="w-4 h-4" />
-                <span className="hidden sm:inline">بوابة المندوب</span>
+                <span className="hidden sm:inline">{lang === 'ar' ? 'بوابة المندوب' : 'Driver Portal'}</span>
               </button>
             )}
 
             {/* User Profile / Login */}
             <button
               onClick={onOpenAuth}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-zinc-900/80 border border-zinc-800 text-zinc-300 text-xs font-semibold hover:border-amber-500/40 transition-all"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-zinc-900/80 border border-zinc-800 text-zinc-300 text-xs font-semibold hover:border-amber-500/40 transition-all cursor-pointer"
             >
               <User className="w-4 h-4 text-amber-400" />
-              <span className="hidden md:inline">{userName || 'تسجيل الدخول'}</span>
+              <span className="hidden md:inline">{userName || (lang === 'ar' ? 'تسجيل الدخول' : 'Sign In')}</span>
+            </button>
+
+            {/* Language Toggle Button */}
+            <button
+              onClick={onLanguageToggle}
+              className="px-2.5 py-1.5 rounded-xl bg-zinc-900/80 border border-zinc-800 text-amber-400 hover:bg-zinc-800 text-xs font-black transition-colors cursor-pointer"
+              title={lang === 'ar' ? "Switch to English" : "التبديل إلى العربية"}
+            >
+              {lang === 'ar' ? 'EN' : 'عربي'}
             </button>
 
             {/* Theme Toggle */}
             <button
               onClick={onToggleTheme}
-              className="p-2 rounded-xl bg-zinc-900/80 border border-zinc-800 text-zinc-400 hover:text-amber-400 transition-colors"
-              title="تبديل المظهر"
+              className="p-2 rounded-xl bg-zinc-900/80 border border-zinc-800 text-zinc-400 hover:text-amber-400 transition-colors cursor-pointer"
+              title={lang === 'ar' ? "تبديل المظهر" : "Toggle Theme"}
             >
               {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </button>
@@ -223,10 +247,10 @@ export const Navbar: React.FC<NavbarProps> = ({
             {/* Cart Button */}
             <button
               onClick={onOpenCart}
-              className="relative flex items-center justify-center p-2 sm:px-4 sm:py-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 text-black font-black text-xs hover:from-amber-400 hover:to-amber-500 shadow-lg shadow-amber-500/20 transition-all"
+              className="relative flex items-center justify-center p-2 sm:px-4 sm:py-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 text-black font-black text-xs hover:from-amber-400 hover:to-amber-500 shadow-lg shadow-amber-500/20 transition-all cursor-pointer"
             >
               <ShoppingCart className="w-4 h-4 sm:ml-1.5" />
-              <span className="hidden sm:inline">السلة</span>
+              <span className="hidden sm:inline">{lang === 'ar' ? 'السلة' : 'Cart'}</span>
               {cartCount > 0 && (
                 <span className="absolute -top-1.5 -right-1.5 bg-black text-amber-400 border border-amber-400 text-[10px] font-black rounded-full h-5 w-5 flex items-center justify-center shadow">
                   {cartCount}

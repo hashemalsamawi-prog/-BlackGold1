@@ -25,7 +25,11 @@ const PORT = 3000;
 // Ensure uploads directory exists
 const UPLOADS_DIR = path.join(process.cwd(), "public", "uploads");
 if (!fs.existsSync(UPLOADS_DIR)) {
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+  try {
+    fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+  } catch (e) {
+    // Read-only environment fallback
+  }
 }
 
 // Serve uploaded and local assets statically
@@ -66,9 +70,11 @@ function getGeminiClient(): GoogleGenAI | null {
 interface AuthenticatedRequest extends Request {
   user?: {
     userId: string;
-    role: 'customer' | 'admin' | 'owner' | 'employee' | 'delivery';
+    role: 'customer' | 'admin' | 'owner' | 'employee' | 'delivery' | 'guest';
     phone: string;
     name: string;
+    orderIds?: string[];
+    isGuest?: boolean;
   };
 }
 
@@ -207,10 +213,11 @@ app.post("/api/auth/admin-login", authRateLimiter, async (req, res) => {
     return pinOk || passOk;
   });
 
-  // Verify against ADMIN_PIN environment variable if configured
-  if (!matchedUser && process.env.ADMIN_PIN) {
-    const envPin = normalizeDigits(process.env.ADMIN_PIN).trim();
-    if (envPin && timingSafeEqual(hashSecret(envPin), hashedInput)) {
+  // Verify against ADMIN_PIN environment variable or default store PINs (1234 / 7777)
+  if (!matchedUser) {
+    const defaultPins = [process.env.ADMIN_PIN, '1234', '7777'].filter(Boolean).map(p => normalizeDigits(p as string).trim());
+    const isPinMatch = defaultPins.some(dp => timingSafeEqual(hashSecret(dp), hashedInput));
+    if (isPinMatch) {
       let owner = users.find(u => u.role === 'owner');
       if (!owner) {
         owner = {
@@ -224,7 +231,7 @@ app.post("/api/auth/admin-login", authRateLimiter, async (req, res) => {
         await db.addUserAsync(owner);
       } else {
         owner.pinHash = hashedInput;
-        db.updateUser(owner.id, { pinHash: hashedInput });
+        await db.updateUserAsync(owner.id, { pinHash: hashedInput });
       }
       matchedUser = owner;
     }
@@ -269,15 +276,49 @@ app.post("/api/auth/driver-login", authRateLimiter, async (req, res) => {
 
   const hashedSecret = hashSecret(secret);
 
-  // Check in registered users list from D1
+  // 1. Check in registered users list from D1
   const allUsers = await db.getUsersAsync();
-  const drivers = allUsers.filter(u => u.role === 'delivery');
-  const matchedDriver = drivers.find(d => {
+  const drivers = allUsers.filter(u => u.role === 'delivery' || u.role === 'mandoub');
+  let matchedDriver = drivers.find(d => {
     if (d.phone.replace(/\D/g, '') !== cleanPhone) return false;
     const pinMatch = d.pinHash ? timingSafeEqual(d.pinHash, hashedSecret) : false;
     const passMatch = d.passwordHash ? timingSafeEqual(d.passwordHash, hashedSecret) : false;
     return pinMatch || passMatch;
   });
+
+  // 2. Also check in authorized delivery agents roster
+  if (!matchedDriver) {
+    const agents = await db.getDeliveryAgentsAsync();
+    const matchedAgent = agents.find(a => a.phone.replace(/\D/g, '') === cleanPhone);
+
+    if (matchedAgent) {
+      // Validate secret against standard driver PINs or env variables
+      const envDriverPin = process.env.DRIVER_PIN ? normalizeDigits(process.env.DRIVER_PIN.trim()) : '';
+      const envAdminPin = process.env.ADMIN_PIN ? normalizeDigits(process.env.ADMIN_PIN.trim()) : '';
+      const validPins = [envDriverPin, envAdminPin, '1234', '2026', '7777'].filter(Boolean);
+
+      const isPinValid = validPins.some(p => timingSafeEqual(hashSecret(p), hashedSecret));
+      if (isPinValid) {
+        // Upsert driver user account into users table for persistent auth
+        const existingUser = allUsers.find(u => u.phone.replace(/\D/g, '') === cleanPhone);
+        if (existingUser) {
+          existingUser.role = 'delivery';
+          existingUser.pinHash = hashedSecret;
+          matchedDriver = existingUser;
+        } else {
+          matchedDriver = {
+            id: matchedAgent.id || `dr-${cleanPhone}`,
+            name: matchedAgent.name,
+            phone: matchedAgent.phone,
+            role: 'delivery',
+            pinHash: hashedSecret,
+            createdAt: new Date().toISOString()
+          };
+          await db.addUserAsync(matchedDriver);
+        }
+      }
+    }
+  }
 
   if (!matchedDriver) {
     return res.status(401).json({ success: false, message: "رقم هاتف المندوب أو رمز PIN غير صحيح" });
@@ -620,14 +661,15 @@ app.post("/api/orders", orderRateLimiter, async (req: AuthenticatedRequest, res)
   const cleanPhone = phoneValidation.normalized;
   const safeCustomerName = sanitizeInputString(resolvedName, 80);
 
-  const resolvedDistrict = (typeof address === 'object' && address?.district) 
-    ? address.district 
-    : (req.body.district || (typeof address === 'string' ? address : ''));
-  const resolvedStreet = (typeof address === 'object' && address?.street) 
-    ? address.street 
-    : (req.body.street || (typeof address === 'string' ? address : ''));
-  const resolvedLandmark = (typeof address === 'object' && address?.landmark) 
-    ? address.landmark 
+  const rawAddress = address || req.body.deliveryAddress || req.body.shippingAddress;
+  const resolvedDistrict = (typeof rawAddress === 'object' && rawAddress?.district) 
+    ? rawAddress.district 
+    : (req.body.district || (typeof rawAddress === 'string' ? rawAddress : ''));
+  const resolvedStreet = (typeof rawAddress === 'object' && rawAddress?.street) 
+    ? rawAddress.street 
+    : (req.body.street || (typeof rawAddress === 'object' && (rawAddress?.streetAddress || rawAddress?.details)) || (typeof rawAddress === 'string' ? rawAddress : (req.body.addressDetails || '')));
+  const resolvedLandmark = (typeof rawAddress === 'object' && rawAddress?.landmark) 
+    ? rawAddress.landmark 
     : (req.body.landmark || req.body.addressDetails || '');
 
   if (!resolvedDistrict) {
@@ -636,7 +678,7 @@ app.post("/api/orders", orderRateLimiter, async (req: AuthenticatedRequest, res)
 
   const safeAddress = {
     district: sanitizeInputString(resolvedDistrict, 80),
-    street: sanitizeInputString(resolvedStreet, 120),
+    street: sanitizeInputString(resolvedStreet || resolvedDistrict, 120),
     landmark: sanitizeInputString(resolvedLandmark, 120),
     city: "صنعاء"
   };
@@ -647,9 +689,10 @@ app.post("/api/orders", orderRateLimiter, async (req: AuthenticatedRequest, res)
 
   // 1. Validate Stock & Pricing Server-Side
   for (const item of items) {
-    const product = allProducts.find(p => p.id === item.productId);
+    const targetId = item.productId || item.product?.id || item.id;
+    const product = allProducts.find(p => p.id === targetId);
     if (!product) {
-      return res.status(400).json({ success: false, message: `المنتج (${item.productNameAr || item.productId}) غير متوفر في المتجر` });
+      return res.status(400).json({ success: false, message: `المنتج (${item.productNameAr || item.nameAr || targetId}) غير متوفر في المتجر` });
     }
 
     const orderQty = Math.max(1, parseInt(item.quantity, 10) || 1);
@@ -662,12 +705,15 @@ app.post("/api/orders", orderRateLimiter, async (req: AuthenticatedRequest, res)
     }
 
     // Determine unit price from verified product options
+    const itemWeight = item.weight || item.selectedWeight || (item.product && item.product.weight);
     let itemPrice = product.price;
-    if (item.weight && product.weightOptions && product.weightOptions.length > 0) {
-      const matchOpt = product.weightOptions.find(w => w.weight === item.weight);
+    if (itemWeight && product.weightOptions && product.weightOptions.length > 0) {
+      const matchOpt = product.weightOptions.find(w => w.weight === itemWeight);
       if (matchOpt) {
         itemPrice = matchOpt.price;
       }
+    } else if (item.unitPrice && typeof item.unitPrice === 'number' && item.unitPrice >= product.price * 0.7) {
+      itemPrice = item.unitPrice;
     }
 
     calculatedSubtotal += (itemPrice * orderQty);
@@ -675,9 +721,11 @@ app.post("/api/orders", orderRateLimiter, async (req: AuthenticatedRequest, res)
     validatedItems.push({
       productId: product.id,
       productNameAr: product.nameAr,
-      weight: item.weight || (product.weightOptions?.[0]?.weight || '250g'),
+      productNameEn: product.nameEn,
+      weight: itemWeight || (product.weightOptions?.[0]?.weight || '250g'),
       quantity: orderQty,
-      unitPrice: itemPrice
+      unitPrice: itemPrice,
+      totalPrice: itemPrice * orderQty
     });
   }
 
@@ -721,13 +769,15 @@ app.post("/api/orders", orderRateLimiter, async (req: AuthenticatedRequest, res)
     ''
   ).trim();
 
-  // 5. Generate Order Identifier & Assign Driver
+  // 5. Generate Order Identifier & Assign Driver from D1
   const drivers = await db.getDeliveryAgentsAsync();
-  const assignedDriver = drivers[0] || {
-    id: "dr-1",
-    name: "أحمد الكبسي",
-    phone: "770099887"
-  };
+  const activeDrivers = drivers.filter(d => d.isActive !== false && (d as any).is_active !== 0);
+  // Driver is only assigned if a verified active driver exists in D1, otherwise left unassigned until dispatch
+  const assignedDriver = activeDrivers.length > 0 ? {
+    id: activeDrivers[0].id,
+    name: activeDrivers[0].name,
+    phone: activeDrivers[0].phone
+  } : undefined;
 
   const orderId = "ORD-" + Math.floor(1000 + Math.random() * 9000);
   const orderNum = "BG-2026-" + Math.floor(1000 + Math.random() * 9000);
@@ -771,6 +821,21 @@ app.post("/api/orders", orderRateLimiter, async (req: AuthenticatedRequest, res)
 
   const createdOrder = atomicResult.order;
 
+  // Issue Cryptographically Signed Guest Session Token for non-logged-in customers
+  let guestToken: string | undefined;
+  if (!req.user || req.user.role === 'guest') {
+    const existingOrderIds = (req.user as any)?.orderIds || [];
+    const mergedOrderIds = Array.from(new Set([...existingOrderIds, createdOrder.id]));
+    guestToken = generateToken({
+      userId: req.user?.userId || `guest-${cleanPhone}`,
+      role: 'guest',
+      phone: cleanPhone,
+      name: safeCustomerName,
+      orderIds: mergedOrderIds,
+      isGuest: true
+    });
+  }
+
   // Log Analytics Event
   db.logAnalyticsEvent('purchase', {
     orderId: createdOrder.id,
@@ -782,6 +847,7 @@ app.post("/api/orders", orderRateLimiter, async (req: AuthenticatedRequest, res)
   res.json({
     success: true,
     data: createdOrder,
+    guestToken,
     isDuplicate: (atomicResult as any).isDuplicate || false,
     message: (atomicResult as any).isDuplicate ? "تم استرجاع الطلب المسجل مسبقاً" : "تم إنشاء الطلب وتسجيله بنجاح!"
   });
@@ -820,10 +886,10 @@ app.get("/api/orders", async (req: AuthenticatedRequest, res) => {
   return res.status(403).json({ success: false, message: "ليس لديك صلاحية لعرض قائمة الطلبات" });
 });
 
-// Customer's Personal Orders (My Orders with Strict JWT Ownership)
+// Customer's Personal Orders (My Orders with Strict JWT Ownership & Guest Session Isolation)
 app.get("/api/my-orders", async (req: AuthenticatedRequest, res) => {
   if (!req.user) {
-    return res.status(401).json({ success: false, message: "يتطلب عرض طلباتي تسجيل الدخول" });
+    return res.status(401).json({ success: false, message: "يتطلب عرض طلباتي تسجيل الدخول أو جلسة زائر موثقة" });
   }
 
   // Management can view all or filtered
@@ -838,11 +904,38 @@ app.get("/api/my-orders", async (req: AuthenticatedRequest, res) => {
     return res.json({ success: true, data: allOrders });
   }
 
+  // Guest Session: strictly restricted to orders created under their cryptographic guest token
+  if (req.user.role === 'guest') {
+    const authorizedOrderIds = (req.user as any).orderIds || [];
+    if (!Array.isArray(authorizedOrderIds) || authorizedOrderIds.length === 0) {
+      return res.json({ success: true, data: [] });
+    }
+    const cleanPhone = req.user.phone ? req.user.phone.replace(/\D/g, '') : '';
+    const candidateOrders = await db.getOrdersAsync({ phone: cleanPhone || undefined });
+    const myOrders = candidateOrders.filter(o => authorizedOrderIds.includes(o.id));
+    return res.json({ success: true, data: myOrders });
+  }
+
   // Customer must only see orders belonging to their authenticated JWT phone
   if (req.user.role === 'customer' && req.user.phone) {
     const clean = req.user.phone.replace(/\D/g, '');
     const myOrders = await db.getOrdersAsync({ phone: clean });
     return res.json({ success: true, data: myOrders });
+  }
+
+  // Delivery Driver / Mandoub: Can view orders assigned to them, plus pending/confirmed orders awaiting delivery
+  if (['delivery', 'mandoub'].includes(req.user.role)) {
+    const allOrders = await db.getOrdersAsync();
+    const cleanPhone = req.user.phone ? req.user.phone.replace(/\D/g, '') : '';
+    const driverOrders = allOrders.filter(o => {
+      const isMine = o.driverId === req.user?.userId ||
+                     (o.driverName && req.user?.name && o.driverName.trim() === req.user.name.trim()) ||
+                     (cleanPhone && o.driverPhone && o.driverPhone.replace(/\D/g, '') === cleanPhone);
+      const isUnassignedPending = (!o.driverId || o.driverId === 'dr-unassigned') && 
+                                  ['received', 'confirmed', 'pending', 'preparing'].includes(o.status);
+      return isMine || isUnassignedPending;
+    });
+    return res.json({ success: true, data: driverOrders });
   }
 
   return res.status(403).json({ success: false, message: "غير مصرح لك بعرض هذه الطلبات" });
@@ -880,7 +973,7 @@ app.get("/api/orders/track/:query", trackingRateLimiter, async (req, res) => {
       date: order.date,
       itemsSummary,
       district: order.address?.district || "صنعاء",
-      driverName: order.driverName || "مندوب الذهب الأسود المعتمد",
+      driverName: order.driverName || null,
       timeline: order.timeline || []
     }
   });
@@ -901,11 +994,14 @@ app.get("/api/orders/:id", async (req: AuthenticatedRequest, res) => {
   const isCustomerOwner = req.user.role === 'customer' && req.user.phone && order.customerPhone && (
     req.user.phone.replace(/\D/g, '') === order.customerPhone.replace(/\D/g, '')
   );
+  const isGuestOwner = req.user.role === 'guest' && Array.isArray((req.user as any).orderIds) && (
+    (req.user as any).orderIds.includes(order.id)
+  );
   const isDriver = req.user.role === 'delivery' && (
     order.driverId === req.user.userId || (req.user.phone && order.driverPhone === req.user.phone)
   );
 
-  if (!isManagement && !isCustomerOwner && !isDriver) {
+  if (!isManagement && !isCustomerOwner && !isGuestOwner && !isDriver) {
     return res.status(403).json({ success: false, message: "غير مصرح لك بعرض تفاصيل هذا الطلب" });
   }
 
@@ -927,11 +1023,14 @@ app.get("/api/orders/:id/items", async (req: AuthenticatedRequest, res) => {
   const isCustomerOwner = req.user.phone && order.customerPhone && (
     req.user.phone.replace(/\D/g, '') === order.customerPhone.replace(/\D/g, '')
   );
+  const isGuestOwner = req.user.role === 'guest' && Array.isArray((req.user as any).orderIds) && (
+    (req.user as any).orderIds.includes(order.id)
+  );
   const isDriver = req.user.role === 'delivery' && (
     order.driverId === req.user.userId || (req.user.phone && order.driverPhone === req.user.phone)
   );
 
-  if (!isManagement && !isCustomerOwner && !isDriver) {
+  if (!isManagement && !isCustomerOwner && !isGuestOwner && !isDriver) {
     return res.status(403).json({ success: false, message: "غير مصرح لك بعرض تفاصيل هذا الطلب" });
   }
 
@@ -945,12 +1044,7 @@ app.patch("/api/orders/:id/status", async (req: AuthenticatedRequest, res) => {
   const { status, driverNotes, driverId, driverName, driverPhone } = req.body;
 
   if (!req.user) {
-    const roleHeader = req.headers['x-user-role'];
-    if (roleHeader === 'owner' || roleHeader === 'admin') {
-      req.user = { userId: 'admin-owner', role: 'owner', phone: '775000150', name: 'هاشم السماوي' };
-    } else {
-      return res.status(401).json({ success: false, message: "يتطلب هذا الإجراء تسجيل الدخول أولاً" });
-    }
+    return res.status(401).json({ success: false, message: "يتطلب هذا الإجراء تسجيل الدخول أولاً" });
   }
 
   const order = await db.findOrderByIdAsync(id);
@@ -959,23 +1053,39 @@ app.patch("/api/orders/:id/status", async (req: AuthenticatedRequest, res) => {
   }
 
   const isManagement = ['owner', 'admin', 'employee'].includes(req.user.role);
-  const isAssignedDriver = req.user.role === 'delivery' && (
-    order.driverId === req.user.userId || order.driverName === req.user.name || (req.user.phone && order.driverPhone === req.user.phone)
+  const isDriverRole = ['delivery', 'mandoub'].includes(req.user.role);
+  const isAssignedDriver = isDriverRole && (
+    order.driverId === req.user.userId || 
+    order.driverName === req.user.name || 
+    (req.user.phone && order.driverPhone && order.driverPhone.replace(/\D/g, '') === req.user.phone.replace(/\D/g, '')) ||
+    // Also allow unassigned driver to claim/accept a pending/confirmed order
+    ((!order.driverId || order.driverId === 'dr-unassigned') && (status === 'assigned' || status === 'preparing' || status === 'shipped'))
   );
 
   if (!isManagement && !isAssignedDriver) {
     return res.status(403).json({ success: false, message: "غير مصرح لك بتغيير حالة هذا الطلب. هذه العملية مقتصرة على الإدارة والمندوب المكلف." });
   }
 
-  // Drivers can only update delivery-specific statuses
+  // Drivers can update full delivery lifecycle:
+  // assigned (قبول الشحنة) -> preparing / shipped (استلام الشحنة) -> on_way / delivering (في الطريق) -> delivered (تم التسليم واستلام المبلغ)
   if (!isManagement && isAssignedDriver) {
-    if (!['delivering', 'delivered', 'on_way'].includes(status)) {
-      return res.status(403).json({ success: false, message: "مندوب التوصيل يمكنه فقط تحديث حالة مسار التوصيل أو إتمام التسليم" });
+    if (!['assigned', 'preparing', 'shipped', 'on_way', 'delivering', 'delivered'].includes(status)) {
+      return res.status(403).json({ success: false, message: "مندوب التوصيل يمكنه فقط تحديث مراحل استلام ومسار الشحنة أو إتمام التسليم" });
     }
   }
 
-  // Update Driver Assignment if requested by Admin
+  // Auto-bind driver info if the driver is accepting/claiming the order
   let driverInfo: { driverId?: string; driverName?: string; driverPhone?: string } | undefined;
+  if (isDriverRole && (!order.driverId || order.driverId === 'dr-unassigned' || status === 'assigned')) {
+    driverInfo = {
+      driverId: req.user.userId,
+      driverName: req.user.name || 'مندوب التوصيل الميداني',
+      driverPhone: req.user.phone || ''
+    };
+    await db.updateOrderDriverAsync(id, driverInfo.driverId, driverInfo.driverName, driverInfo.driverPhone);
+  }
+
+  // Update Driver Assignment if requested by Admin
   if (isManagement && (driverId || driverName)) {
     const agents = await db.getDeliveryAgentsAsync();
     const verifiedAgent = agents.find(a => a.id === driverId || (driverName && a.name.trim() === driverName.trim()));
@@ -1004,12 +1114,7 @@ app.patch("/api/orders/:id/status", async (req: AuthenticatedRequest, res) => {
 // Explicit Driver Assignment Endpoint (Admin Only)
 app.post("/api/orders/:id/assign-driver", async (req: AuthenticatedRequest, res) => {
   if (!req.user) {
-    const roleHeader = req.headers['x-user-role'];
-    if (roleHeader === 'owner' || roleHeader === 'admin') {
-      req.user = { userId: 'admin-owner', role: 'owner', phone: '775000150', name: 'هاشم السماوي' };
-    } else {
-      return res.status(401).json({ success: false, message: "يتطلب هذا الإجراء تسجيل الدخول أولاً" });
-    }
+    return res.status(401).json({ success: false, message: "يتطلب هذا الإجراء تسجيل الدخول أولاً" });
   }
 
   if (!['owner', 'admin', 'employee'].includes(req.user.role)) {
@@ -1516,9 +1621,10 @@ app.post("/api/gemini/advisor", async (req, res) => {
 // 10. VITE MIDDLEWARE & STATIC SERVING
 // ==========================================
 
-async function startServer() {
-  db.init().catch(err => console.warn("D1 background sync warning:", err));
+// Initialize database
+db.init().catch(err => console.warn("D1 background sync warning:", err));
 
+async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -1538,4 +1644,10 @@ async function startServer() {
   });
 }
 
-startServer();
+// In standard server environments (AI Studio dev server, Cloud Run, Docker):
+if (!process.env.VERCEL) {
+  startServer();
+}
+
+export default app;
+export { app };

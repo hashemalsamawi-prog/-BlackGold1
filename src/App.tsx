@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Product, CartItem, Order, DeliveryAddress, Review, Language, DeliveryAgent, MarketingCampaign, StoreSettings, ThemeMode, ProductSortOption } from './types';
 import { INITIAL_PRODUCTS, MOCK_ADDRESSES, INITIAL_DELIVERY_AGENTS, INITIAL_CAMPAIGNS, INITIAL_STORE_SETTINGS, INITIAL_GALLERY_ITEMS } from './data/mockData';
 import { GalleryItem } from './types';
@@ -30,6 +30,9 @@ import { MarketingGallery } from './components/MarketingGallery';
 import { MobileBottomNav } from './components/MobileBottomNav';
 import { B2BProfitCalculator } from './components/B2BProfitCalculator';
 import { QualityProtocolSection } from './components/QualityProtocolSection';
+import { CharcoalCalculatorModal } from './components/CharcoalCalculatorModal';
+import { InvoiceReceiptModal } from './components/InvoiceReceiptModal';
+import { ExpressHotlineBar } from './components/ExpressHotlineBar';
 import { playOrderAlertSound } from './utils/soundAlert';
 import { safeGetLocalStorage, safeSetLocalStorage, safeRemoveLocalStorage } from './utils/storage';
 import { authStorage } from './services/api';
@@ -100,13 +103,25 @@ export default function App() {
   });
   const [cart, setCart] = useState<CartItem[]>([]);
   const [orders, setOrders] = useState<Order[]>(() => {
-    const saved = safeGetLocalStorage('bg_saved_orders', '');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      } catch (e) {
-        console.error('Failed to parse bg_saved_orders', e);
+    const savedRole = safeGetLocalStorage('bg_user_role', 'customer');
+    if (savedRole === 'owner' || savedRole === 'mandoub') {
+      const saved = safeGetLocalStorage('bg_saved_orders', '');
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        } catch (e) {
+          console.error('Failed to parse bg_saved_orders', e);
+        }
+      }
+    } else {
+      // For customer/visitor, initialize only with their own cached orders
+      const mySaved = safeGetLocalStorage('bg_my_orders_cache', '');
+      if (mySaved) {
+        try {
+          const parsed = JSON.parse(mySaved);
+          if (Array.isArray(parsed)) return parsed;
+        } catch (e) {}
       }
     }
     return [];
@@ -161,8 +176,13 @@ export default function App() {
     safeSetLocalStorage('bg_user_role', role);
     if (role === 'owner') {
       setToastMessage("مرحباً بك يا مدير المتجر! تم تفعيل لوحة الإدارة 👑");
+      fetchLatestOrders(false);
+    } else if (role === 'mandoub') {
+      setToastMessage(`مرحباً بك كابتن ${name}! بوابة المناديب جاهزة 🛵`);
+      fetchLatestOrders(false);
     } else {
       setToastMessage(`مرحباً بك ${name}! نتمنى لك تسوقاً ممتعاً 🔥`);
+      fetchLatestOrders(false);
     }
     setTimeout(() => setToastMessage(null), 4000);
   };
@@ -170,10 +190,27 @@ export default function App() {
   const handleLogout = () => {
     setUserName('');
     setUserRole('customer');
+    authStorage.removeToken();
     safeRemoveLocalStorage('bg_customer_name');
     safeRemoveLocalStorage('bg_customer_phone');
     safeRemoveLocalStorage('bg_user_role');
-    setToastMessage("تم تسجيل الخروج بنجاح");
+    safeRemoveLocalStorage('bg_owner_token');
+    safeRemoveLocalStorage('bg_saved_orders'); // Clear full database orders dump
+
+    // Reset orders state to ONLY this visitor's device cached orders
+    const mySaved = safeGetLocalStorage('bg_my_orders_cache', '');
+    let myDeviceOrders: Order[] = [];
+    if (mySaved) {
+      try {
+        const parsed = JSON.parse(mySaved);
+        if (Array.isArray(parsed)) myDeviceOrders = parsed;
+      } catch (e) {}
+    }
+    setOrders(myDeviceOrders);
+
+    setAdminOpen(false);
+    setMandoubOpen(false);
+    setToastMessage("تم تسجيل الخروج بنجاح والعودة لوضع الزائر");
     setTimeout(() => setToastMessage(null), 3000);
   };
 
@@ -204,6 +241,8 @@ export default function App() {
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [confirmedOrder, setConfirmedOrder] = useState<Order | null>(null);
   const [confirmationOpen, setConfirmationOpen] = useState(false);
+  const [calculatorOpen, setCalculatorOpen] = useState(false);
+  const [invoiceOrder, setInvoiceOrder] = useState<Order | null>(null);
   const [trackingFocusOrderId, setTrackingFocusOrderId] = useState<string | null>(null);
   const [welcomeOpen, setWelcomeOpen] = useState<boolean>(() => {
     const seen = safeGetLocalStorage('bg_welcome_seen', '');
@@ -218,6 +257,7 @@ export default function App() {
   // Checkout Params
   const [checkoutShippingFee, setCheckoutShippingFee] = useState(1000);
   const [checkoutDiscount, setCheckoutDiscount] = useState(0);
+  const [checkoutCouponCode, setCheckoutCouponCode] = useState('');
   const [checkoutCustomerNotes, setCheckoutCustomerNotes] = useState('');
   const [checkoutDistrictName, setCheckoutDistrictName] = useState('حدة');
 
@@ -420,10 +460,12 @@ export default function App() {
     shippingFee: number,
     discountVal: number,
     notes: string,
-    districtName: string
+    districtName: string,
+    couponCode?: string
   ) => {
     setCheckoutShippingFee(shippingFee);
     setCheckoutDiscount(discountVal);
+    setCheckoutCouponCode(couponCode || '');
     setCheckoutCustomerNotes(notes);
     setCheckoutDistrictName(districtName);
     setCartOpen(false);
@@ -433,6 +475,26 @@ export default function App() {
   const fetchLatestOrders = async (notifyIfNew = true) => {
     try {
       const token = authStorage.getToken();
+      // Only owner / mandoub should fetch all store orders
+      if (userRole !== 'owner' && userRole !== 'mandoub') {
+        const guestToken = safeGetLocalStorage('bg_guest_token', '');
+        const authToken = token || guestToken;
+        if (authToken) {
+          const res = await fetch('/api/my-orders', {
+            headers: { 'Authorization': `Bearer ${authToken}` }
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.success && Array.isArray(data.data)) {
+              const validOrders = data.data.filter((o: any) => o && (o.totalAmount || o.total));
+              setOrders(validOrders);
+              safeSetLocalStorage('bg_my_orders_cache', JSON.stringify(validOrders));
+            }
+          }
+        }
+        return;
+      }
+
       const headers: Record<string, string> = {};
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
@@ -476,10 +538,29 @@ export default function App() {
   }, [adminOpen, mandoubOpen, userRole]);
 
   const handleOrderPlaced = (newOrder: Order) => {
+    // 1. Record order on this visitor's device cache
+    try {
+      const existingIds = JSON.parse(safeGetLocalStorage('bg_my_order_ids', '[]') || '[]');
+      const idList = Array.isArray(existingIds) ? existingIds : [];
+      if (newOrder.id && !idList.includes(newOrder.id)) idList.unshift(newOrder.id);
+      if (newOrder.orderNumber && !idList.includes(newOrder.orderNumber)) idList.unshift(newOrder.orderNumber);
+      safeSetLocalStorage('bg_my_order_ids', JSON.stringify(idList));
+
+      const existingCache = JSON.parse(safeGetLocalStorage('bg_my_orders_cache', '[]') || '[]');
+      const cacheList = Array.isArray(existingCache) ? existingCache : [];
+      const updatedCache = [newOrder, ...cacheList.filter((o: any) => o && o.id !== newOrder.id && o.orderNumber !== newOrder.orderNumber)];
+      safeSetLocalStorage('bg_my_orders_cache', JSON.stringify(updatedCache));
+    } catch (e) {
+      console.warn('Error saving local customer order:', e);
+    }
+
+    // 2. Update orders in active state
     setOrders((prev) => {
       const cleanPrev = prev.filter(o => o && (o.totalAmount || o.total));
-      const updated = [newOrder, ...cleanPrev];
-      safeSetLocalStorage('bg_saved_orders', JSON.stringify(updated));
+      const updated = [newOrder, ...cleanPrev.filter(o => o.id !== newOrder.id && o.orderNumber !== newOrder.orderNumber)];
+      if (userRole === 'owner' || userRole === 'mandoub') {
+        safeSetLocalStorage('bg_saved_orders', JSON.stringify(updated));
+      }
       return updated;
     });
     setCart([]);
@@ -808,8 +889,55 @@ export default function App() {
   }, [products, activeCategory, searchQuery, minPrice, maxPrice, sortBy]);
 
   const hasActiveFilters = searchQuery.trim() !== '' || minPrice !== '' || maxPrice !== '' || sortBy !== 'popular';
-  const uncompletedOrdersCount = orders.filter(o => o && o.status !== 'delivered' && o.status !== 'cancelled').length;
-  const totalOrdersCount = orders.length;
+
+  const myVisitorOrders = useMemo(() => {
+    const myIds = new Set<string>();
+    const savedIds = safeGetLocalStorage('bg_my_order_ids', '');
+    if (savedIds) {
+      try {
+        const parsed = JSON.parse(savedIds);
+        if (Array.isArray(parsed)) parsed.forEach(id => myIds.add(String(id)));
+      } catch (e) {}
+    }
+
+    const currentPhone = (userName || safeGetLocalStorage('bg_customer_phone', '') || '').replace(/\D/g, '');
+
+    // From current orders state:
+    const matched = orders.filter(o => {
+      if (!o) return false;
+      const oId = String(o.id || '');
+      const oNum = String(o.orderNumber || '');
+      const oPhone = (o.customerPhone || '').replace(/\D/g, '');
+      if (myIds.has(oId) || myIds.has(oNum)) return true;
+      if (currentPhone && oPhone && currentPhone === oPhone) return true;
+      return false;
+    });
+
+    // Also merge any cached local device orders
+    const savedOrders = safeGetLocalStorage('bg_my_orders_cache', '');
+    if (savedOrders) {
+      try {
+        const parsed = JSON.parse(savedOrders);
+        if (Array.isArray(parsed)) {
+          const existingIds = new Set(matched.map(m => m.id || m.orderNumber));
+          for (const loc of parsed) {
+            if (loc && (loc.id || loc.orderNumber) && !existingIds.has(loc.id || loc.orderNumber)) {
+              matched.push(loc);
+            }
+          }
+        }
+      } catch (e) {}
+    }
+
+    return matched;
+  }, [orders, userName]);
+
+  const isOwnerMode = userRole === 'owner';
+  const displayedOrdersForTracker = isOwnerMode ? orders : myVisitorOrders;
+  const totalOrdersCount = isOwnerMode ? orders.length : myVisitorOrders.length;
+  const uncompletedOrdersCount = isOwnerMode 
+    ? orders.filter(o => o && o.status !== 'delivered' && o.status !== 'cancelled').length 
+    : myVisitorOrders.filter(o => o && o.status !== 'delivered' && o.status !== 'cancelled').length;
 
   return (
     <AndroidSimulatorWrapper deviceMode={deviceMode} onToggleDeviceMode={() => setDeviceMode(deviceMode === 'web' ? 'android' : 'web')}>
@@ -844,6 +972,7 @@ export default function App() {
             setMandoubOpen(true);
           }}
           onOpenAiAdvisor={() => setAiAdvisorOpen(true)}
+          onOpenCalculator={() => setCalculatorOpen(true)}
           onOpenAuth={() => setAuthOpen(true)}
           searchQuery={searchQuery}
           setSearchQuery={setSearchQuery}
@@ -1183,6 +1312,7 @@ export default function App() {
           lang={lang}
           shippingFee={checkoutShippingFee}
           discount={checkoutDiscount}
+          couponCode={checkoutCouponCode}
           customerNotes={checkoutCustomerNotes}
           selectedDistrictName={checkoutDistrictName}
           addresses={addresses}
@@ -1198,14 +1328,19 @@ export default function App() {
         <OrderTrackerModal
           isOpen={ordersOpen}
           onClose={() => setOrdersOpen(false)}
-          orders={orders}
+          orders={displayedOrdersForTracker}
+          isOwner={isOwnerMode}
           lang={lang}
           userName={userName}
+          customerPhone={safeGetLocalStorage('bg_customer_phone', '')}
           focusOrderId={trackingFocusOrderId}
           onCleanOldOrders={handleCleanOldOrders}
+          onOpenInvoice={(ord) => setInvoiceOrder(ord)}
           onShopNow={() => {
             setOrdersOpen(false);
-            window.scrollTo({ top: 400, behavior: 'smooth' });
+            const el = document.getElementById('products-grid-section');
+            if (el) el.scrollIntoView({ behavior: 'smooth' });
+            else window.scrollTo({ top: 400, behavior: 'smooth' });
           }}
         />
 
@@ -1215,8 +1350,13 @@ export default function App() {
           order={confirmedOrder}
           lang={lang}
           whatsappNumber={storeSettings.whatsappNumber || '967775000150'}
+          onOpenInvoice={(ord) => setInvoiceOrder(ord)}
           onTrackOrder={(ord) => {
             setTrackingFocusOrderId(ord.orderNumber || ord.id);
+            setConfirmationOpen(false);
+            setOrdersOpen(true);
+          }}
+          onOpenMyOrders={() => {
             setConfirmationOpen(false);
             setOrdersOpen(true);
           }}
@@ -1308,6 +1448,38 @@ export default function App() {
           lang={lang}
         />
 
+        {/* Smart Charcoal Calculator Modal */}
+        <CharcoalCalculatorModal
+          isOpen={calculatorOpen}
+          onClose={() => setCalculatorOpen(false)}
+          products={products}
+          lang={lang}
+          onAddToCart={(product, qty, weight) => {
+            handleAddToCart(product, weight || '250g', qty || 1, product.price);
+          }}
+          onOpenCart={() => setCartOpen(true)}
+          whatsappNumber={storeSettings.whatsappNumber || '967775000150'}
+        />
+
+        {/* Official Printable Invoice & Receipt Modal */}
+        <InvoiceReceiptModal
+          isOpen={!!invoiceOrder}
+          onClose={() => setInvoiceOrder(null)}
+          order={invoiceOrder}
+          lang={lang}
+          whatsappNumber={storeSettings.whatsappNumber || '967775000150'}
+        />
+
+        {/* Floating Quick Sana'a Hotline & Express Speed-Dial */}
+        <ExpressHotlineBar
+          lang={lang}
+          onOpenCalculator={() => setCalculatorOpen(true)}
+          onOpenTracker={() => setOrdersOpen(true)}
+          onOpenMap={() => setMapOpen(true)}
+          phoneNumber={storeSettings.supportPhone || '775000150'}
+          whatsappNumber={storeSettings.whatsappNumber || '967775000150'}
+        />
+
         {/* Sticky Quick-Checkout Floating Bar (Appears when cart has items and NO modal/drawer is open) */}
         {cart.length > 0 && !checkoutOpen && !cartOpen && !ordersOpen && !adminOpen && !mandoubOpen && !aiAdvisorOpen && !authOpen && !mapOpen && !welcomeOpen && !selectedProductDetails && (
           <div className="fixed bottom-16 sm:bottom-6 left-3 right-3 sm:left-auto sm:right-6 sm:max-w-md z-40 bg-[#161622]/95 border-2 border-amber-500/60 p-3 sm:p-4 rounded-2xl shadow-2xl backdrop-blur-xl flex items-center justify-between gap-3 text-right animate-in fade-in slide-in-from-bottom duration-300">
@@ -1352,6 +1524,10 @@ export default function App() {
           onOpenCart={() => setCartOpen(true)}
           onOpenOrders={() => setOrdersOpen(true)}
           onOpenAdmin={() => setAdminOpen(true)}
+          onOpenMandoub={() => {
+            setIsOwnerDriverPreview(false);
+            setMandoubOpen(true);
+          }}
           onOpenAuth={() => setAuthOpen(true)}
           userName={userName}
           userRole={userRole}

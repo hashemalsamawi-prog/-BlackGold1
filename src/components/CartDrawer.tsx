@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { CartItem, Language, DeliveryAddress } from '../types';
-import { X, Trash2, ShoppingBag, MapPin, Tag, ArrowLeft, ArrowRight, MessageSquare, AlertCircle, ChevronRight, CheckCircle2, Plus, ShieldCheck, Truck, Flame, Clock, Sparkles } from 'lucide-react';
+import { X, Trash2, ShoppingBag, MapPin, Tag, ArrowLeft, ArrowRight, MessageSquare, AlertCircle, ChevronRight, CheckCircle2, Plus, ShieldCheck, Truck, Flame, Clock, Sparkles, Check } from 'lucide-react';
 import { resolveAsset, ASSETS } from '../assets/images';
 
 interface CartDrawerProps {
@@ -10,7 +10,7 @@ interface CartDrawerProps {
   lang: Language;
   onUpdateQuantity: (index: number, newQty: number) => void;
   onRemoveItem: (index: number) => void;
-  onProceedToCheckout: (districtFee: number, couponDiscount: number, customerNotes: string, selectedDistrictName: string) => void;
+  onProceedToCheckout: (districtFee: number, couponDiscount: number, customerNotes: string, selectedDistrictName: string, couponCode?: string) => void;
   onOpenMap: () => void;
   savedAddresses: DeliveryAddress[];
   selectedAddressId: string;
@@ -137,27 +137,68 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
         </div>
 
         {/* Scrollable Content (Items + Details + Summary) */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4">
+        <div className={`flex-1 overflow-y-auto p-4 sm:p-5 ${cart.length === 0 ? 'flex flex-col justify-between' : 'space-y-4'}`}>
           
           {/* Cart Items List */}
           {cart.length === 0 ? (
-            <div className="text-center py-16 space-y-4">
-              <div className="w-16 h-16 rounded-full bg-slate-900 border border-slate-800 flex items-center justify-center mx-auto text-slate-500">
-                <ShoppingBag className="w-8 h-8" />
+            <div className="flex-1 flex flex-col justify-between py-4">
+              <div className="my-auto text-center space-y-4 px-2">
+                <div className="w-20 h-20 rounded-3xl bg-slate-900/90 border border-amber-500/30 flex items-center justify-center mx-auto text-amber-400 shadow-2xl shadow-amber-500/10">
+                  <ShoppingBag className="w-10 h-10" />
+                </div>
+                <div className="space-y-1.5 max-w-xs mx-auto">
+                  <p className="text-lg font-black text-white">سلة مشترياتك فارغة حالياً</p>
+                  <p className="text-xs text-slate-400 leading-relaxed">
+                    تصفح تشكيلة فحم الذهب الأسود الفاخر (الشيشة والمشاوي)، وأضف احتياجك مباشرة للتوصيل السريع في صنعاء.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="px-8 py-3 rounded-xl gold-gradient-bg text-slate-950 font-black text-xs sm:text-sm hover:brightness-110 cursor-pointer shadow-xl shadow-amber-500/25 active:scale-95 transition-all inline-flex items-center gap-2"
+                >
+                  <span>تصفح منتجات الفحم واطلب الآن</span>
+                  <Flame className="w-4 h-4 fill-slate-950" />
+                </button>
               </div>
-              <div className="space-y-1">
-                <p className="text-base font-black text-white">سلة مشترياتك فارغة حالياً</p>
-                <p className="text-xs text-slate-400 max-w-xs mx-auto">
-                  تصفح منتجات فحم الذهب الأسود الملكي والبلدي وأضف العبوات المطلوبة بضغطة زر واحدة.
-                </p>
+
+              {/* Bottom Quick Perks Box to Fill Space Luxuriously */}
+              <div className="mt-6 pt-4 border-t border-slate-800/80 space-y-3">
+                <div className="flex items-center justify-between text-[11px] font-bold text-amber-400 px-1">
+                  <span>لماذا يختار عملاؤنا فحم الذهب الأسود؟</span>
+                  <Sparkles className="w-3.5 h-3.5" />
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-[11px]">
+                  <div className="p-3 rounded-xl bg-slate-900/70 border border-slate-800 text-slate-300 flex items-start gap-2">
+                    <Check className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                    <div>
+                      <span className="font-bold text-white block">اشتعال +3 ساعات</span>
+                      <span className="text-[10px] text-slate-400">حرارة قوية ومتواصلة</span>
+                    </div>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-900/70 border border-slate-800 text-slate-300 flex items-start gap-2">
+                    <Check className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                    <div>
+                      <span className="font-bold text-white block">0% دخان ورائحة</span>
+                      <span className="text-[10px] text-slate-400">فحم نقي 100% للشيشة</span>
+                    </div>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-900/70 border border-slate-800 text-slate-300 flex items-start gap-2">
+                    <Check className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                    <div>
+                      <span className="font-bold text-white block">توصيل سريع بصنعاء</span>
+                      <span className="text-[10px] text-slate-400">مندوب يصل لباب منزلك</span>
+                    </div>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-900/70 border border-slate-800 text-slate-300 flex items-start gap-2">
+                    <Check className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                    <div>
+                      <span className="font-bold text-white block">دفع عند الاستلام</span>
+                      <span className="text-[10px] text-slate-400">أو عبر ون كاش والكريمي</span>
+                    </div>
+                  </div>
+                </div>
               </div>
-              <button
-                type="button"
-                onClick={onClose}
-                className="px-6 py-2.5 rounded-xl gold-gradient-bg text-slate-950 font-black text-xs hover:brightness-110 cursor-pointer shadow-lg shadow-amber-500/20"
-              >
-                تصفح المنتجات الآن 🔥
-              </button>
             </div>
           ) : (
             <div className="space-y-2.5">
@@ -414,7 +455,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
             {/* Primary Action Button */}
             <button
               type="button"
-              onClick={() => onProceedToCheckout(shippingFee, discountVal, customerNotes, selectedAddress?.district || 'صنعاء')}
+              onClick={() => onProceedToCheckout(shippingFee, discountVal, customerNotes, selectedAddress?.district || 'صنعاء', couponCode.trim() || undefined)}
               className="w-full py-3.5 rounded-xl bg-gradient-to-r from-amber-500 via-amber-400 to-amber-500 hover:from-amber-400 hover:to-amber-300 text-slate-950 font-black text-sm transition-all flex items-center justify-center gap-2 shadow-lg shadow-amber-500/25 cursor-pointer active:scale-[0.99]"
             >
               <span>متابعة إتمام الطلب وتأكيد الفاتورة</span>

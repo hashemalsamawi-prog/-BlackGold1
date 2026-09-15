@@ -676,7 +676,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
             {/* Quick Mandoub Screen Access */}
             <button
-              onClick={() => onOpenDriverScreen(deliveryAgents[0]?.name || 'أحمد الكبسي')}
+              onClick={() => onOpenDriverScreen(activeAgents[0]?.name || '')}
               className="px-3 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer active:scale-95 shadow-sm"
               title="الدخول الفوري لشاشة المندوب الميداني"
             >
@@ -1117,7 +1117,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             التوصيل: {(order.shippingFee || 0).toLocaleString()} | الخصم: {(order.discount || 0).toLocaleString()}
                           </div>
                           <div className="text-slate-300 text-[11px] pt-1">
-                            🛵 المندوب: <strong className="text-amber-300">{order.driverName || 'أحمد الكبسي'}</strong>
+                            🛵 المندوب: <strong className="text-amber-300">{order.driverName || activeAgents[0]?.name || 'بانتظار التعيين'}</strong>
                           </div>
                         </div>
                       </div>
@@ -1131,7 +1131,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             <span>المندوب:</span>
                           </div>
                           <select
-                            value={order.driverName || 'أحمد الكبسي'}
+                            value={order.driverName || activeAgents[0]?.name || ''}
                             onChange={async (e) => {
                               const chosenDriverName = e.target.value;
                               const chosenAgent = activeAgents.find(a => a.name === chosenDriverName);
@@ -1160,7 +1160,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             <button
                               type="button"
                               onClick={async () => {
-                                const currentDriver = activeAgents.find(a => a.name === (order.driverName || 'أحمد الكبسي')) || activeAgents[0];
+                                const currentDriver = activeAgents.find(a => a.name === order.driverName) || activeAgents[0];
                                 await onUpdateOrderStatus(
                                   order.id,
                                   'shipped',
@@ -1184,7 +1184,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <div className="flex flex-wrap items-center gap-2">
                           {/* WhatsApp to Driver */}
                           {(() => {
-                            const assignedDriver = activeAgents.find(a => a.name === (order.driverName || 'أحمد الكبسي')) || activeAgents[0];
+                            const assignedDriver = activeAgents.find(a => a.name === order.driverName) || activeAgents[0];
                             const itemsText = orderItems.length > 0 
                               ? orderItems.map((it: any) => `• ${it.productNameAr || it.product?.nameAr || 'فحم الذهب الأسود'} (${it.weight || it.selectedWeight || 'العبوة'}) × ${it.quantity || 1}`).join('\n')
                               : (order.itemsSummary || 'فحم الذهب الأسود');
@@ -1225,7 +1225,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           {/* Driver Screen Preview */}
                           <button
                             type="button"
-                            onClick={() => onOpenDriverScreen(order.driverName || 'أحمد الكبسي')}
+                            onClick={() => onOpenDriverScreen(order.driverName || activeAgents[0]?.name || '')}
                             className="px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-bold flex items-center gap-1 border border-slate-700 cursor-pointer"
                             title="معاينة شاشة المندوب الميدانية"
                           >

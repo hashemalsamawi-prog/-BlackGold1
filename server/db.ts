@@ -116,6 +116,10 @@ class DatabaseProxy {
     return user;
   }
 
+  public async updateUserAsync(id: string, updates: Partial<UserAccount>): Promise<UserAccount | null> {
+    return this.updateUser(id, updates);
+  }
+
   // Customers (CRM)
   public getCustomers(): CustomerRecord[] {
     return d1.getCustomers();

@@ -1,4 +1,5 @@
 import { d1 } from '../d1';
+import { generateToken } from '../security';
 
 // Comprehensive Automated Test Suite for Black Gold Charcoal Store
 // Covers all 20 critical test scenarios defined in USER_REQUEST
@@ -386,9 +387,16 @@ async function runAllTests() {
   );
 
   // 20. Strict Driver Lookup Enforcement (Fake Driver Assignment Rejected)
+  const ownerToken = generateToken({
+    userId: 'usr-owner-hashem',
+    role: 'owner',
+    phone: '777000111',
+    name: 'هاشم السماوي'
+  });
+
   const fakeDriverAssign = await req(`/api/orders/${anotherOrderId}/assign-driver`, {
     method: 'POST',
-    headers: { 'x-user-role': 'owner' },
+    headers: { 'Authorization': `Bearer ${ownerToken}` },
     body: JSON.stringify({ driverId: 'fake-driver-999', driverName: 'مندوب وهمي غير مسجل' })
   });
   record(
@@ -401,7 +409,7 @@ async function runAllTests() {
   // First, advance status as admin to 'shipped'
   await req(`/api/orders/${anotherOrderId}/status`, {
     method: 'PATCH',
-    headers: { 'x-user-role': 'owner' },
+    headers: { 'Authorization': `Bearer ${ownerToken}` },
     body: JSON.stringify({ status: 'shipped' })
   });
   const cancelAfterShipped = await req(`/api/orders/${anotherOrderId}/cancel`, {
@@ -434,6 +442,10 @@ async function runAllTests() {
   }
   console.log('==================================================');
   console.log(`Final Verdict: ${allPassed ? 'ALL TESTS PASSED 🎉' : 'SOME TESTS FAILED ⚠️'}`);
+  process.exit(allPassed ? 0 : 1);
 }
 
-runAllTests().catch(console.error);
+runAllTests().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
