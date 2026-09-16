@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { CartItem, Language, DeliveryAddress, Order } from '../types';
 import { SANAA_DISTRICTS } from '../data/mockData';
 import { 
   X, Check, ShieldCheck, MapPin, Truck, Phone, User, 
-  CreditCard, Banknote, Clock, Sparkles, AlertCircle, MessageSquare,
-  ArrowRight, Package, Loader2
+  CreditCard, Banknote, Clock, AlertCircle, ArrowLeft, Loader2,
+  Package, ChevronRight, CheckCircle2
 } from 'lucide-react';
 
 interface CheckoutModalProps {
@@ -40,11 +40,9 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   selectedDistrictName,
   addresses = [],
   selectedAddressId,
-  onSelectAddress,
   onSaveAddress,
   onOrderPlaced,
-  onOpenTracking,
-  whatsappNumber,
+  whatsappNumber = '967775000150',
   appliedCoupon = null,
   couponCode,
 }) => {
@@ -56,10 +54,14 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const [notes, setNotes] = useState(customerNotes || '');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const checkoutModalRef = useRef<HTMLDivElement>(null);
 
-  // Synchronize state when opened
+  // Synchronize state when opened & auto-scroll to top
   useEffect(() => {
     if (isOpen) {
+      if (checkoutModalRef.current) {
+        checkoutModalRef.current.scrollTop = 0;
+      }
       if (selectedDistrictName) setDistrict(selectedDistrictName);
       if (customerNotes) setNotes(customerNotes);
       setErrorMsg('');
@@ -83,18 +85,13 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
 
+  if (!isOpen) return null;
+
   // Dynamic shipping fee based on selected district
   const selectedDistrictObj = SANAA_DISTRICTS.find((d) => d.nameAr === district);
   const currentShippingFee = selectedDistrictObj ? selectedDistrictObj.fee : (shippingFee || 1000);
   const subtotal = cart.reduce((sum, it) => sum + ((it.unitPrice || it.product.price) * it.quantity), 0);
   const totalAmount = Math.max(0, subtotal + currentShippingFee - discount);
-
-  const paymentNames: Record<string, string> = {
-    cash_on_delivery: 'عند الاستلام (كاش) 💵',
-    kuraimi: 'حاسب / الكريمي 💳',
-    one_cash: 'ون كاش OneCash 📱',
-    floosak: 'فلوسك Floosak 📲'
-  };
 
   const getCarrierBadge = (phoneStr: string) => {
     const clean = phoneStr.replace(/\D/g, '');
@@ -109,18 +106,12 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const cleanPhone = customerPhone.replace(/\D/g, '');
   const isPhoneValid = cleanPhone.length === 9 && (cleanPhone.startsWith('77') || cleanPhone.startsWith('78') || cleanPhone.startsWith('73') || cleanPhone.startsWith('71') || cleanPhone.startsWith('70'));
 
-  const handleSelectSavedAddr = (addr: DeliveryAddress) => {
-    if (addr.district) setDistrict(addr.district);
-    if (addr.street) setAddressDetails(addr.street);
-    if (addr.phone && !customerPhone) setCustomerPhone(addr.phone);
-  };
-
   const handleSubmitOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSubmitting) return;
 
     if (!customerName.trim()) {
-      setErrorMsg('يرجى إدخال اسم المستلم');
+      setErrorMsg('يرجى كتابة اسم المستلم');
       return;
     }
     if (!customerPhone.trim() || customerPhone.length < 6) {
@@ -128,7 +119,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       return;
     }
     if (!addressDetails.trim()) {
-      setErrorMsg('يرجى كتابة تفاصيل العنوان والشارع بدقة');
+      setErrorMsg('يرجى كتابة تفاصيل الشارع والحي أو أقرب معلم بدقة');
       return;
     }
 
@@ -158,7 +149,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       items: cart.map(i => ({
         productId: i.product.id,
         quantity: i.quantity,
-        weight: i.selectedWeight || i.product.weight || '1kg'
+        weight: i.selectedWeight || i.product.weight || '250g'
       })),
       subtotal,
       shippingFee: currentShippingFee,
@@ -202,458 +193,281 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
         onClose();
         return;
       } else {
-        setErrorMsg(data.message || 'فشل إرسال الطلب، يرجى مراجعة بيانات الطلب والمحاولة مرة أخرى');
+        setErrorMsg(data.message || 'فشل إرسال الطلب، يرجى مراجعة البيانات والمحاولة مجدداً');
         setIsSubmitting(false);
         return;
       }
-    } catch (e: any) {
-      setErrorMsg('تعذر الاتصال بالخادم، يرجى التحقق من اتصال الشبكة وإعادة المحاولة');
+    } catch {
+      setErrorMsg('تعذر الاتصال بالخادم، يرجى التأكد من اتصال الإنترنت وإعادة المحاولة');
       setIsSubmitting(false);
       return;
     }
   };
 
-  const handleSendWhatsAppOrder = async () => {
-    if (isSubmitting) return;
-    if (cart.length === 0) return;
-    setErrorMsg('');
-    setIsSubmitting(true);
-
-    const clientName = customerName.trim() || 'عميل المتجر';
-    const clientPhone = customerPhone.trim() || '770000000';
-    const addr = addressDetails.trim() || 'صنعاء';
-
-    const clientRequestId = `bg-wa-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-
-    const orderPayload = {
-      customerName: clientName,
-      customerPhone: clientPhone,
-      items: cart.map(i => ({
-        productId: i.product.id,
-        quantity: i.quantity,
-        weight: i.selectedWeight || i.product.weight || '1kg'
-      })),
-      subtotal,
-      shippingFee: currentShippingFee,
-      discount,
-      total: totalAmount,
-      district,
-      address: {
-        district,
-        street: addr,
-        landmark: ''
-      },
-      paymentMethod,
-      notes: notes.trim() ? `${notes.trim()} (طلب مباشر عبر الواتساب)` : 'طلب مباشر عبر الواتساب',
-      couponCode: couponCode || appliedCoupon?.code || undefined,
-      idempotencyKey: clientRequestId
-    };
-
-    try {
-      const authHeader = typeof window !== 'undefined' && localStorage.getItem('bg_auth_token')
-        ? { 'Authorization': `Bearer ${localStorage.getItem('bg_auth_token')}` }
-        : (typeof window !== 'undefined' && localStorage.getItem('bg_guest_token')
-            ? { 'Authorization': `Bearer ${localStorage.getItem('bg_guest_token')}` }
-            : {});
-
-      const res = await fetch('/api/orders', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Idempotency-Key': clientRequestId,
-          ...authHeader
-        },
-        body: JSON.stringify(orderPayload),
-      });
-      const data = await res.json();
-
-      if (!res.ok || !data.success || !data.data) {
-        setErrorMsg(data.message || 'تعذر تأكيد الطلب في النظام قبل إرسال الواتساب. يرجى التحقق من توفر المخزون.');
-        setIsSubmitting(false);
-        return;
-      }
-
-      const verifiedOrder = data.data;
-
-      if (data.guestToken && typeof window !== 'undefined') {
-        localStorage.setItem('bg_guest_token', data.guestToken);
-      }
-
-      try {
-        const myIdsStr = localStorage.getItem('bg_my_order_ids') || '[]';
-        const myIds = JSON.parse(myIdsStr);
-        if (Array.isArray(myIds)) {
-          if (verifiedOrder.id && !myIds.includes(verifiedOrder.id)) myIds.unshift(verifiedOrder.id);
-          if (verifiedOrder.orderNumber && !myIds.includes(verifiedOrder.orderNumber)) myIds.unshift(verifiedOrder.orderNumber);
-          localStorage.setItem('bg_my_order_ids', JSON.stringify(myIds));
-        }
-
-        const myCacheStr = localStorage.getItem('bg_my_orders_cache') || '[]';
-        const myCache = JSON.parse(myCacheStr);
-        if (Array.isArray(myCache)) {
-          const updated = [verifiedOrder, ...myCache.filter((o: any) => o && o.id !== verifiedOrder.id && o.orderNumber !== verifiedOrder.orderNumber)];
-          localStorage.setItem('bg_my_orders_cache', JSON.stringify(updated));
-        }
-      } catch (err) {
-        console.warn('Storage sync error:', err);
-      }
-
-      if (customerName.trim()) localStorage.setItem('bg_customer_name', customerName.trim());
-      if (customerPhone.trim()) localStorage.setItem('bg_customer_phone', customerPhone.trim());
-      if (addressDetails.trim() && onSaveAddress) {
-        onSaveAddress({
-          id: 'addr-' + Date.now(),
-          title: customerName.trim(),
-          district,
-          street: addressDetails.trim(),
-          phone: customerPhone.trim(),
-          isDefault: true,
-        });
-      }
-
-      // Prepare official WhatsApp message with verified real server order number
-      const targetWhatsApp = whatsappNumber || '967775000150';
-      const itemsList = cart.map(i => `• ${i.product.nameAr} (${i.selectedWeight || 'العبوة'}) × ${i.quantity} = ${((i.unitPrice || i.product.price) * i.quantity).toLocaleString()} ريال`).join('\n');
-      
-      const message = `*طلب شراء جديد ومؤكد - فحم الذهب الأسود* 👑
--------------------------------
-📦 *رقم الطلب الرسمي:* #${verifiedOrder.orderNumber}
-👤 *العميل:* ${clientName}
-📱 *الهاتف:* ${clientPhone}
-📍 *المنطقة في صنعاء:* ${district}
-🏢 *العنوان / المعلم:* ${addr}
-💳 *طريقة الدفع:* ${paymentNames[paymentMethod] || 'عند الاستلام'}
-${notes.trim() ? `📝 *ملاحظات للمندوب:* ${notes.trim()}\n` : ''}-------------------------------
-📦 *المنتجات المطلوبة:*
-${itemsList}
--------------------------------
-💰 *مجموع المنتجات:* ${subtotal.toLocaleString()} ريال
-🚚 *رسوم التوصيل (${district}):* ${currentShippingFee.toLocaleString()} ريال
-${discount > 0 ? `🏷️ *خصم الكوبون:* -${discount.toLocaleString()} ريال\n` : ''}⭐ *المبلغ الإجمالي:* ${totalAmount.toLocaleString()} ريال
--------------------------------
-تم تسجيل وتأكيد الطلب في نظام المتجر بنجاح. يرجى البدء في التجهيز والشحن السريع.`;
-
-      onOrderPlaced(verifiedOrder);
-      setIsSubmitting(false);
-      onClose();
-
-      const cleanWhatsApp = targetWhatsApp.replace(/\D/g, '');
-      window.open(`https://wa.me/${cleanWhatsApp}?text=${encodeURIComponent(message)}`, '_blank');
-    } catch (e: any) {
-      setErrorMsg('تعذر الاتصال بالخادم لإنشاء الطلب. يرجى المحاولة مرة أخرى.');
-      setIsSubmitting(false);
-    }
-  };
-
-  if (!isOpen) return null;
-
   return (
     <div 
-      id="checkout-modal"
-      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md overflow-y-auto"
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/85 backdrop-blur-md overflow-y-auto"
       onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        if (e.target === e.currentTarget && !isSubmitting) onClose();
       }}
     >
       <div 
-        className="relative w-full max-w-2xl rounded-3xl bg-zinc-900 border border-zinc-700 shadow-2xl p-5 sm:p-7 my-auto max-h-[92vh] overflow-y-auto text-right animate-in fade-in zoom-in-95 duration-200"
+        ref={checkoutModalRef}
+        className="relative w-full max-w-2xl rounded-3xl bg-[#0F0F16] border border-[#222232] shadow-2xl p-5 sm:p-7 my-6 max-h-[92vh] overflow-y-auto text-right"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Top Header Bar with Prominent Close / Back Button */}
-        <div className="flex items-center justify-between gap-3 mb-5 pb-3 border-b border-zinc-800">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-amber-500 text-black flex items-center justify-center font-black shadow-lg shadow-amber-500/20 shrink-0">
-              <Truck className="w-5 h-5" />
-            </div>
-            <div>
-              <h2 className="text-base sm:text-lg font-black text-white">إتمام طلب وتوصيل فحم الذهب الأسود</h2>
-              <p className="text-[11px] sm:text-xs text-zinc-400">تأكيد فوري وتوجيه مباشر لمندوب التوصيل في منطقتك بصنعاء</p>
-            </div>
+        {/* Header Bar */}
+        <div className="flex items-center justify-between pb-4 border-b border-[#1E1E2C] gap-3">
+          <div className="space-y-0.5">
+            <h2 className="text-lg sm:text-xl font-black text-white flex items-center gap-2">
+              <span>إتمام طلب الشراء والتوصيل</span>
+            </h2>
+            <p className="text-xs text-slate-400">
+              توصيل مباشر لباب منزلك أو مقهاك داخل أمانة العاصمة صنعاء
+            </p>
           </div>
 
-          {/* Close & Return Button */}
           <button
             type="button"
             onClick={onClose}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-600 text-zinc-300 hover:text-white border border-zinc-700 transition-colors cursor-pointer shrink-0"
-            title="إغلاق والرجوع للشاشة السابقة"
-            aria-label="إغلاق الشاشة والرجوع"
+            disabled={isSubmitting}
+            className="p-2 rounded-xl bg-[#161622] border border-[#242436] text-slate-400 hover:text-white transition-colors cursor-pointer"
           >
-            <span className="text-xs font-bold hidden sm:inline">رجوع</span>
-            <X className="w-5 h-5" />
+            <X className="w-4 h-4" />
           </button>
         </div>
 
+        {/* Error Notification Alert */}
         {errorMsg && (
-          <div className="p-3 mb-4 rounded-xl bg-red-500/10 border border-red-500/30 text-xs font-bold text-red-400 flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 shrink-0" />
+          <div className="mt-4 p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2.5 animate-in fade-in slide-in-from-top-2 duration-200">
+            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
             <span>{errorMsg}</span>
           </div>
         )}
 
-        <form onSubmit={handleSubmitOrder} className="space-y-4 text-xs">
-          {/* If user previously saved real addresses, show quick pick */}
-          {addresses.length > 0 && (
-            <div className="p-2.5 rounded-xl bg-zinc-950 border border-zinc-800">
-              <span className="text-[11px] font-bold text-zinc-400 block mb-1.5">عناوينك المحفوظة سابقاً:</span>
-              <div className="flex flex-wrap gap-2">
-                {addresses.map((addr) => (
-                  <button
-                    key={addr.id}
-                    type="button"
-                    onClick={() => handleSelectSavedAddr(addr)}
-                    className="px-2.5 py-1 rounded-lg bg-zinc-900 hover:bg-amber-500/20 text-zinc-300 hover:text-amber-300 border border-zinc-700 text-[11px] font-bold transition-all flex items-center gap-1 cursor-pointer"
-                  >
-                    <MapPin className="w-3 h-3 text-amber-400" />
-                    <span>{addr.district} - {addr.street?.slice(0, 20)}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
+        <form onSubmit={handleSubmitOrder} className="mt-5 space-y-6">
+          
+          {/* Step 1: Customer Contact Information */}
+          <div className="p-4 rounded-2xl bg-[#14141E] border border-[#20202E] space-y-3.5">
+            <h3 className="text-xs font-bold text-amber-400 flex items-center gap-2">
+              <User className="w-4 h-4" />
+              <span>1. بيانات المستلم للتواصل</span>
+            </h3>
 
-          {/* Customer Info */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-zinc-300 font-bold mb-1">اسم العميل / المستلم *</label>
-              <div className="relative">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-300 block">
+                  الاسم الكامل <span className="text-amber-400">*</span>
+                </label>
                 <input
                   type="text"
                   required
                   value={customerName}
                   onChange={(e) => setCustomerName(e.target.value)}
-                  placeholder="الاسم الكريم"
-                  className="w-full bg-zinc-950 border border-zinc-700 focus:border-amber-500 rounded-xl px-3 py-2.5 text-white pr-9"
+                  placeholder="مثال: أحمد عبد الله"
+                  className="w-full bg-[#181824] border border-[#28283C] rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-400/80 focus:ring-1 focus:ring-amber-400/25 transition-all duration-300"
                 />
-                <User className="w-4 h-4 text-zinc-500 absolute right-3 top-3" />
               </div>
-            </div>
 
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="block text-zinc-300 font-bold">رقم الهاتف (واتساب) *</label>
-                {carrier && (
-                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${carrier.color}`}>
-                    {carrier.name}
-                  </span>
+              <div className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold text-slate-300 block">
+                    رقم الهاتف اليمني <span className="text-amber-400">*</span>
+                  </label>
+                  {carrier && (
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${carrier.color}`}>
+                      {carrier.name}
+                    </span>
+                  )}
+                </div>
+                <div className="relative">
+                  <input
+                    type="tel"
+                    required
+                    value={customerPhone}
+                    onChange={(e) => setCustomerPhone(e.target.value)}
+                    placeholder="77XXXXXXX أو 73XXXXXXX"
+                    className="w-full bg-[#181824] border border-[#28283C] rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-400/80 focus:ring-1 focus:ring-amber-400/25 transition-all duration-300 font-mono"
+                  />
+                  <Phone className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-3 pointer-events-none" />
+                </div>
+                {customerPhone && !isPhoneValid && (
+                  <p className="text-[11px] text-rose-400 mt-1 animate-in fade-in slide-in-from-top-1 duration-200 flex items-center gap-1 font-medium">
+                    <AlertCircle className="w-3 h-3 shrink-0" />
+                    <span>يرجى إدخال 9 أرقام تبدأ بـ 77، 78، 73، 71 أو 70</span>
+                  </p>
                 )}
               </div>
-              <div className="relative">
-                <input
-                  type="tel"
-                  required
-                  value={customerPhone}
-                  onChange={(e) => setCustomerPhone(e.target.value)}
-                  placeholder="77XXXXXXXX"
-                  className={`w-full bg-zinc-950 border rounded-xl px-3 py-2.5 text-white pr-9 font-mono transition-colors ${
-                    customerPhone.length > 0 && !isPhoneValid
-                      ? 'border-amber-500/80 focus:border-amber-400'
-                      : customerPhone.length > 0 && isPhoneValid
-                      ? 'border-emerald-500/80 focus:border-emerald-400'
-                      : 'border-zinc-700 focus:border-amber-500'
-                  }`}
-                />
-                <Phone className="w-4 h-4 text-zinc-500 absolute right-3 top-3" />
-              </div>
-              {customerPhone.length > 0 && !isPhoneValid && (
-                <p className="text-[10px] text-amber-400 mt-1">
-                  * يرجى إدخال 9 أرقام تبدأ بـ 77 أو 78 أو 73 أو 71 أو 70
-                </p>
-              )}
             </div>
           </div>
 
-          {/* Delivery District & Details */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-zinc-300 font-bold mb-1">المديرية / الحي في صنعاء *</label>
-              <select
-                value={district}
-                onChange={(e) => setDistrict(e.target.value)}
-                className="w-full bg-zinc-950 border border-zinc-700 focus:border-amber-500 rounded-xl px-3 py-2.5 text-white"
-              >
-                {SANAA_DISTRICTS.map((d) => (
-                  <option key={d.id} value={d.nameAr}>{d.nameAr} ({d.fee} ريال توصيل)</option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-zinc-300 font-bold mb-1">الشارع وأقرب معلم بارز *</label>
-              <input
-                type="text"
-                required
-                value={addressDetails}
-                onChange={(e) => setAddressDetails(e.target.value)}
-                placeholder="مثال: شارع الستين - جوار سوبرماركت الهدى"
-                className="w-full bg-zinc-950 border border-zinc-700 focus:border-amber-500 rounded-xl px-3 py-2.5 text-white"
-              />
-            </div>
-          </div>
-
-          {/* Payment Method */}
-          <div>
-            <label className="block text-zinc-300 font-bold mb-2">طريقة الدفع المفضلة</label>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              <button
-                type="button"
-                onClick={() => setPaymentMethod('cash_on_delivery')}
-                className={`p-3 rounded-xl border text-center transition-all cursor-pointer ${
-                  paymentMethod === 'cash_on_delivery'
-                    ? 'border-amber-500 bg-amber-500/10 text-amber-300 font-black'
-                    : 'border-zinc-800 bg-zinc-950 text-zinc-400 hover:border-zinc-700'
-                }`}
-              >
-                <Banknote className="w-4 h-4 mx-auto mb-1" />
-                <span>عند الاستلام (كاش)</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setPaymentMethod('kuraimi')}
-                className={`p-3 rounded-xl border text-center transition-all cursor-pointer ${
-                  paymentMethod === 'kuraimi'
-                    ? 'border-amber-500 bg-amber-500/10 text-amber-300 font-black'
-                    : 'border-zinc-800 bg-zinc-950 text-zinc-400 hover:border-zinc-700'
-                }`}
-              >
-                <CreditCard className="w-4 h-4 mx-auto mb-1" />
-                <span>حاسب / الكريمي</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setPaymentMethod('one_cash')}
-                className={`p-3 rounded-xl border text-center transition-all cursor-pointer ${
-                  paymentMethod === 'one_cash'
-                    ? 'border-amber-500 bg-amber-500/10 text-amber-300 font-black'
-                    : 'border-zinc-800 bg-zinc-950 text-zinc-400 hover:border-zinc-700'
-                }`}
-              >
-                <CreditCard className="w-4 h-4 mx-auto mb-1" />
-                <span>ون كاش OneCash</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setPaymentMethod('floosak')}
-                className={`p-3 rounded-xl border text-center transition-all cursor-pointer ${
-                  paymentMethod === 'floosak'
-                    ? 'border-amber-500 bg-amber-500/10 text-amber-300 font-black'
-                    : 'border-zinc-800 bg-zinc-950 text-zinc-400 hover:border-zinc-700'
-                }`}
-              >
-                <CreditCard className="w-4 h-4 mx-auto mb-1" />
-                <span>فلوسك Floosak</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Notes */}
-          <div>
-            <label className="block text-zinc-300 font-bold mb-1">ملاحظات إضافية للمندوب (اختياري)</label>
-            <textarea
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              rows={2}
-              placeholder="مثال: الاتصال عند الوصول أمام العمارة، أو تسليم الشحنة للاستقبال..."
-              className="w-full bg-zinc-950 border border-zinc-700 focus:border-amber-500 rounded-xl p-2.5 text-white resize-none"
-            />
-          </div>
-
-          {/* Cart Items Preview */}
-          <div className="p-3.5 rounded-2xl bg-zinc-950 border border-zinc-800 space-y-2">
-            <div className="flex items-center justify-between text-xs text-zinc-400 pb-1.5 border-b border-zinc-800">
-              <span className="font-bold text-white flex items-center gap-1.5">
-                <Package className="w-3.5 h-3.5 text-amber-400" />
-                <span>محتويات طلبك ({cart.reduce((s, i) => s + i.quantity, 0)} عبوة):</span>
+          {/* Step 2: Sana'a Delivery Address */}
+          <div className="p-4 rounded-2xl bg-[#14141E] border border-[#20202E] space-y-3.5">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-bold text-amber-400 flex items-center gap-2">
+                <MapPin className="w-4 h-4" />
+                <span>2. عنوان التوصيل داخل صنعاء</span>
+              </h3>
+              <span className="text-[11px] text-slate-400 font-medium">
+                تغطية شاملة لجميع الأحياء
               </span>
-              <span className="text-[11px] text-amber-400 font-mono font-bold">{subtotal.toLocaleString()} ر.ي</span>
             </div>
-            <div className="max-h-36 overflow-y-auto space-y-1.5 pr-1 divide-y divide-zinc-900">
-              {cart.map((item, idx) => (
-                <div key={idx} className="flex items-center justify-between text-xs pt-1.5 first:pt-0 text-zinc-300">
-                  <div className="flex items-center gap-2">
-                    <span className="w-5 h-5 rounded-md bg-zinc-900 border border-zinc-800 flex items-center justify-center text-[10px] font-black text-amber-400 font-mono">
-                      {item.quantity}×
-                    </span>
-                    <span className="font-bold text-white line-clamp-1">{item.product.nameAr}</span>
-                    <span className="text-[10px] text-zinc-500 font-mono">({item.selectedWeight || '1kg'})</span>
-                  </div>
-                  <span className="font-mono font-bold text-zinc-300 text-[11px]">
-                    {(((item.unitPrice || item.product.price) * item.quantity)).toLocaleString()} ر.ي
-                  </span>
+
+            {/* Saved Addresses Quick Selection */}
+            {addresses && addresses.length > 0 && (
+              <div className="space-y-1.5 pb-1">
+                <span className="text-[11px] text-slate-400 block">العناوين السابقة المسجلة:</span>
+                <div className="flex flex-wrap gap-2">
+                  {addresses.map((a) => (
+                    <button
+                      key={a.id}
+                      type="button"
+                      onClick={() => {
+                        if (a.district) setDistrict(a.district);
+                        if (a.street) setAddressDetails(a.street);
+                        if (a.phone && !customerPhone) setCustomerPhone(a.phone);
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-[#181824] border border-[#28283C] hover:border-amber-400/50 text-[11px] text-slate-300 transition-colors flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <MapPin className="w-3 h-3 text-amber-400" />
+                      <span>{a.title || a.district}</span>
+                    </button>
+                  ))}
                 </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-300 block">
+                  المديرية أو المنطقة <span className="text-amber-400">*</span>
+                </label>
+                <select
+                  value={district}
+                  onChange={(e) => setDistrict(e.target.value)}
+                  className="w-full bg-[#181824] border border-[#28283C] rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-amber-400/80 focus:ring-1 focus:ring-amber-400/25 transition-all duration-300"
+                >
+                  {SANAA_DISTRICTS.map((d) => (
+                    <option key={d.id} value={d.nameAr}>
+                      {d.nameAr} (توصيل: {d.fee.toLocaleString()} ر.ي - {d.timeEstimate || '45 دقيقة'})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-300 block">
+                  تفاصيل الشارع والمعلم <span className="text-amber-400">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={addressDetails}
+                  onChange={(e) => setAddressDetails(e.target.value)}
+                  placeholder="اسم الشارع، رقم المبنى، بجوار معلم معروف..."
+                  className="w-full bg-[#181824] border border-[#28283C] rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-400/80 focus:ring-1 focus:ring-amber-400/25 transition-all duration-300"
+                />
+                {errorMsg && !addressDetails.trim() && (
+                  <p className="text-[11px] text-rose-400 mt-1 animate-in fade-in slide-in-from-top-1 duration-200 flex items-center gap-1 font-medium">
+                    <AlertCircle className="w-3 h-3 shrink-0" />
+                    <span>يرجى كتابة الشارع وأقرب معلم لتسهيل التوصيل</span>
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Step 3: Local Payment Methods */}
+          <div className="p-4 rounded-2xl bg-[#14141E] border border-[#20202E] space-y-3.5">
+            <h3 className="text-xs font-bold text-amber-400 flex items-center gap-2">
+              <CreditCard className="w-4 h-4" />
+              <span>3. طريقة الدفع المفضلة</span>
+            </h3>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {[
+                { id: 'cash_on_delivery', title: 'الدفع عند الاستلام (كاش)', subtitle: 'تسليم المبلغ للمندوب يداً بيد' },
+                { id: 'kuraimi', title: 'خدمة حاسب / بنك الكريمي', subtitle: 'تحويل مباشر لحساب المتجر' },
+                { id: 'one_cash', title: 'محفظة ون كاش (OneCash)', subtitle: 'دفع عبر تطبيق ون كاش' },
+                { id: 'floosak', title: 'محفظة فلوسك (Floosak)', subtitle: 'دفع عبر تطبيق فلوسك' }
+              ].map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => setPaymentMethod(m.id as any)}
+                  className={`p-3 rounded-xl border text-right transition-all cursor-pointer ${
+                    paymentMethod === m.id
+                      ? 'bg-amber-500/10 border-amber-400 text-white shadow-sm'
+                      : 'bg-[#181824] border-[#242436] text-slate-300 hover:border-slate-600'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-xs">{m.title}</span>
+                    <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${
+                      paymentMethod === m.id ? 'border-amber-400 bg-amber-400 text-[#09090D]' : 'border-slate-600'
+                    }`}>
+                      {paymentMethod === m.id && <Check className="w-3 h-3" />}
+                    </span>
+                  </div>
+                  <span className="text-[11px] text-slate-400 block mt-1">{m.subtitle}</span>
+                </button>
               ))}
             </div>
           </div>
 
-          {/* Summary */}
-          <div className="p-4 rounded-2xl bg-zinc-950 border border-zinc-800 space-y-2">
-            <div className="flex justify-between text-zinc-400">
-              <span>مجموع المنتجات:</span>
-              <span className="font-mono font-bold text-white">{subtotal.toLocaleString()} ريال</span>
+          {/* Order Financial Summary Box */}
+          <div className="p-4 rounded-2xl bg-[#14141E] border border-[#20202E] space-y-2 text-xs">
+            <div className="flex items-center justify-between text-slate-400">
+              <span>المجموع الفرعي ({cart.length} أصناف):</span>
+              <span className="font-mono text-slate-200">{subtotal.toLocaleString()} ر.ي</span>
             </div>
-            <div className="flex justify-between text-zinc-400">
-              <span>رسوم التوصيل المباشر ({district}):</span>
-              <span className="font-mono font-bold text-white">{currentShippingFee.toLocaleString()} ريال</span>
+
+            <div className="flex items-center justify-between text-slate-400">
+              <span>رسوم التوصيل إلى ({district}):</span>
+              <span className="font-mono text-slate-200">{currentShippingFee.toLocaleString()} ر.ي</span>
             </div>
+
             {discount > 0 && (
-              <div className="flex justify-between text-emerald-400">
-                <span>خصم الكوبون:</span>
-                <span className="font-mono font-bold">-{discount.toLocaleString()} ريال</span>
+              <div className="flex items-center justify-between text-emerald-400 font-semibold">
+                <span>الخصم المطبق:</span>
+                <span className="font-mono">-{discount.toLocaleString()} ر.ي</span>
               </div>
             )}
-            <div className="pt-2.5 border-t border-zinc-800 flex justify-between text-base font-black text-amber-400">
-              <span>الإجمالي المطلوب:</span>
-              <span className="font-mono text-lg">{totalAmount.toLocaleString()} ريال</span>
+
+            <div className="pt-2 border-t border-[#20202E] flex items-center justify-between text-base font-black text-white">
+              <span>الإجمالي المطلوب سداده:</span>
+              <span className="text-amber-400 font-mono text-lg">{totalAmount.toLocaleString()} ر.ي</span>
             </div>
           </div>
 
-          {/* Action Buttons: 1. Confirm & Submit, 2. Send via WhatsApp */}
-          <div className="space-y-2.5 pt-1">
-            <button
-              type="submit"
-              id="checkout-submit-btn"
-              disabled={isSubmitting}
-              className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-black font-black text-sm flex items-center justify-center gap-2 shadow-xl shadow-amber-500/20 transition-all cursor-pointer active:scale-[0.99] disabled:opacity-75"
-            >
-              {isSubmitting ? (
-                <>
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                  <span>جاري تسجيل وتأكيد طلبك...</span>
-                </>
-              ) : (
-                <>
-                  <Check className="w-5 h-5" />
-                  <span>تأكيد وإرسال الطلب الآن ⚡</span>
-                </>
-              )}
-            </button>
+          {/* Submit Order Action Button */}
+          <button
+            type="submit"
+            disabled={isSubmitting}
+            className="w-full py-4 px-6 rounded-2xl gold-gradient-bg text-[#09090D] font-black text-sm hover:brightness-110 active:scale-[0.99] shadow-xl shadow-amber-500/20 flex items-center justify-center gap-2 transition-all duration-300 cursor-pointer disabled:opacity-50"
+          >
+            {isSubmitting ? (
+              <>
+                <Loader2 className="w-5 h-5 animate-spin" />
+                <span>جاري إرسال وتأكيد الطلب بأمان...</span>
+              </>
+            ) : (
+              <>
+                <span>تأكيد الطلب الآن ({totalAmount.toLocaleString()} ر.ي)</span>
+                <ArrowLeft className="w-4 h-4" />
+              </>
+            )}
+          </button>
 
-            <button
-              type="button"
-              id="checkout-whatsapp-btn"
-              onClick={handleSendWhatsAppOrder}
-              disabled={isSubmitting}
-              className="w-full py-3 rounded-2xl bg-[#25D366] hover:bg-[#20bd5a] text-white font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 transition-all border border-emerald-400/30 cursor-pointer active:scale-[0.99] disabled:opacity-60 disabled:cursor-not-allowed"
-            >
-              <MessageSquare className="w-4 h-4 text-white fill-white" />
-              <span>أو إرسال الطلب عبر الواتساب مباشرة (WhatsApp) 💬</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={onClose}
-              className="w-full py-2.5 rounded-2xl bg-zinc-800/80 hover:bg-zinc-800 text-zinc-300 hover:text-white font-bold text-xs flex items-center justify-center gap-2 transition-all border border-zinc-700/60 cursor-pointer active:scale-[0.99]"
-            >
-              <ArrowRight className="w-4 h-4 text-zinc-400" />
-              <span>إلغاء والرجوع للشاشة السابقة</span>
-            </button>
+          {/* Guarantee Footer */}
+          <div className="flex items-center justify-center gap-2 text-[11px] text-slate-500 text-center">
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+            <span>طلبك موثق ومضمون من شركة فحم الذهب الأسود بصنعاء</span>
           </div>
+
         </form>
+
       </div>
     </div>
   );
 };
-

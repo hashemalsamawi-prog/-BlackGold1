@@ -6,6 +6,7 @@ export interface SanaaDistrictInfo {
   nameAr: string;
   nameEn: string;
   fee: number;
+  timeEstimate?: string;
   coords: { lat: number; lng: number };
 }
 

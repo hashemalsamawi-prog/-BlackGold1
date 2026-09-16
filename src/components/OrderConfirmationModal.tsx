@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Order, Language } from '../types';
 import { 
   CheckCircle2, Package, MapPin, Phone, MessageSquare, 
-  ArrowRight, ArrowLeft, Clock, ShieldCheck, X, Truck, ExternalLink, Printer,
+  ArrowLeft, Clock, ShieldCheck, X, Truck, Printer,
   Copy, Check
 } from 'lucide-react';
 
@@ -23,7 +23,6 @@ export const OrderConfirmationModal: React.FC<OrderConfirmationModalProps> = ({
   order,
   lang,
   onTrackOrder,
-  onOpenMyOrders,
   onOpenInvoice,
   whatsappNumber = '967775000150',
 }) => {
@@ -36,7 +35,6 @@ export const OrderConfirmationModal: React.FC<OrderConfirmationModalProps> = ({
   const districtName = order.district || order.address?.district || 'صنعاء';
   const customerName = order.customerName || 'عميل فحم الذهب الأسود';
   const customerPhone = order.customerPhone || '';
-  const isAr = lang === 'ar';
 
   const [hasCopied, setHasCopied] = useState(false);
 
@@ -50,10 +48,10 @@ export const OrderConfirmationModal: React.FC<OrderConfirmationModalProps> = ({
     const rawItems = Array.isArray(order.items)
       ? order.items.map((i: any) => {
           const name = i.product?.nameAr || i.productNameAr || 'فحم الذهب الأسود الفاخر';
-          const weight = i.selectedWeight || i.weightOption || i.weight || 'العبوة';
+          const weight = i.selectedWeight || i.weightOption || i.weight || '250g';
           const qty = i.quantity || 1;
           const price = i.unitPrice || i.product?.price || 0;
-          return `• ${name} (${weight}) × ${qty} = ${(price * qty).toLocaleString()} ريال`;
+          return `• ${name} (${weight}) × ${qty} = ${(price * qty).toLocaleString()} ر.ي`;
         }).join('\n')
       : (order.itemsSummary || 'منتجات فحم الذهب الأسود');
 
@@ -63,200 +61,142 @@ export const OrderConfirmationModal: React.FC<OrderConfirmationModalProps> = ({
 👤 *اسم العميل:* ${customerName}
 📞 *رقم الهاتف:* ${customerPhone}
 📍 *منطقة التوصيل:* صنعاء - ${districtName}
-📝 *تفاصيل العنوان:* ${order.addressDetails || order.address?.street || 'حددها العميل'}
+📝 *تفاصيل العنوان:* ${order.addressDetails || order.address?.street || 'أمانة العاصمة'}
 ---------------------------------
 📦 *المنتجات المطلوبة:*
 ${rawItems}
 ---------------------------------
-💵 *المجموع الفرعي:* ${subtotalVal.toLocaleString()} ريال
-🛵 *رسوم التوصيل:* ${shippingVal.toLocaleString()} ريال
-💰 *المبلغ الإجمالي المطلوب:* ${totalVal.toLocaleString()} ريال
+💵 *المجموع الفرعي:* ${subtotalVal.toLocaleString()} ر.ي
+🛵 *رسوم التوصيل:* ${shippingVal.toLocaleString()} ر.ي
+💰 *المبلغ الإجمالي:* ${totalVal.toLocaleString()} ر.ي
 💳 *طريقة الدفع:* ${order.paymentMethod === 'cash_on_delivery' ? 'عند الاستلام (كاش)' : 'تحويل بنكي / إلكتروني'}
 ${order.notes ? `\n💬 *ملاحظات خاصة:* ${order.notes}` : ''}
 ---------------------------------
-يرجى تأكيد التجهيز وسرعة إرسال المندوب 🚀`;
+يرجى تأكيد التجهيز وتحديد موعد وصول المندوب`;
 
     const cleanNumber = whatsappNumber.replace(/\D/g, '');
     window.open(`https://wa.me/${cleanNumber}?text=${encodeURIComponent(msg)}`, '_blank');
   };
 
   return (
-    <div id="order-confirmation-modal" className="fixed inset-0 z-[80] flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md overflow-y-auto">
-      <div className="relative w-full max-w-lg rounded-3xl bg-zinc-950 border border-amber-500/30 shadow-2xl p-5 sm:p-6 my-6 text-right overflow-hidden">
-        {/* Ambient Top Glow */}
-        <div className="absolute top-0 right-0 left-0 h-1.5 bg-gradient-to-r from-amber-500 via-amber-300 to-amber-600" />
+    <div id="order-confirmation-modal" className="fixed inset-0 z-[80] flex items-center justify-center p-3 sm:p-5 bg-black/85 backdrop-blur-md overflow-y-auto">
+      <div className="relative w-full max-w-lg rounded-3xl bg-[#0F0F16] border border-[#262638] shadow-2xl p-6 sm:p-8 my-6 text-right overflow-hidden">
+        
+        {/* Subtle top gold highlight */}
+        <div className="absolute top-0 right-0 left-0 h-[2px] bg-gradient-to-r from-transparent via-amber-400 to-transparent" />
         
         {/* Close Button */}
         <button
           onClick={onClose}
-          className="absolute top-4 left-4 p-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white transition-colors"
+          className="absolute top-5 left-5 p-2 rounded-xl bg-[#161622] border border-[#242436] text-slate-400 hover:text-white transition-colors cursor-pointer"
           title="إغلاق"
         >
-          <X className="w-5 h-5" />
+          <X className="w-4 h-4" />
         </button>
 
-        {/* Success Icon & Header */}
-        <div className="text-center space-y-2 pt-2 pb-4">
-          <div className="w-16 h-16 mx-auto rounded-full bg-emerald-500/20 border-2 border-emerald-500/50 flex items-center justify-center text-emerald-400 shadow-lg shadow-emerald-500/20 animate-bounce-short">
-            <CheckCircle2 className="w-9 h-9" />
+        {/* Confirmation Header */}
+        <div className="text-center space-y-3 pb-5">
+          <div className="w-14 h-14 mx-auto rounded-full bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+            <CheckCircle2 className="w-8 h-8" />
           </div>
+          
           <h2 className="text-xl sm:text-2xl font-black text-white">
-            تم استلام وتأكيد طلبك بنجاح! 🎉
+            تم استلام وتأكيد طلبك بنجاح
           </h2>
-          <div className="flex items-center justify-center gap-2">
-            <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-amber-500/15 border border-amber-500/40 text-amber-300 text-xs font-mono font-black">
-              <span>رقم الطلب:</span>
-              <span className="text-white text-sm">#{orderNum}</span>
-            </div>
+
+          <div className="flex items-center justify-center gap-2 pt-1">
+            <span className="text-xs text-slate-400">رقم الفاتورة:</span>
+            <span className="text-amber-400 font-mono font-bold text-sm bg-[#161622] px-2.5 py-1 rounded-lg border border-[#242436]">
+              #{orderNum}
+            </span>
             <button
               type="button"
               onClick={handleCopyOrderNum}
-              className="p-1.5 rounded-full bg-zinc-900 border border-zinc-700 hover:border-amber-500 text-zinc-300 hover:text-amber-400 transition-colors text-xs flex items-center gap-1 px-2.5 cursor-pointer"
+              className="p-1 px-2 rounded-lg bg-[#161622] border border-[#242436] text-slate-300 hover:text-white text-xs flex items-center gap-1 cursor-pointer"
               title="نسخ رقم الطلب"
             >
-              {hasCopied ? (
-                <>
-                  <Check className="w-3.5 h-3.5 text-emerald-400" />
-                  <span className="text-[11px] text-emerald-400 font-bold">تم النسخ</span>
-                </>
-              ) : (
-                <>
-                  <Copy className="w-3.5 h-3.5" />
-                  <span className="text-[11px]">نسخ</span>
-                </>
-              )}
+              {hasCopied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+              <span className="text-[10px]">{hasCopied ? 'تم النسخ' : 'نسخ'}</span>
             </button>
           </div>
         </div>
 
-        {/* 4-Step Progress Mini-Pipeline */}
-        <div className="p-3 rounded-2xl bg-zinc-900 border border-zinc-800 mb-3.5">
-          <div className="grid grid-cols-4 gap-1 text-center">
+        {/* 4-Step Pipeline Summary */}
+        <div className="p-3.5 rounded-2xl bg-[#14141E] border border-[#20202E] space-y-2 mb-4">
+          <div className="grid grid-cols-4 gap-1.5 text-center text-[11px] font-semibold">
             <div className="space-y-1">
-              <div className="h-1.5 rounded-full bg-emerald-500 shadow-sm shadow-emerald-500/50" />
-              <span className="text-[10px] text-emerald-400 font-bold block">1. مؤكد ✓</span>
+              <div className="h-1.5 rounded-full bg-emerald-500" />
+              <span className="text-emerald-400 block">1. مؤكد ✓</span>
             </div>
             <div className="space-y-1">
-              <div className="h-1.5 rounded-full bg-amber-500 animate-pulse" />
-              <span className="text-[10px] text-amber-400 font-bold block">2. قيد التجهيز</span>
+              <div className="h-1.5 rounded-full bg-amber-400" />
+              <span className="text-amber-400 block">2. التجهيز</span>
             </div>
             <div className="space-y-1">
-              <div className="h-1.5 rounded-full bg-zinc-800" />
-              <span className="text-[10px] text-zinc-500 font-medium block">3. مع المندوب</span>
+              <div className="h-1.5 rounded-full bg-[#262638]" />
+              <span className="text-slate-500 block">3. مع المندوب</span>
             </div>
             <div className="space-y-1">
-              <div className="h-1.5 rounded-full bg-zinc-800" />
-              <span className="text-[10px] text-zinc-500 font-medium block">4. تم التسليم</span>
+              <div className="h-1.5 rounded-full bg-[#262638]" />
+              <span className="text-slate-500 block">4. تم التسليم</span>
             </div>
           </div>
         </div>
 
-        {/* Where does the order go? Transparency Box */}
-        <div className="p-3.5 rounded-2xl bg-zinc-900/90 border border-zinc-800 space-y-2.5 text-xs mb-4">
-          <div className="flex items-center gap-2 text-amber-400 font-bold">
-            <ShieldCheck className="w-4 h-4 text-amber-400 shrink-0" />
-            <span>مسار الطلب الحالي:</span>
-          </div>
-          <div className="space-y-1.5 text-zinc-300 text-[11px] leading-relaxed pr-2">
-            <div className="flex items-start gap-2">
-              <span className="text-emerald-400 font-bold">✓</span>
-              <span><strong>لوحة إدارة المتجر:</strong> تم إشعار المالك والمسؤولين فوراً لتجهيز شحنة الفحم الملكي.</span>
-            </div>
-            <div className="flex items-start gap-2">
-              <span className="text-amber-400 font-bold">🛵</span>
-              <span><strong>مندوب التوصيل في صنعاء:</strong> جاري التنسيق مع المندوب للتوصيل السريع (30 - 45 دقيقة).</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Invoice Summary Card */}
-        <div className="p-4 rounded-2xl bg-zinc-900 border border-zinc-800 space-y-3 mb-4 text-xs">
-          <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
-            <span className="text-zinc-400">العميل: <strong className="text-white">{customerName}</strong></span>
-            <span className="text-zinc-400">المنطقة: <strong className="text-amber-300">{districtName}</strong></span>
+        {/* Order Details Grid */}
+        <div className="p-4 rounded-2xl bg-[#14141E] border border-[#20202E] space-y-2.5 text-xs">
+          <div className="flex items-center justify-between text-slate-400">
+            <span>منطقة التوصيل:</span>
+            <span className="font-bold text-white">صنعاء - {districtName}</span>
           </div>
 
-          <div className="space-y-1 text-zinc-300">
-            <span className="text-[11px] text-zinc-500 font-bold block">المنتجات المحجوزة:</span>
-            <p className="text-zinc-200 text-xs leading-relaxed">
-              {order.itemsSummary || (Array.isArray(order.items) 
-                ? order.items.map((i: any) => `${i.product?.nameAr || i.productNameAr || 'فحم الذهب الأسود'} × ${i.quantity}`).join('، ')
-                : 'منتجات فحم الذهب الأسود الفاخر')}
-            </p>
+          <div className="flex items-center justify-between text-slate-400">
+            <span>المبلغ الإجمالي:</span>
+            <span className="font-bold text-amber-400 font-mono text-sm">{totalVal.toLocaleString()} ر.ي</span>
           </div>
 
-          <div className="pt-2 border-t border-zinc-800 flex justify-between items-center text-sm">
-            <span className="text-zinc-300 font-medium">المبلغ الإجمالي المطلوب:</span>
-            <span className="text-amber-400 font-mono font-black text-base">
-              {totalVal.toLocaleString()} ريال
+          <div className="flex items-center justify-between text-slate-400">
+            <span>طريقة الدفع:</span>
+            <span className="text-slate-200">
+              {order.paymentMethod === 'cash_on_delivery' ? 'كاش عند الاستلام' : 'تحويل إلكتروني / الكريمي'}
             </span>
           </div>
         </div>
 
         {/* Action Buttons */}
-        <div className="space-y-2.5">
-          {/* WhatsApp Direct Confirmation */}
+        <div className="mt-5 space-y-2.5">
           <button
             type="button"
-            id="confirm-modal-whatsapp-btn"
-            onClick={handleWhatsAppSend}
-            className="w-full py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-2 transition-all shadow-lg shadow-emerald-600/20 cursor-pointer active:scale-[0.99]"
+            onClick={() => onTrackOrder(order)}
+            className="w-full py-3.5 px-4 rounded-xl gold-gradient-bg text-[#09090D] font-extrabold text-xs hover:brightness-105 shadow-lg shadow-amber-500/15 flex items-center justify-center gap-2 cursor-pointer transition-all"
           >
-            <MessageSquare className="w-4 h-4" />
-            <span>إرسال نسخة الفاتورة للمتجر عبر واتساب لتسريع التوصيل 💬</span>
+            <Truck className="w-4 h-4" />
+            <span>متابعة مسار التوصيل والطلب الآن</span>
           </button>
 
-          {/* Track This Single Order */}
-          <button
-            type="button"
-            id="confirm-modal-track-btn"
-            onClick={() => {
-              onTrackOrder(order);
-            }}
-            className="w-full py-2.5 px-4 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-amber-300 font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer"
-          >
-            <Truck className="w-4 h-4 text-amber-400" />
-            <span>متابعة تتبع هذا الطلب وحالة المندوب لحظة بلحظة</span>
-          </button>
-
-          {/* Print / View Electronic Invoice */}
-          {onOpenInvoice && (
+          <div className="grid grid-cols-2 gap-2">
             <button
               type="button"
-              id="confirm-modal-invoice-btn"
-              onClick={() => onOpenInvoice(order)}
-              className="w-full py-2.5 px-4 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-amber-500/30 text-amber-300 font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer"
+              onClick={handleWhatsAppSend}
+              className="py-2.5 px-3 rounded-xl bg-[#181824] hover:bg-[#222232] text-emerald-400 border border-[#28283C] text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
             >
-              <Printer className="w-4 h-4 text-amber-400" />
-              <span>عرض وطباعة الفاتورة الرسمية (إيصال استلام) 🖨️</span>
+              <MessageSquare className="w-3.5 h-3.5 text-emerald-400" />
+              <span>إشعار عبر واتساب</span>
             </button>
-          )}
 
-          {/* View All Orders */}
-          {onOpenMyOrders && (
-            <button
-              type="button"
-              id="confirm-modal-my-orders-btn"
-              onClick={() => {
-                onOpenMyOrders();
-              }}
-              className="w-full py-2.5 px-4 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer"
-            >
-              <Package className="w-4 h-4 text-amber-400" />
-              <span>عرض سجل طلباتي (طلباتي)</span>
-            </button>
-          )}
-
-          {/* Continue Shopping */}
-          <button
-            type="button"
-            id="confirm-modal-continue-shopping-btn"
-            onClick={onClose}
-            className="w-full py-2 text-zinc-400 hover:text-zinc-200 text-xs font-semibold text-center transition-colors cursor-pointer"
-          >
-            العودة ومتابعة التسوّق
-          </button>
+            {onOpenInvoice && (
+              <button
+                type="button"
+                onClick={() => onOpenInvoice(order)}
+                className="py-2.5 px-3 rounded-xl bg-[#181824] hover:bg-[#222232] text-slate-300 border border-[#28283C] text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+              >
+                <Printer className="w-3.5 h-3.5 text-amber-400" />
+                <span>طباعة الفاتورة</span>
+              </button>
+            )}
+          </div>
         </div>
+
       </div>
     </div>
   );

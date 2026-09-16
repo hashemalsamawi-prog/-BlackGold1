@@ -33,6 +33,8 @@ import { QualityProtocolSection } from './components/QualityProtocolSection';
 import { CharcoalCalculatorModal } from './components/CharcoalCalculatorModal';
 import { InvoiceReceiptModal } from './components/InvoiceReceiptModal';
 import { ExpressHotlineBar } from './components/ExpressHotlineBar';
+import { ToastNotification } from './components/ToastNotification';
+import { EmptyState } from './components/EmptyState';
 import { playOrderAlertSound } from './utils/soundAlert';
 import { safeGetLocalStorage, safeSetLocalStorage, safeRemoveLocalStorage } from './utils/storage';
 import { authStorage } from './services/api';
@@ -944,15 +946,10 @@ export default function App() {
       <div className={`min-h-screen ${theme === 'light' ? 'light bg-[#F8F9FC] text-slate-900' : 'bg-[#0A0A0C] text-slate-100'} flex flex-col justify-between selection:bg-amber-500 selection:text-black transition-colors duration-300`}>
         
         {/* Push Notification Toast */}
-        {toastMessage && (
-          <div className="fixed bottom-4 left-4 right-4 sm:left-auto sm:right-6 z-50 max-w-md bg-slate-900/95 border border-amber-500/50 p-3.5 rounded-2xl shadow-2xl text-xs font-bold text-amber-300 flex items-center justify-between gap-3 animate-bounce">
-            <div className="flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-amber-400" />
-              <span>{toastMessage}</span>
-            </div>
-            <button onClick={() => setToastMessage(null)} className="text-slate-400 hover:text-white">✕</button>
-          </div>
-        )}
+        <ToastNotification 
+          toast={toastMessage} 
+          onClose={() => setToastMessage(null)} 
+        />
 
         {/* Main Sticky Navbar */}
         <Navbar
@@ -1020,43 +1017,43 @@ export default function App() {
         <main id="products-grid-section" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-10 space-y-8 flex-1 w-full scroll-mt-28">
           
           {/* Category Switcher & Filter Headline */}
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-800/80 pb-4 bg-slate-950/40 p-4 sm:p-5 rounded-2xl border border-slate-800">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-[#20202E] pb-4 bg-[#0F0F16] p-4 sm:p-5 rounded-3xl border border-[#222232]">
             <div>
               <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400">
+                <div className="w-8 h-8 rounded-xl bg-[#1A1A26] border border-[#28283C] flex items-center justify-center text-amber-400">
                   <Flame className="w-4 h-4 fill-amber-400/30" />
                 </div>
                 <h2 className="text-xl sm:text-2xl font-black text-white">
                   {activeCategory === 'all'
-                    ? '✨ جميع أصناف وعبوات فحم الذهب الأسود'
+                    ? 'تشكيلة فحم الذهب الأسود الملكي'
                     : activeCategory === 'premium'
-                    ? '👑 الخط الفاخر الملكي (Zipper Lock)'
+                    ? 'الخط الفاخر الملكي (Zipper Lock)'
                     : activeCategory === 'local'
-                    ? '🔥 الخط الشعبي الاقتصادي اليومي'
+                    ? 'الخط الشعبي الاقتصادي اليومي'
                     : activeCategory === 'wholesale'
-                    ? '📦 خط الجملة وتجهيز البقالات والمطاعم'
+                    ? 'خط التوريد والجملة والمقاهي'
                     : activeCategory === 'bbq'
-                    ? '⚡ مكعبات ومستلزمات الإشعال السريع'
+                    ? 'مكعبات ومستلزمات الإشعال'
                     : 'منتجات الذهب الأسود'}
                 </h2>
               </div>
-              <p className="text-xs text-slate-400 mt-1.5">
-                {activeCategory === 'all' && 'استعرض جميع العبوات الملكية والشعبية وعروض التوريد للمحلات والمطاعم مع ضمان (+10g مجاناً)'}
+              <p className="text-xs text-slate-400 mt-1.5 font-normal">
+                {activeCategory === 'all' && 'استعرض جميع العبوات الملكية والشعبية وعروض التوريد للمحلات والمطاعم مع هدية (+10g مجاناً مدمجة)'}
                 {activeCategory === 'premium' && 'أكياس Zipper الفاخرة العازلة للرطوبة (250g، 500g، 1kg) بأعلى درجات الفرز والنقاء'}
-                {activeCategory === 'local' && 'فحم بلدي اقتصادي عالي الجودة ومغربل ميكانيكياً بدون أتربة أو دخان'}
-                {activeCategory === 'wholesale' && 'صناديق نقاط البيع مع استاندات العرض الخشبية وشوالات المطاعم الكبرى 20kg بأسعار جملة'}
-                {activeCategory === 'bbq' && 'مكعبات إشعال فورية آمنة وبدون روائح تدوم وتسهل إشعال الفحم خلال ثوانٍ'}
+                {activeCategory === 'local' && 'فحم بلدي اقتصادي عالي الجودة ومغربل ميكانيكياً بدون أتربة أو شوائب'}
+                {activeCategory === 'wholesale' && 'صناديق نقاط البيع وشوالات المطاعم الكبرى 20kg بأسعار جملة منافسة'}
+                {activeCategory === 'bbq' && 'مكعبات إشعال فورية آمنة وبدون روائح تدوم وتسهل إشعال الفحم'}
               </p>
             </div>
 
             {/* Category Quick Filter Pills */}
             <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar max-w-full pb-1">
               {[
-                { id: 'all', label: '🌟 الكل' },
-                { id: 'premium', label: '👑 الفاخر الملكي' },
-                { id: 'local', label: '🔥 الاقتصادي' },
-                { id: 'bbq', label: '⚡ الإشعال' },
-                { id: 'wholesale', label: '📦 الجملة' }
+                { id: 'all', label: 'الكل' },
+                { id: 'premium', label: 'الفاخر الملكي' },
+                { id: 'local', label: 'الاقتصادي' },
+                { id: 'bbq', label: 'الإشعال' },
+                { id: 'wholesale', label: 'الجملة' }
               ].map((c) => (
                 <button
                   key={c.id}
@@ -1064,10 +1061,10 @@ export default function App() {
                     setActiveCategory(c.id);
                     setSearchQuery('');
                   }}
-                  className={`px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+                  className={`px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
                     activeCategory === c.id
-                      ? 'bg-amber-500 text-slate-950 font-black shadow-lg shadow-amber-500/25 scale-105 ring-2 ring-amber-400/60'
-                      : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800'
+                      ? 'gold-gradient-bg text-[#09090D] font-extrabold shadow-sm'
+                      : 'bg-[#14141E] hover:bg-[#1A1A28] text-slate-300 border border-[#242436]'
                   }`}
                 >
                   {c.label}
@@ -1128,16 +1125,15 @@ export default function App() {
 
           {/* Grid Cards */}
           {filteredProducts.length === 0 ? (
-            <div className="text-center py-16 space-y-3 bg-slate-900/40 rounded-2xl border border-slate-800">
-              <Flame className="w-12 h-12 text-slate-600 mx-auto" />
-              <p className="text-sm font-bold text-slate-400">لم يتم العثور على منتجات مطابقة للبحث.</p>
-              <button
-                onClick={() => { setSearchQuery(''); setActiveCategory('all'); }}
-                className="text-xs text-amber-400 font-bold underline cursor-pointer"
-              >
-                عرض كافة منتجات الفحم
-              </button>
-            </div>
+            <EmptyState
+              type="search"
+              searchQuery={searchQuery}
+              customTitle="لم يتم العثور على منتجات مطابقة لبحثك"
+              customDesc="جرب البحث بكلمة أخرى، أو استعرض التشكيلة الكاملة من فحم الذهب الأسود الملكي والاقتصادي."
+              onAction={() => { setSearchQuery(''); setActiveCategory('all'); setMinPrice(''); setMaxPrice(''); }}
+              actionLabel="عرض كافة منتجات الفحم الملكي"
+              onSelectSuggestion={(q) => setSearchQuery(q)}
+            />
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 sm:gap-8">
               {filteredProducts.map((product) => (
@@ -1174,17 +1170,17 @@ export default function App() {
 
           {/* B2B Grocery & Restaurant Wholesale Partner Banner */}
           {activeCategory !== 'wholesale' && (
-            <section className="p-6 sm:p-8 rounded-3xl bg-gradient-to-r from-amber-500/10 via-[#161622] to-amber-500/10 border border-amber-500/30 flex flex-col md:flex-row items-center justify-between gap-6 text-right">
-              <div className="space-y-1.5">
-                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 text-xs font-black">
+            <section className="p-6 sm:p-8 rounded-3xl bg-[#0F0F16] border border-[#242436] flex flex-col md:flex-row items-center justify-between gap-6 text-right shadow-xl">
+              <div className="space-y-2">
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#181824] border border-[#28283C] text-amber-400 text-xs font-semibold">
                   <Store className="w-3.5 h-3.5" />
-                  <span>خدمات التوريد المباشر للبقالات والمطاعم بصنعاء</span>
+                  <span>خدمات التوريد المباشر للبقالات والمقاهي بصنعاء</span>
                 </div>
                 <h3 className="text-xl sm:text-2xl font-black text-white">
-                  هل تدير بقالة، سوبرماركت، أو مطعماً وتريد شحنات دورية منتظمة؟
+                  هل تدير بقالة، مقهى، أو مطعماً وتريد شحنات دورية منتظمة؟
                 </h3>
-                <p className="text-xs sm:text-sm text-slate-400">
-                  نوفر صناديق التوزيع الفاخرة مع استاندات العرض المعدنية، وشوالات المطاعم الكبرى 20kg بأسعار جملة منافسة وتوصيل دوري مباشر.
+                <p className="text-xs sm:text-sm text-slate-400 leading-relaxed max-w-2xl font-normal">
+                  نوفر صناديق التوزيع الفاخرة مع استاندات العرض، وشوالات المطاعم الكبرى 20kg بأسعار جملة تنافسية وتوصيل دوري مباشر.
                 </p>
               </div>
 
@@ -1193,9 +1189,9 @@ export default function App() {
                   setActiveCategory('wholesale');
                   window.scrollTo({ top: 350, behavior: 'smooth' });
                 }}
-                className="px-6 py-3.5 rounded-xl gold-gradient-bg text-slate-950 font-black text-sm hover:brightness-110 shadow-lg shadow-amber-500/20 transition-all flex items-center gap-2 shrink-0 cursor-pointer"
+                className="px-6 py-3.5 rounded-xl gold-gradient-bg text-[#09090D] font-extrabold text-sm hover:brightness-105 shadow-md shadow-amber-500/15 transition-all flex items-center gap-2 shrink-0 cursor-pointer"
               >
-                <Store className="w-4 h-4 fill-slate-950" />
+                <Store className="w-4 h-4 text-[#09090D]" />
                 <span>تصفح عروض وأسعار الجملة</span>
               </button>
             </section>
@@ -1203,22 +1199,28 @@ export default function App() {
 
           {/* Value Banners Footer Section */}
           <section className="grid grid-cols-1 md:grid-cols-3 gap-4 text-center">
-            <div className="p-5 rounded-2xl bg-[#121218] border border-amber-500/20 space-y-2">
-              <Truck className="w-8 h-8 text-amber-400 mx-auto" />
-              <h4 className="font-black text-white text-sm">توصيل فوري داخل صنعاء</h4>
-              <p className="text-xs text-slate-400">تغطية شاملة لكافة مديريات وأحياء صنعاء خلال 45 دقيقة</p>
+            <div className="p-6 rounded-3xl bg-[#111118] border border-[#20202E] space-y-2.5">
+              <div className="w-10 h-10 rounded-xl bg-[#1A1A26] border border-[#28283C] flex items-center justify-center mx-auto text-amber-400">
+                <Truck className="w-5 h-5" />
+              </div>
+              <h4 className="font-extrabold text-white text-sm">توصيل فوري داخل صنعاء</h4>
+              <p className="text-xs text-slate-400 font-normal">تغطية مباشرة لكافة مديريات وأحياء أمانة العاصمة</p>
             </div>
 
-            <div className="p-5 rounded-2xl bg-[#121218] border border-amber-500/20 space-y-2">
-              <Award className="w-8 h-8 text-amber-400 mx-auto" />
-              <h4 className="font-black text-white text-sm">جودة الذهب الأسود</h4>
-              <p className="text-xs text-slate-400">حرارة فائقة الشدة ورماد أبيض كريستالي بدون أي رائحة</p>
+            <div className="p-6 rounded-3xl bg-[#111118] border border-[#20202E] space-y-2.5">
+              <div className="w-10 h-10 rounded-xl bg-[#1A1A26] border border-[#28283C] flex items-center justify-center mx-auto text-amber-400">
+                <Award className="w-5 h-5" />
+              </div>
+              <h4 className="font-extrabold text-white text-sm">جودة الذهب الأسود الملكية</h4>
+              <p className="text-xs text-slate-400 font-normal">حرارة متجانسة تفوق 650°C ورماد أبيض نقي بدون شوائب</p>
             </div>
 
-            <div className="p-5 rounded-2xl bg-[#121218] border border-amber-500/20 space-y-2">
-              <ShieldCheck className="w-8 h-8 text-amber-400 mx-auto" />
-              <h4 className="font-black text-white text-sm">طرق دفع محليّة متعددة</h4>
-              <p className="text-xs text-slate-400">الدفع عند الاستلام كاش أو حاسب / بنك الكريمي والمحافظ الإلكترونية</p>
+            <div className="p-6 rounded-3xl bg-[#111118] border border-[#20202E] space-y-2.5">
+              <div className="w-10 h-10 rounded-xl bg-[#1A1A26] border border-[#28283C] flex items-center justify-center mx-auto text-amber-400">
+                <ShieldCheck className="w-5 h-5" />
+              </div>
+              <h4 className="font-extrabold text-white text-sm">خيارات سداد يمنية مرنة</h4>
+              <p className="text-xs text-slate-400 font-normal">الدفع عند الاستلام، حاسب / الكريمي والمحافظ الإلكترونية</p>
             </div>
           </section>
 

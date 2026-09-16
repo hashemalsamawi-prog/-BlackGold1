@@ -1,5 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { Order, Language } from '../types';
+import { EmptyState } from './EmptyState';
+import { OrderTrackerSkeleton } from './LuxurySkeleton';
 import { 
   X, Package, Truck, CheckCircle2, Clock, MapPin, 
   Phone, AlertCircle, ShoppingBag, ArrowLeft, RefreshCw,
@@ -58,6 +60,13 @@ export const OrderTrackerModal: React.FC<OrderTrackerModalProps> = ({
   const [isSearchingLive, setIsSearchingLive] = useState(false);
   const [liveResult, setLiveResult] = useState<PublicTrackResult | null>(null);
   const [liveError, setLiveError] = useState<string | null>(null);
+  const modalContentRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (isOpen && modalContentRef.current) {
+      modalContentRef.current.scrollTop = 0;
+    }
+  }, [isOpen]);
 
   const statusLabels: Record<string, { text: string; color: string; bg: string; step: number }> = {
     pending: { text: 'قيد المراجعة والتأكيد', color: 'text-amber-400', bg: 'bg-amber-500/10 border-amber-500/30', step: 1 },
@@ -137,36 +146,39 @@ export const OrderTrackerModal: React.FC<OrderTrackerModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md overflow-y-auto">
-      <div className="relative w-full max-w-2xl rounded-3xl bg-zinc-950 border border-zinc-800 shadow-2xl p-5 sm:p-6 my-6 max-h-[90vh] overflow-y-auto text-right">
+      <div 
+        ref={modalContentRef}
+        className="relative w-full max-w-2xl rounded-3xl bg-[#0F0F16] border border-[#222232] shadow-2xl p-5 sm:p-7 my-6 max-h-[90vh] overflow-y-auto text-right"
+      >
         {/* Close Button */}
         <button
           onClick={onClose}
-          className="absolute top-5 left-5 p-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white transition-colors cursor-pointer"
+          className="absolute top-5 left-5 p-2 rounded-xl bg-[#161622] border border-[#262638] text-slate-400 hover:text-white transition-colors cursor-pointer"
           title="إغلاق"
         >
-          <X className="w-5 h-5" />
+          <X className="w-4 h-4" />
         </button>
 
         {/* Modal Header */}
         <div className="flex items-center gap-3 mb-4">
-          <div className="w-10 h-10 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0">
+          <div className="w-10 h-10 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
             <Truck className="w-5 h-5" />
           </div>
           <div>
             <h2 className="text-lg sm:text-xl font-black text-white">تتبع الطلبات والشحنات</h2>
-            <p className="text-xs text-zinc-400">متابعة مسار شحنات فحم الذهب الأسود في صنعاء مباشرة من الخادم</p>
+            <p className="text-xs text-slate-400">متابعة مسار شحنات فحم الذهب الأسود في صنعاء مباشرة من الخادم</p>
           </div>
         </div>
 
         {/* Navigation Tabs */}
-        <div className="flex items-center gap-2 border-b border-zinc-800 pb-3 mb-4 text-xs font-bold">
+        <div className="flex items-center gap-2 border-b border-[#20202E] pb-3 mb-4 text-xs font-bold">
           <button
             type="button"
             onClick={() => setActiveTab('my-orders')}
             className={`px-3.5 py-1.5 rounded-xl transition-all cursor-pointer ${
               activeTab === 'my-orders'
-                ? 'bg-amber-500 text-slate-950 font-black shadow-md shadow-amber-500/20'
-                : 'text-zinc-400 hover:text-white bg-zinc-900 border border-zinc-800'
+                ? 'gold-gradient-bg text-[#09090D] font-black shadow-md shadow-amber-500/15'
+                : 'text-slate-400 hover:text-white bg-[#14141E] border border-[#222232]'
             }`}
           >
             سجل طلباتي ({orders.length})
@@ -176,8 +188,8 @@ export const OrderTrackerModal: React.FC<OrderTrackerModalProps> = ({
             onClick={() => setActiveTab('live-search')}
             className={`px-3.5 py-1.5 rounded-xl transition-all cursor-pointer flex items-center gap-1.5 ${
               activeTab === 'live-search'
-                ? 'bg-amber-500 text-slate-950 font-black shadow-md shadow-amber-500/20'
-                : 'text-zinc-400 hover:text-white bg-zinc-900 border border-zinc-800'
+                ? 'gold-gradient-bg text-[#09090D] font-black shadow-md shadow-amber-500/15'
+                : 'text-slate-400 hover:text-white bg-[#14141E] border border-[#222232]'
             }`}
           >
             <Search className="w-3.5 h-3.5" />
@@ -217,14 +229,20 @@ export const OrderTrackerModal: React.FC<OrderTrackerModalProps> = ({
               </button>
             </form>
 
-            {liveError && (
-              <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-xs text-red-300 flex items-center gap-2">
+            {isSearchingLive && (
+              <div className="pt-2 animate-in fade-in duration-200">
+                <OrderTrackerSkeleton />
+              </div>
+            )}
+
+            {liveError && !isSearchingLive && (
+              <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-xs text-red-300 flex items-center gap-2 animate-in fade-in duration-200">
                 <AlertCircle className="w-4 h-4 shrink-0 text-red-400" />
                 <span>{liveError}</span>
               </div>
             )}
 
-            {!liveResult && !liveError && (
+            {!liveResult && !liveError && !isSearchingLive && (
               <div className="p-5 rounded-2xl bg-zinc-900/60 border border-zinc-800 space-y-3 text-center">
                 <div className="w-12 h-12 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center mx-auto shadow-sm">
                   <Search className="w-6 h-6" />
@@ -354,51 +372,19 @@ export const OrderTrackerModal: React.FC<OrderTrackerModalProps> = ({
 
             {/* Empty State */}
             {filteredOrders.length === 0 ? (
-              <div className="text-center py-8 px-5 space-y-4 bg-zinc-900/60 rounded-2xl border border-zinc-800">
-                <div className="w-16 h-16 rounded-2xl bg-zinc-950 border border-amber-500/20 flex items-center justify-center mx-auto text-amber-400 shadow-lg shadow-amber-500/5">
-                  <Package className="w-8 h-8" />
-                </div>
-                <div className="space-y-1 max-w-md mx-auto">
-                  <p className="text-sm font-black text-white">
-                    {searchQuery ? 'لم يتم العثور على طلب مطابق لبحثك.' : 'لا توجد طلبات مسجلة في جلستك الحالية بعد.'}
-                  </p>
-                  <p className="text-xs text-zinc-400 leading-relaxed">
-                    {searchQuery 
-                      ? 'يرجى التأكد من كتابة رقم الطلب بشكل صحيح، أو استخدم تبويب "استعلام مباشر" بالأعلى.'
-                      : 'عند إتمام أي طلب في المتجر، ستتمكن من تتبعه هنا فورياً مع مسار مندوب التوصيل في صنعاء.'}
-                  </p>
-                </div>
-                <div className="flex items-center justify-center gap-3 pt-2">
-                  <button
-                    onClick={onShopNow}
-                    className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 text-slate-950 font-black text-xs transition-all shadow-md cursor-pointer active:scale-95"
-                  >
-                    تسوق منتجات الفحم الآن 🔥
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('live-search')}
-                    className="px-4 py-2.5 rounded-xl bg-zinc-900 border border-zinc-700 text-amber-300 font-bold text-xs hover:bg-zinc-800 transition-all cursor-pointer"
-                  >
-                    استعلام مباشر برقم الفاتورة
-                  </button>
-                </div>
-
-                {/* Delivery Guarantee Info Bar inside Empty Tracker */}
-                <div className="pt-4 mt-2 border-t border-zinc-800/80 grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] text-zinc-400">
-                  <div className="p-2 rounded-lg bg-zinc-950/60 border border-zinc-800/60 flex items-center justify-center gap-1.5">
-                    <Truck className="w-3.5 h-3.5 text-amber-400" />
-                    <span>توصيل سريع لكافة مديريات صنعاء</span>
-                  </div>
-                  <div className="p-2 rounded-lg bg-zinc-950/60 border border-zinc-800/60 flex items-center justify-center gap-1.5">
-                    <Clock className="w-3.5 h-3.5 text-amber-400" />
-                    <span>تتبع فوري لمراحل الطلب</span>
-                  </div>
-                  <div className="p-2 rounded-lg bg-zinc-950/60 border border-zinc-800/60 flex items-center justify-center gap-1.5">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-amber-400" />
-                    <span>فحم أصلي بضمان الاسترجاع</span>
-                  </div>
-                </div>
-              </div>
+              searchQuery ? (
+                <EmptyState
+                  type="search"
+                  onAction={() => setSearchQuery('')}
+                  actionLabel="مسح البحث وعرض كافة الطلبات"
+                />
+              ) : (
+                <EmptyState
+                  type="orders"
+                  onAction={onShopNow}
+                  actionLabel="تسوق منتجات الفحم الملكي الآن"
+                />
+              )
             ) : (
               <div className="space-y-3.5">
                 {filteredOrders.map((order) => {

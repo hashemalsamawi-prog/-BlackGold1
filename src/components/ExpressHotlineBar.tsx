@@ -28,25 +28,25 @@ export const ExpressHotlineBar: React.FC<ExpressHotlineBarProps> = ({
   const cleanWhatsapp = whatsappNumber.replace(/\D/g, '');
 
   return (
-    <div className="fixed bottom-20 md:bottom-6 left-4 z-40">
+    <div className="fixed bottom-[calc(4.75rem+env(safe-area-inset-bottom))] sm:bottom-6 left-4 z-40">
       {/* Expanded Menu */}
       {isExpanded && (
-        <div className="mb-3 w-64 rounded-3xl bg-zinc-950/95 border border-amber-500/40 backdrop-blur-md shadow-2xl p-4 text-right space-y-2.5 animate-scale-in">
+        <div className="mb-3 w-64 rounded-3xl bg-[#0F0F16]/95 border border-amber-500/30 backdrop-blur-xl shadow-2xl p-4 text-right space-y-2.5 animate-scale-in">
           {/* Header */}
-          <div className="flex items-center justify-between pb-2 border-b border-zinc-800">
+          <div className="flex items-center justify-between pb-2 border-b border-[#20202E]">
             <div className="flex items-center gap-1.5 text-xs font-black text-amber-400">
               <Sparkles className="w-3.5 h-3.5" />
               <span>خدمة عملاء صنعاء السريعة</span>
             </div>
             <button
               onClick={() => setIsExpanded(false)}
-              className="p-1 rounded-lg text-zinc-400 hover:text-white cursor-pointer"
+              className="p-1 rounded-lg text-slate-400 hover:text-white cursor-pointer transition-colors"
             >
               <X className="w-4 h-4" />
             </button>
           </div>
 
-          <div className="text-[11px] text-zinc-400 space-y-1">
+          <div className="text-[11px] text-slate-400 space-y-1">
             <div className="flex items-center gap-1.5 text-emerald-400 font-bold">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
               <span>مندوبو التوصيل متواجدون الآن</span>
@@ -58,7 +58,7 @@ export const ExpressHotlineBar: React.FC<ExpressHotlineBarProps> = ({
           <a
             href={`tel:${cleanPhone}`}
             id="hotline-phone-call"
-            className="w-full p-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-white font-bold text-xs flex items-center justify-between transition-colors"
+            className="w-full p-2.5 rounded-xl bg-[#181824] hover:bg-[#1E1E2C] border border-[#28283C] text-white font-bold text-xs flex items-center justify-between transition-colors"
           >
             <div className="flex items-center gap-2">
               <Phone className="w-4 h-4 text-amber-400" />
@@ -73,7 +73,7 @@ export const ExpressHotlineBar: React.FC<ExpressHotlineBarProps> = ({
             target="_blank"
             rel="noopener noreferrer"
             id="hotline-whatsapp-btn"
-            className="w-full p-2.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 font-bold text-xs flex items-center justify-between transition-colors"
+            className="w-full p-2.5 rounded-xl bg-emerald-600/15 hover:bg-emerald-600/25 border border-emerald-500/30 text-emerald-300 font-bold text-xs flex items-center justify-between transition-colors"
           >
             <div className="flex items-center gap-2">
               <MessageSquare className="w-4 h-4 text-emerald-400" />
@@ -89,7 +89,7 @@ export const ExpressHotlineBar: React.FC<ExpressHotlineBarProps> = ({
               onOpenCalculator();
             }}
             id="hotline-calc-btn"
-            className="w-full p-2.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 font-bold text-xs flex items-center gap-2 transition-colors cursor-pointer text-right"
+            className="w-full p-2.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/25 text-amber-300 font-bold text-xs flex items-center gap-2 transition-colors cursor-pointer text-right"
           >
             <Calculator className="w-4 h-4 text-amber-400 shrink-0" />
             <span>حاسبة استهلاك الفحم الذكية 🧮</span>
@@ -102,9 +102,9 @@ export const ExpressHotlineBar: React.FC<ExpressHotlineBarProps> = ({
               onOpenTracker();
             }}
             id="hotline-track-btn"
-            className="w-full p-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 font-bold text-xs flex items-center gap-2 transition-colors cursor-pointer text-right"
+            className="w-full p-2.5 rounded-xl bg-[#181824] hover:bg-[#1E1E2C] border border-[#28283C] text-slate-300 font-bold text-xs flex items-center gap-2 transition-colors cursor-pointer text-right"
           >
-            <Truck className="w-4 h-4 text-zinc-400 shrink-0" />
+            <Truck className="w-4 h-4 text-slate-400 shrink-0" />
             <span>تتبع طلبي المباشر 🛵</span>
           </button>
         </div>
@@ -115,7 +115,7 @@ export const ExpressHotlineBar: React.FC<ExpressHotlineBarProps> = ({
         type="button"
         id="express-hotline-toggle-btn"
         onClick={() => setIsExpanded(!isExpanded)}
-        className="group flex items-center gap-2.5 px-3.5 py-2.5 rounded-full bg-gradient-to-r from-amber-500 to-amber-600 text-zinc-950 font-black text-xs shadow-xl shadow-amber-500/30 hover:shadow-amber-500/50 hover:scale-105 active:scale-95 transition-all cursor-pointer border border-amber-300"
+        className="group flex items-center gap-2.5 px-3.5 py-2.5 rounded-full gold-gradient-bg text-[#09090D] font-black text-xs shadow-xl shadow-amber-500/20 hover:brightness-105 active:scale-95 transition-all duration-300 cursor-pointer border border-amber-400/40"
       >
         <div className="relative">
           <Phone className="w-4 h-4 text-zinc-950" />

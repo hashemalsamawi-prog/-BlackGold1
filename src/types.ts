@@ -6,6 +6,7 @@ export interface ProductWeightOption {
   weightGrams?: number;
   weight?: string;
   price: number;
+  originalPrice?: number;
   bonusGrams?: number;
   inStock?: boolean;
   isPopular?: boolean;
@@ -237,6 +238,9 @@ export interface StoreSettings {
   soundAlertsEnabled?: boolean;
   logoAnimation?: 'pulse' | 'glow' | 'none';
   bannerAnimation?: 'float' | 'glow' | 'zoom' | 'none';
+  brandStoryTitleAr?: string;
+  brandStoryDescriptionAr?: string;
+  trustClaimsAr?: string[];
 }
 
 export interface GalleryItem {

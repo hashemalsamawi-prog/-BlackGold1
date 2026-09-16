@@ -1,12 +1,12 @@
 import React from 'react';
 import { Language } from '../types';
 import { ASSETS, resolveAsset } from '../assets/images';
-import { Flame, Sparkles, ShieldCheck, Truck, ArrowLeft } from 'lucide-react';
+import { Flame, ShieldCheck, Truck, ArrowLeft, Store, Clock } from 'lucide-react';
 
 interface HeroBannerProps {
   lang: Language;
   userName?: string;
-  onOpenAiAdvisor: () => void;
+  onOpenAiAdvisor?: () => void;
   onSelectCategory: (category: string) => void;
   bannerImage?: string;
   bannerTitle?: string;
@@ -19,102 +19,107 @@ interface HeroBannerProps {
 
 export const HeroBanner: React.FC<HeroBannerProps> = ({
   lang,
-  userName,
-  onOpenAiAdvisor,
   onSelectCategory,
   bannerImage,
-  bannerTitle = 'عرض خاص محدود',
-  bannerSubtitle = 'عبوة 250g + 10g هدية إضافية',
-  bannerPrice = 1200,
-  bannerOldPrice = 1500,
-  enableAnimations = true,
-  bannerAnimation = 'float'
+  bannerTitle = 'العبوة الملكية الفاخرة',
+  bannerSubtitle = '250g + 10g هدية مدمجة',
+  bannerPrice = 600,
+  bannerOldPrice = 700,
 }) => {
   const activeImage = bannerImage || ASSETS.pouchPair || ASSETS.heroBanner;
 
   return (
-    <div className="relative overflow-hidden bg-gradient-to-b from-zinc-950 via-black to-zinc-950 border-b border-zinc-800">
-      {/* Background glow effects with optional animation */}
-      <div className={`absolute top-0 right-1/4 w-96 h-96 bg-amber-500/10 rounded-full blur-3xl pointer-events-none ${enableAnimations ? 'animate-pulse duration-1000' : ''}`} />
-      <div className={`absolute bottom-0 left-1/4 w-96 h-96 bg-orange-600/10 rounded-full blur-3xl pointer-events-none ${enableAnimations ? 'animate-pulse duration-700' : ''}`} />
+    <section className="relative overflow-hidden bg-[#09090D] border-b border-[#1E1E2C]">
+      {/* Subtle architectural gradient line */}
+      <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-amber-500/30 to-transparent" />
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 sm:py-16 relative z-10">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
-          {/* Main Copy */}
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 sm:py-20">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-14 items-center">
+          
+          {/* Main Brand & Proposition Copy */}
           <div className="lg:col-span-7 space-y-6 text-right">
-            <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs font-bold shadow-inner">
-              <Sparkles className={`w-3.5 h-3.5 text-amber-400 ${enableAnimations ? 'animate-spin' : ''}`} />
-              <span>فحم طبيعي 100% نقي | توصيل فوري في أمانة العاصمة</span>
+            
+            {/* Authenticity Pill */}
+            <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-[#161622] border border-[#2B2B3D] text-amber-400 text-xs font-semibold">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+              <span>فحم طبيعي نقي 100% • توصيل فوري داخل أمانة العاصمة صنعاء</span>
             </div>
 
-            <h1 className="text-3xl sm:text-5xl lg:text-6xl font-black text-white leading-tight tracking-tight">
-              فحم <span className="text-transparent bg-clip-text bg-gradient-to-r from-amber-400 via-amber-200 to-amber-500">الذهب الأسود</span>
+            {/* Main Headline */}
+            <h1 className="text-3xl sm:text-5xl lg:text-5xl font-black text-white leading-[1.2] tracking-tight">
+              فحم <span className="text-amber-400">الذهب الأسود</span> الملكي
               <br />
-              الملكي الفاخر في صنعاء
+              <span className="text-slate-300 text-2xl sm:text-4xl font-extrabold">حرارة متجانسة ونقاء يدوم طويلاً</span>
             </h1>
 
-            <p className="text-zinc-300 text-sm sm:text-base leading-relaxed max-w-xl">
-              نقاء فائق بدون دخان أو رائحة أو شرار. اشتعال يدوم لأكثر من 3 ساعات بحرارة متجانسة ثابتة. احصل على عبوتك الملكية مع <strong className="text-amber-400">+10 جرام مجاناً</strong> داخل كل كيس وتوصيل مباشر لباب منزلك أو مقهاك.
+            {/* Refined Description */}
+            <p className="text-slate-300 text-sm sm:text-base leading-relaxed max-w-xl font-normal">
+              فحم نباتي نقي عالي الكثافة يمنحك اشتعالاً هادئاً متواصلاً لأكثر من 3 ساعات، بدون شرار أو روائح كيميائية مع رماد أبيض نقي. متوفر بعبوات فاخرة ومحمية من الرطوبة مع توصيل مباشر لكافة أحياء صنعاء.
             </p>
 
-            {/* Quick feature tags */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 pt-2">
-              <div className="flex items-center gap-2 p-2.5 rounded-xl bg-zinc-900/60 border border-zinc-800 text-xs text-zinc-300">
-                <Flame className={`w-4 h-4 text-amber-400 shrink-0 ${enableAnimations ? 'animate-bounce' : ''}`} />
-                <span>3+ ساعات اشتعال</span>
+            {/* Verified Facts & Performance Strip */}
+            <div className="grid grid-cols-3 gap-3 pt-1">
+              <div className="p-3 rounded-2xl bg-[#111118] border border-[#20202E] text-right space-y-1">
+                <div className="flex items-center gap-1.5 text-amber-400 font-bold text-xs">
+                  <Flame className="w-4 h-4 text-amber-400" />
+                  <span>3+ ساعات</span>
+                </div>
+                <p className="text-[11px] text-slate-400">اشتعال مستمر وحرارة ثابتة</p>
               </div>
-              <div className="flex items-center gap-2 p-2.5 rounded-xl bg-zinc-900/60 border border-zinc-800 text-xs text-zinc-300">
-                <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span>0% دخان وشرار</span>
+
+              <div className="p-3 rounded-2xl bg-[#111118] border border-[#20202E] text-right space-y-1">
+                <div className="flex items-center gap-1.5 text-amber-400 font-bold text-xs">
+                  <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                  <span>&lt; 1.5% رماد</span>
+                </div>
+                <p className="text-[11px] text-slate-400">رماد أبيض ناعم وخالٍ من الشوائب</p>
               </div>
-              <div className="flex items-center gap-2 p-2.5 rounded-xl bg-zinc-900/60 border border-zinc-800 text-xs text-zinc-300">
-                <Truck className="w-4 h-4 text-amber-400 shrink-0" />
-                <span>توصيل 30 دقيقة</span>
+
+              <div className="p-3 rounded-2xl bg-[#111118] border border-[#20202E] text-right space-y-1">
+                <div className="flex items-center gap-1.5 text-amber-400 font-bold text-xs">
+                  <Truck className="w-4 h-4 text-amber-400" />
+                  <span>توصيل مباشر</span>
+                </div>
+                <p className="text-[11px] text-slate-400">تغطية لكافة مديريات صنعاء</p>
               </div>
             </div>
 
-            {/* CTA Buttons */}
-            <div className="flex flex-wrap items-center gap-3 pt-4">
+            {/* Primary and Secondary CTA Buttons */}
+            <div className="flex flex-wrap items-center gap-3.5 pt-3">
               <button
-                onClick={() => onSelectCategory('premium')}
-                className="px-6 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 text-black font-black text-sm hover:from-amber-400 hover:to-amber-500 shadow-xl shadow-amber-500/20 flex items-center gap-2 transition-all transform hover:-translate-y-0.5"
+                onClick={() => {
+                  onSelectCategory('premium');
+                  const el = document.getElementById('products-grid-section');
+                  if (el) el.scrollIntoView({ behavior: 'smooth' });
+                }}
+                className="px-6 py-3.5 rounded-xl gold-gradient-bg text-[#09090D] font-extrabold text-sm hover:brightness-105 shadow-lg shadow-amber-500/15 flex items-center gap-2 transition-all cursor-pointer"
               >
-                <span>تسوق الفحم الفاخر</span>
+                <span>تسوق التشكيلة الملكية</span>
                 <ArrowLeft className="w-4 h-4" />
               </button>
 
               <button
-                onClick={() => onSelectCategory('b2b')}
-                className="px-5 py-3 rounded-xl bg-zinc-900 border border-zinc-700 text-zinc-200 font-bold text-sm hover:bg-zinc-800 hover:border-amber-500/50 transition-all"
+                onClick={() => {
+                  onSelectCategory('wholesale');
+                  const el = document.getElementById('products-grid-section');
+                  if (el) el.scrollIntoView({ behavior: 'smooth' });
+                }}
+                className="px-5 py-3.5 rounded-xl bg-[#14141E] border border-[#2B2B3E] text-slate-200 hover:text-white hover:border-amber-500/40 text-sm font-bold flex items-center gap-2 transition-all cursor-pointer"
               >
-                <span>طلبات الجملة والمقاهي (B2B)</span>
+                <Store className="w-4 h-4 text-amber-400" />
+                <span>عروض الجملة والمقاهي (B2B)</span>
               </button>
             </div>
           </div>
 
-          {/* Hero Visual Card with Animation Controls */}
-          <div className="lg:col-span-5 relative group">
-            {/* Ambient Aura when animations are enabled */}
-            {enableAnimations && (
-              <div className="absolute -inset-1 rounded-3xl bg-gradient-to-r from-amber-500/25 via-orange-500/20 to-amber-600/25 blur-xl opacity-75 group-hover:opacity-100 transition duration-1000 group-hover:duration-300 animate-pulse pointer-events-none" />
-            )}
-
-            <div 
-              className={`relative rounded-3xl overflow-hidden border border-amber-500/30 bg-gradient-to-b from-zinc-900 to-black p-3 shadow-2xl shadow-amber-500/10 transition-all duration-500 ${
-                enableAnimations && bannerAnimation === 'float'
-                  ? 'hover:-translate-y-2 hover:shadow-amber-500/30'
-                  : enableAnimations && bannerAnimation === 'zoom'
-                  ? 'hover:scale-[1.02] hover:shadow-amber-500/30'
-                  : 'hover:border-amber-500/50'
-              }`}
-            >
-              <div className="relative overflow-hidden rounded-2xl bg-zinc-950">
+          {/* Product Hero Image Composition */}
+          <div className="lg:col-span-5 relative">
+            <div className="relative rounded-3xl overflow-hidden bg-[#111118] border border-[#262638] shadow-2xl p-3 sm:p-4">
+              <div className="relative aspect-[4/3] sm:aspect-square w-full rounded-2xl overflow-hidden bg-[#0A0A0F]">
                 <img
                   src={resolveAsset(activeImage)}
                   alt="فحم الذهب الأسود الملكي"
-                  className={`w-full h-80 sm:h-96 object-cover filter contrast-105 transition-transform duration-700 ${
-                    enableAnimations ? 'group-hover:scale-105' : ''
-                  }`}
+                  className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
                   onError={(e) => {
                     const target = e.target as HTMLImageElement;
@@ -123,31 +128,33 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({
                     }
                   }}
                 />
-                <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent opacity-80 pointer-events-none" />
+                <div className="absolute inset-0 bg-gradient-to-t from-[#09090D] via-transparent to-transparent opacity-80" />
               </div>
-              
-              <div className="absolute bottom-6 right-6 left-6 flex items-center justify-between p-4 rounded-2xl bg-black/85 backdrop-blur-md border border-amber-500/40 shadow-xl">
+
+              {/* Bottom Editorial Badge Bar */}
+              <div className="mt-3 p-3.5 rounded-xl bg-[#14141E] border border-[#242436] flex items-center justify-between text-right">
                 <div>
-                  <span className="text-[10px] font-black text-amber-400 uppercase tracking-wider block">
+                  <span className="text-[11px] font-bold text-amber-400 block">
                     {bannerTitle}
                   </span>
-                  <p className="text-sm font-black text-white">{bannerSubtitle}</p>
+                  <p className="text-xs font-semibold text-slate-300">{bannerSubtitle}</p>
                 </div>
                 <div className="text-left">
-                  {bannerOldPrice && (
-                    <span className="text-xs text-zinc-400 line-through block">
-                      {bannerOldPrice.toLocaleString()} ريال
+                  {bannerOldPrice && bannerOldPrice > bannerPrice && (
+                    <span className="text-[11px] text-slate-500 line-through block font-mono">
+                      {bannerOldPrice.toLocaleString()} ر.ي
                     </span>
                   )}
-                  <span className="text-base font-black text-amber-400">
-                    {bannerPrice.toLocaleString()} ريال
+                  <span className="text-base font-black text-amber-400 font-mono">
+                    {bannerPrice.toLocaleString()} <span className="text-xs font-sans text-slate-300">ر.ي</span>
                   </span>
                 </div>
               </div>
             </div>
           </div>
+
         </div>
       </div>
-    </div>
+    </section>
   );
 };

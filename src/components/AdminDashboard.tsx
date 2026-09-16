@@ -1935,6 +1935,48 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
             </div>
 
+            {/* SECTION 2.5: BRAND STORY & TRUST CLAIMS */}
+            <div className="p-5 rounded-3xl bg-[#14141E] border border-[#222232] space-y-4 text-right">
+              <div className="flex items-center justify-between border-b border-[#20202E] pb-3">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-5 h-5 text-amber-400" />
+                  <h4 className="font-black text-white text-sm">إدارة نصوص البراند والحقائق الموثقة (Brand Story & Quality Claims)</h4>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-slate-300 text-xs font-bold block">عنوان قصة البراند في الواجهة:</label>
+                  <input
+                    type="text"
+                    value={editableSettings.brandStoryTitleAr || ''}
+                    placeholder="فحم الذهب الأسود الملكي بصنعاء"
+                    onChange={(e) => {
+                      const upd = { ...editableSettings, brandStoryTitleAr: e.target.value };
+                      setEditableSettings(upd);
+                      onUpdateStoreSettings(upd);
+                    }}
+                    className="w-full bg-[#181824] border border-[#28283C] text-white p-2.5 rounded-xl text-xs"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-slate-300 text-xs font-bold block">وصف معايير الجودة والنقاء:</label>
+                  <input
+                    type="text"
+                    value={editableSettings.brandStoryDescriptionAr || ''}
+                    placeholder="فحم نباتي طبيعي نقي 100% بدون شرار أو روائح كيميائية مع رماد أبيض نقي"
+                    onChange={(e) => {
+                      const upd = { ...editableSettings, brandStoryDescriptionAr: e.target.value };
+                      setEditableSettings(upd);
+                      onUpdateStoreSettings(upd);
+                    }}
+                    className="w-full bg-[#181824] border border-[#28283C] text-white p-2.5 rounded-xl text-xs"
+                  />
+                </div>
+              </div>
+            </div>
+
             {/* SECTION 3: MARKETING GALLERY MANAGER */}
             <div className="p-5 rounded-3xl bg-slate-900/80 border border-slate-800 space-y-4">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">

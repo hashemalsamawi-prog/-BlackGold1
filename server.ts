@@ -712,7 +712,7 @@ app.post("/api/orders", orderRateLimiter, async (req: AuthenticatedRequest, res)
       });
     }
 
-    // Determine unit price from verified product options
+    // Determine unit price strictly from verified database product records
     const itemWeight = item.weight || item.selectedWeight || (item.product && item.product.weight);
     let itemPrice = product.price;
     if (itemWeight && product.weightOptions && product.weightOptions.length > 0) {
@@ -720,8 +720,6 @@ app.post("/api/orders", orderRateLimiter, async (req: AuthenticatedRequest, res)
       if (matchOpt) {
         itemPrice = matchOpt.price;
       }
-    } else if (item.unitPrice && typeof item.unitPrice === 'number' && item.unitPrice >= product.price * 0.7) {
-      itemPrice = item.unitPrice;
     }
 
     calculatedSubtotal += (itemPrice * orderQty);
@@ -787,8 +785,14 @@ app.post("/api/orders", orderRateLimiter, async (req: AuthenticatedRequest, res)
     phone: activeDrivers[0].phone
   } : undefined;
 
-  const orderId = "ORD-" + Math.floor(1000 + Math.random() * 9000);
-  const orderNum = "BG-2026-" + Math.floor(1000 + Math.random() * 9000);
+  // High-entropy, cryptographically unique order ID and customer-friendly order number with collision protection
+  let orderId = `ORD-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+  let orderNum = `BG-2026-${Date.now().toString().slice(-4)}${crypto.randomInt(1000, 9999)}`;
+  const existingOrders = await db.getOrdersAsync();
+  while (existingOrders.some(o => o.id === orderId || o.orderNumber === orderNum)) {
+    orderId = `ORD-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+    orderNum = `BG-2026-${Date.now().toString().slice(-4)}${crypto.randomInt(1000, 9999)}`;
+  }
   const now = new Date();
   const timeFormatted = now.toLocaleTimeString("ar-YE", { hour: "2-digit", minute: "2-digit" });
 
@@ -878,7 +882,6 @@ app.get("/api/orders", async (req: AuthenticatedRequest, res) => {
     const cleanPhone = req.user.phone ? req.user.phone.replace(/\D/g, '') : '';
     const driverOrders = allOrders.filter(o => 
       o.driverId === req.user?.userId || 
-      (o.driverName && req.user?.name && o.driverName.trim() === req.user.name.trim()) || 
       (cleanPhone && o.driverPhone && o.driverPhone.replace(/\D/g, '') === cleanPhone)
     );
     return res.json({ success: true, data: driverOrders });
@@ -952,7 +955,6 @@ app.get("/api/my-orders", async (req: AuthenticatedRequest, res) => {
     const cleanPhone = req.user.phone ? req.user.phone.replace(/\D/g, '') : '';
     const driverOrders = allOrders.filter(o => {
       const isMine = o.driverId === req.user?.userId ||
-                     (o.driverName && req.user?.name && o.driverName.trim() === req.user.name.trim()) ||
                      (cleanPhone && o.driverPhone && o.driverPhone.replace(/\D/g, '') === cleanPhone);
       return isMine;
     });
@@ -1020,7 +1022,6 @@ app.get("/api/orders/:id", async (req: AuthenticatedRequest, res) => {
   );
   const isDriver = ['delivery', 'mandoub'].includes(req.user.role) && (
     order.driverId === req.user.userId || 
-    (order.driverName && req.user.name && order.driverName.trim() === req.user.name.trim()) ||
     (req.user.phone && order.driverPhone && order.driverPhone.replace(/\D/g, '') === req.user.phone.replace(/\D/g, ''))
   );
 
@@ -1051,7 +1052,6 @@ app.get("/api/orders/:id/items", async (req: AuthenticatedRequest, res) => {
   );
   const isDriver = ['delivery', 'mandoub'].includes(req.user.role) && (
     order.driverId === req.user.userId || 
-    (order.driverName && req.user.name && order.driverName.trim() === req.user.name.trim()) ||
     (req.user.phone && order.driverPhone && order.driverPhone.replace(/\D/g, '') === req.user.phone.replace(/\D/g, ''))
   );
 
@@ -1081,7 +1081,6 @@ app.patch("/api/orders/:id/status", async (req: AuthenticatedRequest, res) => {
   const isDriverRole = ['delivery', 'mandoub'].includes(req.user.role);
   const isAssignedDriver = isDriverRole && (
     order.driverId === req.user.userId || 
-    (order.driverName && req.user.name && order.driverName.trim() === req.user.name.trim()) ||
     (req.user.phone && order.driverPhone && order.driverPhone.replace(/\D/g, '') === req.user.phone.replace(/\D/g, ''))
   );
 

@@ -5,6 +5,7 @@ import {
   Clock, AlertTriangle, ShieldCheck, ArrowRight, UserCheck,
   Banknote, MessageSquare, ExternalLink, RefreshCw, Sparkles
 } from 'lucide-react';
+import { EmptyState } from './EmptyState';
 
 interface MandoubPortalProps {
   isOpen: boolean;
@@ -203,11 +204,25 @@ export const MandoubPortal: React.FC<MandoubPortalProps> = ({
 
         {/* Orders List */}
         {displayedOrders.length === 0 ? (
-          <div className="text-center py-12 bg-zinc-950/60 rounded-2xl border border-zinc-800 text-zinc-400 text-xs font-semibold">
-            {activeTab === 'active' && 'لا توجد شحنات جارية معك حالياً. اختر "شحنات جديدة للقبول" لاستلام طلب جديد!'}
-            {activeTab === 'pending' && 'لا توجد طلبات جديدة معلقة حالياً في صنعاء.'}
-            {activeTab === 'completed' && 'لم يتم تسليم شحنات بعد اليوم.'}
-          </div>
+          <EmptyState
+            type="driver"
+            customTitle={
+              activeTab === 'active' 
+                ? 'لا توجد شحنات جارية معك حالياً'
+                : activeTab === 'pending'
+                ? 'لا توجد طلبات جديدة معلقة في صنعاء'
+                : 'لم يتم تسليم شحنات بعد اليوم'
+            }
+            customDesc={
+              activeTab === 'active'
+                ? 'اختر تبويب "شحنات جديدة للقبول" لاستلام طلب جديد وتوصيله للعميل.'
+                : activeTab === 'pending'
+                ? 'كافة طلبات العملاء جاري متابعتها أو تم تكليف مندوبين بها.'
+                : 'ستظهر هنا الشحنات التي قمت بتسليمها بنجاح للعملاء اليوم.'
+            }
+            onAction={activeTab !== 'pending' ? () => setActiveTab('pending') : undefined}
+            actionLabel={activeTab !== 'pending' ? 'عرض الشحنات الجديدة المتاحة' : undefined}
+          />
         ) : (
           <div className="space-y-3.5">
             {displayedOrders.map((order) => {
