@@ -18,6 +18,7 @@ import { playOrderAlertSound } from '../utils/soundAlert';
 import { resolveAsset, ASSETS } from '../assets/images';
 import { compressImage, safeSetLocalStorage, safeRemoveLocalStorage, safeGetLocalStorage } from '../utils/storage';
 import { api } from '../services/api';
+import { InvoiceReceiptModal } from './InvoiceReceiptModal';
 
 interface AdminDashboardProps {
   isOpen: boolean;
@@ -49,6 +50,7 @@ interface AdminDashboardProps {
   galleryItems?: GalleryItem[];
   onUpdateGalleryItems?: (items: GalleryItem[]) => void;
   onRefreshOrders?: () => void;
+  onOpenInvoice?: (order: Order) => void;
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
@@ -75,7 +77,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onToggleTheme,
   galleryItems = [],
   onUpdateGalleryItems,
-  onRefreshOrders
+  onRefreshOrders,
+  onOpenInvoice
 }) => {
   // Tabs: 11 distinct sections
   const [activeTab, setActiveTab] = useState<
@@ -575,12 +578,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     { day: 'الجمعة (اليوم)', sales: totalRevenue > 0 ? totalRevenue : 156000, orders: safeOrders.length > 0 ? safeOrders.length : 38 }
   ];
 
-  // Print Thermal Invoice for Sanaa Courier
+  // Print or View Official Royal Invoice for Sanaa Courier & Customers
   const handlePrintOrderInvoice = (order: Order) => {
-    setSelectedOrderForInvoice(order);
-    setTimeout(() => {
-      window.print();
-    }, 200);
+    if (onOpenInvoice) {
+      onOpenInvoice(order);
+    } else {
+      setSelectedOrderForInvoice(order);
+    }
   };
 
   // Filtered Orders
@@ -2537,6 +2541,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           </div>
         )}
+
+        {/* Official Black Gold Invoice & Delivery Receipt Modal */}
+        <InvoiceReceiptModal
+          isOpen={!!selectedOrderForInvoice}
+          onClose={() => setSelectedOrderForInvoice(null)}
+          order={selectedOrderForInvoice}
+          lang={lang}
+          whatsappNumber={storeSettings.whatsappNumber || '967775000150'}
+          storeLogo={storeSettings.customLogoUrl || storeSettings.logo || safeGetLocalStorage('bg_custom_logo', '')}
+        />
 
       </div>
     </div>

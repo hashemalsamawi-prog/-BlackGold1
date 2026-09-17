@@ -943,7 +943,7 @@ export default function App() {
 
   return (
     <AndroidSimulatorWrapper deviceMode={deviceMode} onToggleDeviceMode={() => setDeviceMode(deviceMode === 'web' ? 'android' : 'web')}>
-      <div className={`min-h-screen ${theme === 'light' ? 'light bg-[#F8F9FC] text-slate-900' : 'bg-[#0A0A0C] text-slate-100'} flex flex-col justify-between selection:bg-amber-500 selection:text-black transition-colors duration-300`}>
+      <div className={`min-h-screen ${theme === 'light' ? 'light bg-[#F8F9FC] text-slate-900' : 'bg-[#0A0A0C] text-slate-100'} flex flex-col selection:bg-amber-500 selection:text-black transition-colors duration-300`}>
         
         {/* Push Notification Toast */}
         <ToastNotification 
@@ -1014,10 +1014,10 @@ export default function App() {
         />
 
         {/* Main Products Grid Section */}
-        <main id="products-grid-section" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-10 space-y-8 flex-1 w-full scroll-mt-28">
+        <main id="products-grid-section" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5 sm:py-7 space-y-6 sm:space-y-7 flex-1 w-full scroll-mt-20">
           
           {/* Category Switcher & Filter Headline */}
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-[#20202E] pb-4 bg-[#0F0F16] p-4 sm:p-5 rounded-3xl border border-[#222232]">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-4 border-b border-[#20202E] pb-3 sm:pb-4 bg-[#0F0F16] p-3 sm:p-4 rounded-2xl border border-[#222232]">
             <div>
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-xl bg-[#1A1A26] border border-[#28283C] flex items-center justify-center text-amber-400">
@@ -1227,7 +1227,7 @@ export default function App() {
         </main>
 
         {/* Global Footer */}
-        <footer className="bg-[#08080B] border-t border-slate-900 py-8 text-center text-xs text-slate-500 space-y-4">
+        <footer className="bg-[#08080B] border-t border-slate-900 py-6 sm:py-8 pb-24 sm:pb-8 text-center text-xs text-slate-500 space-y-4">
           <div className="max-w-7xl mx-auto px-4 flex flex-col md:flex-row items-center justify-between gap-6">
             <div className="flex flex-col sm:flex-row items-center gap-4">
               <Logo variant="horizontal" size="md" />
@@ -1378,6 +1378,7 @@ export default function App() {
             setMandoubOpen(false);
             setAdminOpen(true);
           }}
+          onOpenInvoice={(ord) => setInvoiceOrder(ord)}
         />
 
         <ErrorBoundary fallbackTitle="لوحة تحكم إدارة المتجر والمناديب" onReset={() => setAdminOpen(false)}>
@@ -1411,6 +1412,7 @@ export default function App() {
             onToggleTheme={toggleTheme}
             galleryItems={galleryItems}
             onUpdateGalleryItems={handleUpdateGalleryItems}
+            onOpenInvoice={(ord) => setInvoiceOrder(ord)}
           />
         </ErrorBoundary>
 
@@ -1470,6 +1472,7 @@ export default function App() {
           order={invoiceOrder}
           lang={lang}
           whatsappNumber={storeSettings.whatsappNumber || '967775000150'}
+          storeLogo={storeSettings.customLogoUrl || storeSettings.logo || safeGetLocalStorage('bg_custom_logo', '')}
         />
 
         {/* Floating Quick Sana'a Hotline & Express Speed-Dial */}

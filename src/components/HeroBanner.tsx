@@ -33,11 +33,11 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({
       {/* Subtle architectural gradient line */}
       <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-amber-500/30 to-transparent" />
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 sm:py-20">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-14 items-center">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-7 sm:py-10 lg:py-12">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-10 items-center">
           
           {/* Main Brand & Proposition Copy */}
-          <div className="lg:col-span-7 space-y-6 text-right">
+          <div className="lg:col-span-7 space-y-4 sm:space-y-5 text-right">
             
             {/* Authenticity Pill */}
             <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-[#161622] border border-[#2B2B3D] text-amber-400 text-xs font-semibold">

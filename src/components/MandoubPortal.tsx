@@ -3,7 +3,7 @@ import { Order, Language, DeliveryAgent } from '../types';
 import { 
   X, Truck, CheckCircle2, Phone, MapPin, Navigation, 
   Clock, AlertTriangle, ShieldCheck, ArrowRight, UserCheck,
-  Banknote, MessageSquare, ExternalLink, RefreshCw, Sparkles
+  Banknote, MessageSquare, ExternalLink, RefreshCw, Sparkles, Printer
 } from 'lucide-react';
 import { EmptyState } from './EmptyState';
 
@@ -23,6 +23,7 @@ interface MandoubPortalProps {
   onSelectDriver: (name: string) => void;
   isOwnerPreview?: boolean;
   onBackToAdmin?: () => void;
+  onOpenInvoice?: (order: Order) => void;
 }
 
 export const MandoubPortal: React.FC<MandoubPortalProps> = ({
@@ -36,6 +37,7 @@ export const MandoubPortal: React.FC<MandoubPortalProps> = ({
   onSelectDriver,
   isOwnerPreview,
   onBackToAdmin,
+  onOpenInvoice,
 }) => {
   if (!isOpen) return null;
 
@@ -334,6 +336,19 @@ export const MandoubPortal: React.FC<MandoubPortalProps> = ({
                       <MessageSquare className="w-3.5 h-3.5 text-emerald-400" />
                       <span>رسالة واتساب 💬</span>
                     </a>
+
+                    {/* Invoice View Button */}
+                    {onOpenInvoice && (
+                      <button
+                        type="button"
+                        onClick={() => onOpenInvoice(order)}
+                        className="px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+                        title="معاينة وطباعة الفاتورة وسند الاستلام الرسمي"
+                      >
+                        <Printer className="w-3.5 h-3.5 text-amber-400" />
+                        <span>فاتورة الشحنة 🖨️</span>
+                      </button>
+                    )}
                   </div>
 
                   {/* Lifecycle Action Buttons */}

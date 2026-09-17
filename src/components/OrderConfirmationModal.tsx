@@ -79,8 +79,8 @@ ${order.notes ? `\n💬 *ملاحظات خاصة:* ${order.notes}` : ''}
   };
 
   return (
-    <div id="order-confirmation-modal" className="fixed inset-0 z-[80] flex items-center justify-center p-3 sm:p-5 bg-black/85 backdrop-blur-md overflow-y-auto">
-      <div className="relative w-full max-w-lg rounded-3xl bg-[#0F0F16] border border-[#262638] shadow-2xl p-6 sm:p-8 my-6 text-right overflow-hidden">
+    <div id="order-confirmation-modal" className="fixed inset-0 z-[80] flex items-center justify-center p-2 sm:p-4 bg-black/85 backdrop-blur-md overflow-y-auto">
+      <div className="relative w-full max-w-lg rounded-3xl bg-[#0F0F16] border border-[#262638] shadow-2xl p-4 sm:p-6 my-2 sm:my-3 text-right overflow-hidden">
         
         {/* Subtle top gold highlight */}
         <div className="absolute top-0 right-0 left-0 h-[2px] bg-gradient-to-r from-transparent via-amber-400 to-transparent" />

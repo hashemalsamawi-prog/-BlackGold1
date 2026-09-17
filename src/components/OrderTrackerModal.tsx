@@ -148,7 +148,7 @@ export const OrderTrackerModal: React.FC<OrderTrackerModalProps> = ({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md overflow-y-auto">
       <div 
         ref={modalContentRef}
-        className="relative w-full max-w-2xl rounded-3xl bg-[#0F0F16] border border-[#222232] shadow-2xl p-5 sm:p-7 my-6 max-h-[90vh] overflow-y-auto text-right"
+        className="relative w-full max-w-2xl rounded-3xl bg-[#0F0F16] border border-[#222232] shadow-2xl p-4 sm:p-6 my-2 sm:my-4 max-h-[92vh] overflow-y-auto text-right"
       >
         {/* Close Button */}
         <button

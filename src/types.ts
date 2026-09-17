@@ -229,6 +229,7 @@ export interface StoreSettings {
   deliveryDistricts?: any[];
   loyaltyPointsPer1000YER: number;
   customLogoUrl?: string;
+  logo?: string;
   heroBannerImage?: string;
   heroBannerTitle?: string;
   heroBannerSubtitle?: string;
