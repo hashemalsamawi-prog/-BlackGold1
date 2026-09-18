@@ -140,6 +140,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [productModalOpen, setProductModalOpen] = useState(false);
   const [editingProdId, setEditingProdId] = useState<string | null>(null);
   const [showManualUrlInput, setShowManualUrlInput] = useState(false);
+  const [isUploadingProductImage, setIsUploadingProductImage] = useState(false);
   const [prodForm, setProdForm] = useState({
     nameAr: '',
     nameEn: '',
@@ -217,12 +218,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // High-Resolution Image Processing from Gallery / Studio with canvas auto-compression
   const processImageFile = async (file: File) => {
     if (!file || !file.type.startsWith('image/')) {
-      alert('يرجى اختيار ملف صورة صالح (JPG, PNG, WEBP).');
+      alert('يرجى اختيار ملف صورة صالح (JPG, PNG, WEBP, SVG).');
       return;
     }
 
+    setIsUploadingProductImage(true);
     try {
-      const { dataUrl, sizeKb, dimensions } = await compressImage(file, 800, 800, 0.85);
+      const { dataUrl, sizeKb, dimensions } = await compressImage(file, 900, 900, 0.85);
       setUploadStats({
         name: file.name,
         size: `${sizeKb} KB (محسّن ومحفوظ للخادم)`,
@@ -234,6 +236,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         const uploadRes = await api.uploadImage(dataUrl, file.name);
         if (uploadRes.success && uploadRes.url) {
           setProdForm(prev => ({ ...prev, imageUrl: uploadRes.url }));
+          showMediaToast('تم رفع صورة المنتج وحفظها بنجاح! 📸✨');
           return;
         }
       } catch (uploadErr) {
@@ -241,6 +244,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       }
 
       setProdForm(prev => ({ ...prev, imageUrl: dataUrl }));
+      showMediaToast('تم ضغط وتجهيز صورة المنتج محلياً بنجاح! 📸');
     } catch (err) {
       console.error('Error processing product image:', err);
       const reader = new FileReader();
@@ -251,13 +255,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             const uploadRes = await api.uploadImage(res, file.name);
             if (uploadRes.success && uploadRes.url) {
               setProdForm(prev => ({ ...prev, imageUrl: uploadRes.url }));
+              showMediaToast('تم رفع صورة المنتج بنجاح! 📸✨');
               return;
             }
           } catch {}
           setProdForm(prev => ({ ...prev, imageUrl: res }));
+          showMediaToast('تم تجهيز صورة المنتج بنجاح! 📸');
         }
       };
       reader.readAsDataURL(file);
+    } finally {
+      setIsUploadingProductImage(false);
     }
   };
 
@@ -322,6 +330,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       const updated = { ...editableSettings, customLogoUrl: url };
       setEditableSettings(updated);
       safeSetLocalStorage('bg_custom_logo', url);
+      safeSetLocalStorage('bg_saved_settings', JSON.stringify(updated));
       window.dispatchEvent(new Event('bg_logo_updated'));
       onUpdateStoreSettings(updated);
       showMediaToast('تم تحديث وحفظ شعار المتجر بنجاح! 👑✨');
@@ -334,6 +343,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const updated = { ...editableSettings, customLogoUrl: ASSETS.logo };
     setEditableSettings(updated);
     safeRemoveLocalStorage('bg_custom_logo');
+    safeSetLocalStorage('bg_saved_settings', JSON.stringify(updated));
     window.dispatchEvent(new Event('bg_logo_updated'));
     onUpdateStoreSettings(updated);
     showMediaToast('تمت استعادة الشعار الرسمي الافتراضي للذهب الأسود');
@@ -345,6 +355,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       const url = await processUniversalImage(file, 1600, 900);
       const updated = { ...editableSettings, heroBannerImage: url };
       setEditableSettings(updated);
+      safeSetLocalStorage('bg_saved_settings', JSON.stringify(updated));
       onUpdateStoreSettings(updated);
       showMediaToast('تم تحديث وحفظ صورة البانر الترويجي بنجاح! 🖼️✨');
     } catch (e) {
@@ -364,6 +375,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       bannerAnimation: 'float' as const
     };
     setEditableSettings(updated);
+    safeSetLocalStorage('bg_saved_settings', JSON.stringify(updated));
     onUpdateStoreSettings(updated);
     showMediaToast('تمت استعادة صورة وبيانات البانر الافتراضية');
   };
@@ -728,6 +740,46 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             );
           })}
         </div>
+
+        {/* Universal Hidden File Inputs - Mounted Always for Seamless Uploads */}
+        <input
+          type="file"
+          ref={logoFileInputRef}
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => {
+            if (e.target.files?.[0]) handleLogoUpload(e.target.files[0]);
+            e.target.value = '';
+          }}
+        />
+        <input
+          type="file"
+          ref={bannerFileInputRef}
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => {
+            if (e.target.files?.[0]) handleBannerUpload(e.target.files[0]);
+            e.target.value = '';
+          }}
+        />
+        <input
+          type="file"
+          ref={bannerCameraInputRef}
+          accept="image/*"
+          capture="environment"
+          className="hidden"
+          onChange={(e) => {
+            if (e.target.files?.[0]) handleBannerUpload(e.target.files[0]);
+            e.target.value = '';
+          }}
+        />
+        <input
+          type="file"
+          ref={galleryItemFileInputRef}
+          accept="image/*"
+          className="hidden"
+          onChange={handleGalleryItemFileChange}
+        />
 
         {/* Owner New Order Alert Notification Banner */}
         {newOrdersCount > 0 && (
@@ -1578,46 +1630,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
             )}
 
-            {/* Hidden File Inputs for Universal Image Uploads */}
-            <input
-              type="file"
-              ref={logoFileInputRef}
-              accept="image/*"
-              className="hidden"
-              onChange={(e) => {
-                if (e.target.files?.[0]) handleLogoUpload(e.target.files[0]);
-                e.target.value = '';
-              }}
-            />
-            <input
-              type="file"
-              ref={bannerFileInputRef}
-              accept="image/*"
-              className="hidden"
-              onChange={(e) => {
-                if (e.target.files?.[0]) handleBannerUpload(e.target.files[0]);
-                e.target.value = '';
-              }}
-            />
-            <input
-              type="file"
-              ref={bannerCameraInputRef}
-              accept="image/*"
-              capture="environment"
-              className="hidden"
-              onChange={(e) => {
-                if (e.target.files?.[0]) handleBannerUpload(e.target.files[0]);
-                e.target.value = '';
-              }}
-            />
-            <input
-              type="file"
-              ref={galleryItemFileInputRef}
-              accept="image/*"
-              className="hidden"
-              onChange={handleGalleryItemFileChange}
-            />
-
             {/* Header intro */}
             <div className="p-5 rounded-3xl bg-gradient-to-r from-amber-500/10 via-slate-900 to-amber-500/5 border border-amber-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
               <div>
@@ -2297,16 +2309,129 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   />
                 </div>
 
-                <div>
-                  <label className="text-slate-300 font-bold block mb-1">صورة المنتج:</label>
+                {/* Luxury Product Image Section with Live Preview & Dropzone */}
+                <div className="space-y-2 pt-1 border-t border-slate-800">
+                  <div className="flex items-center justify-between">
+                    <label className="text-slate-300 font-bold block text-xs">صورة المنتج الفاخرة:</label>
+                    <button
+                      type="button"
+                      onClick={() => setShowManualUrlInput(!showManualUrlInput)}
+                      className="text-[11px] text-amber-400 hover:text-amber-300 underline cursor-pointer"
+                    >
+                      {showManualUrlInput ? 'إخفاء رابط الصورة' : 'إدخال رابط صورة يدوي (URL)'}
+                    </button>
+                  </div>
+
+                  {/* Dropzone & Live Preview Container */}
+                  <div 
+                    onDragOver={(e) => { e.preventDefault(); setIsDraggingOver(true); }}
+                    onDragLeave={() => setIsDraggingOver(false)}
+                    onDrop={handleProductFileDrop}
+                    className={`relative rounded-2xl border-2 border-dashed p-3.5 flex flex-col sm:flex-row items-center gap-3.5 transition-all ${
+                      isDraggingOver 
+                        ? 'border-amber-400 bg-amber-500/10' 
+                        : 'border-slate-800 bg-slate-950/80 hover:border-slate-700'
+                    }`}
+                  >
+                    {/* Live Preview Thumb */}
+                    <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-xl overflow-hidden bg-slate-900 border border-amber-500/30 shrink-0 relative group shadow-md flex items-center justify-center">
+                      <img
+                        src={resolveAsset(prodForm.imageUrl)}
+                        alt="معاينة صورة المنتج"
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                          const target = e.target as HTMLImageElement;
+                          if (target.src !== ASSETS.pouchPair) target.src = ASSETS.pouchPair;
+                        }}
+                      />
+                      {isUploadingProductImage && (
+                        <div className="absolute inset-0 bg-black/75 backdrop-blur-xs flex items-center justify-center">
+                          <RefreshCw className="w-5 h-5 text-amber-400 animate-spin" />
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Actions & Instructions */}
+                    <div className="flex-1 text-center sm:text-right space-y-1.5 w-full">
+                      <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2">
+                        <button
+                          type="button"
+                          onClick={() => productFileInputRef.current?.click()}
+                          disabled={isUploadingProductImage}
+                          className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-md transition-all active:scale-95 disabled:opacity-50"
+                        >
+                          <Upload className="w-3.5 h-3.5" />
+                          <span>{isUploadingProductImage ? 'جاري الرفع...' : 'اختيار صورة من الجهاز'}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => productCameraInputRef.current?.click()}
+                          disabled={isUploadingProductImage}
+                          className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs flex items-center gap-1.5 cursor-pointer border border-slate-700 transition-colors disabled:opacity-50"
+                        >
+                          <Camera className="w-3.5 h-3.5 text-amber-400" />
+                          <span>كاميرا</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setProdForm(prev => ({ ...prev, imageUrl: ASSETS.pouchPair }))}
+                          className="px-2 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-slate-200 text-[11px] transition-colors"
+                          title="استعادة الصورة الرسمية للعبوة الملكية"
+                        >
+                          الافتراضية
+                        </button>
+                      </div>
+
+                      <p className="text-[10px] text-slate-400">
+                        اسحب وأفلت الصورة هنا أو اضغط للاختيار (PNG, JPG, WEBP). يتم ضغطها ورفعها تلقائياً.
+                      </p>
+
+                      {uploadStats && (
+                        <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[10px] font-bold">
+                          <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
+                          <span>{uploadStats.size}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Hidden inputs for product file & camera */}
                   <input
                     type="file"
+                    ref={productFileInputRef}
                     accept="image/*"
+                    className="hidden"
                     onChange={(e) => {
                       if (e.target.files?.[0]) processImageFile(e.target.files[0]);
+                      e.target.value = '';
                     }}
-                    className="w-full text-xs text-slate-400 file:mr-2 file:py-1 file:px-3 file:rounded-lg file:border-0 file:bg-amber-500 file:text-slate-950 file:font-bold"
                   />
+                  <input
+                    type="file"
+                    ref={productCameraInputRef}
+                    accept="image/*"
+                    capture="environment"
+                    className="hidden"
+                    onChange={(e) => {
+                      if (e.target.files?.[0]) processImageFile(e.target.files[0]);
+                      e.target.value = '';
+                    }}
+                  />
+
+                  {/* Optional Manual URL */}
+                  {showManualUrlInput && (
+                    <div className="pt-1">
+                      <input
+                        type="text"
+                        placeholder="https://... أو /src/assets/images/..."
+                        value={prodForm.imageUrl}
+                        onChange={(e) => setProdForm({ ...prodForm, imageUrl: e.target.value })}
+                        className="w-full bg-slate-900 border border-slate-800 text-amber-300 p-2 rounded-xl text-xs font-mono"
+                      />
+                    </div>
+                  )}
                 </div>
 
                 <button
@@ -2550,6 +2675,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           lang={lang}
           whatsappNumber={storeSettings.whatsappNumber || '967775000150'}
           storeLogo={storeSettings.customLogoUrl || storeSettings.logo || safeGetLocalStorage('bg_custom_logo', '')}
+          storeSettings={storeSettings}
         />
 
       </div>

@@ -37,7 +37,7 @@ import { ToastNotification } from './components/ToastNotification';
 import { EmptyState } from './components/EmptyState';
 import { playOrderAlertSound } from './utils/soundAlert';
 import { safeGetLocalStorage, safeSetLocalStorage, safeRemoveLocalStorage } from './utils/storage';
-import { authStorage } from './services/api';
+import { authStorage, api } from './services/api';
 
 import { Flame, Sparkles, CheckCircle2, ShieldCheck, MapPin, Truck, Phone, Award, MessageSquare, Store, Calculator, Sun, Moon, Mail, SlidersHorizontal, ArrowUpDown, RotateCcw, Filter, X, AlertTriangle, RefreshCw, Clock, WifiOff, AlertCircle } from 'lucide-react';
 
@@ -669,12 +669,7 @@ export default function App() {
     });
 
     try {
-      const res = await fetch('/api/products', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(p)
-      });
-      const data = await res.json();
+      const data = await api.addProduct(p);
       if (data.success && data.data) {
         setProducts((prev) => {
           const updated = prev.map((item) => item.id === mockNew.id ? data.data : item);
@@ -708,11 +703,7 @@ export default function App() {
     setSelectedProductDetails((prev) => (prev && prev.id === id ? { ...prev, ...normalizedPayload } : prev));
 
     try {
-      await fetch(`/api/products/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(normalizedPayload)
-      });
+      await api.updateProduct(id, normalizedPayload);
     } catch (e) {
       console.log('Offline fallback for product update', e);
     }
@@ -728,7 +719,7 @@ export default function App() {
     });
 
     try {
-      await fetch(`/api/products/${id}`, { method: 'DELETE' });
+      await api.deleteProduct(id);
     } catch {
       // Offline fallback
     }
@@ -1473,6 +1464,7 @@ export default function App() {
           lang={lang}
           whatsappNumber={storeSettings.whatsappNumber || '967775000150'}
           storeLogo={storeSettings.customLogoUrl || storeSettings.logo || safeGetLocalStorage('bg_custom_logo', '')}
+          storeSettings={storeSettings}
         />
 
         {/* Floating Quick Sana'a Hotline & Express Speed-Dial */}

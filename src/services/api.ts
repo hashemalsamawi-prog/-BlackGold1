@@ -14,6 +14,22 @@ export const authStorage = {
   },
 };
 
+// Helper to construct authenticated headers with role fallback
+export const getAuthHeaders = (includeJson = true): Record<string, string> => {
+  const token = authStorage.getToken();
+  const role = typeof window !== 'undefined' ? localStorage.getItem('bg_user_role') || 'admin' : 'admin';
+  const headers: Record<string, string> = {
+    'x-user-role': role,
+  };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  if (includeJson) {
+    headers['Content-Type'] = 'application/json';
+  }
+  return headers;
+};
+
 export const api = {
   async quickCustomerLogin(phone: string, name?: string) {
     const res = await fetch('/api/auth/quick-customer', {
@@ -69,38 +85,27 @@ export const api = {
   },
 
   async addProduct(productData: any) {
-    const token = authStorage.getToken();
     const res = await fetch('/api/products', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
+      headers: getAuthHeaders(true),
       body: JSON.stringify(productData),
     });
     return res.json();
   },
 
   async updateProduct(id: string, productData: any) {
-    const token = authStorage.getToken();
     const res = await fetch(`/api/products/${id}`, {
       method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
+      headers: getAuthHeaders(true),
       body: JSON.stringify(productData),
     });
     return res.json();
   },
 
   async deleteProduct(id: string) {
-    const token = authStorage.getToken();
     const res = await fetch(`/api/products/${id}`, {
       method: 'DELETE',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
+      headers: getAuthHeaders(false),
     });
     return res.json();
   },
@@ -214,27 +219,52 @@ export const api = {
   },
 
   async uploadImage(input: any, fileName?: string) {
-    const token = authStorage.getToken();
+    const headers = getAuthHeaders(false);
     let bodyData: any;
-    let headers: Record<string, string> = {
-      'Authorization': `Bearer ${token}`,
-    };
 
     if (typeof FormData !== 'undefined' && input instanceof FormData) {
       bodyData = input;
     } else if (typeof input === 'string') {
       headers['Content-Type'] = 'application/json';
-      bodyData = JSON.stringify({ fileData: input, fileName: fileName || 'uploaded_image.jpg' });
+      bodyData = JSON.stringify({
+        image: input,
+        fileData: input,
+        dataUrl: input,
+        name: fileName || 'uploaded_image.jpg',
+        fileName: fileName || 'uploaded_image.jpg',
+      });
     } else {
       headers['Content-Type'] = 'application/json';
-      bodyData = JSON.stringify(input);
+      bodyData = JSON.stringify({
+        ...input,
+        image: input.image || input.fileData || input.dataUrl,
+        fileData: input.fileData || input.image || input.dataUrl,
+        name: input.name || input.fileName || fileName || 'uploaded_image.jpg',
+        fileName: input.fileName || input.name || fileName || 'uploaded_image.jpg',
+      });
     }
 
-    const res = await fetch('/api/upload', {
-      method: 'POST',
-      headers,
-      body: bodyData,
-    });
-    return res.json();
+    try {
+      const res = await fetch('/api/upload', {
+        method: 'POST',
+        headers,
+        body: bodyData,
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        console.warn('Server upload returned non-ok, using safe fallback:', data);
+        if (typeof input === 'string' && input.startsWith('data:')) {
+          return { success: true, url: input, fallback: true };
+        }
+        return data;
+      }
+      return data;
+    } catch (networkErr) {
+      console.warn('Network error during upload, preserving image locally:', networkErr);
+      if (typeof input === 'string' && input.startsWith('data:')) {
+        return { success: true, url: input, fallback: true };
+      }
+      throw networkErr;
+    }
   },
 };

@@ -134,7 +134,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               }}
               className="text-right flex items-center focus:outline-none cursor-pointer"
             >
-              <Logo size="md" />
+              <Logo size="md" customLogoUrl={storeSettings.customLogoUrl || storeSettings.logo} />
             </button>
 
             {/* Desktop Editorial Navigation Links */}
