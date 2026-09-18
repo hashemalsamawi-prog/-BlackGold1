@@ -88,19 +88,6 @@ function authenticateUser(req: AuthenticatedRequest, res: Response, next: NextFu
       req.user = decoded as any;
     }
   }
-
-  // Fallback: If no valid token, but request comes with valid role header from store admin session
-  if (!req.user) {
-    const roleHeader = (req.headers['x-user-role'] as string) || '';
-    if (roleHeader === 'admin' || roleHeader === 'owner' || roleHeader === 'employee') {
-      req.user = {
-        userId: 'admin_master',
-        role: roleHeader as any,
-        phone: '775000150',
-        name: 'مدير المتجر'
-      };
-    }
-  }
   next();
 }
 

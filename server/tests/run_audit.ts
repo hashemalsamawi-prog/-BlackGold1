@@ -553,6 +553,38 @@ async function runAllTests() {
     `Driver B modifying Driver A's order blocked with HTTP ${driverBAttemptModifyA.status}: "${driverBAttemptModifyA.json?.message}"`
   );
 
+  // 29. Security: Header x-user-role CANNOT bypass authentication or grant Admin rights
+  const unauthWithRoleAdmin = await req('/api/inventory/transactions', {
+    method: 'GET',
+    headers: { 'x-user-role': 'admin' }
+  });
+  const unauthWithRoleOwner = await req('/api/coupons', {
+    method: 'GET',
+    headers: { 'x-user-role': 'owner' }
+  });
+  const unauthWithRolePatch = await req(`/api/orders/${guestOrderA?.id}/status`, {
+    method: 'PATCH',
+    headers: { 'x-user-role': 'admin' },
+    body: JSON.stringify({ status: 'delivered' })
+  });
+  const invalidTokenWithRole = await req('/api/admin/reports', {
+    method: 'GET',
+    headers: { 'Authorization': 'Bearer fake-invalid-token-123', 'x-user-role': 'admin' }
+  });
+
+  const xRoleBypassBlocked = (
+    unauthWithRoleAdmin.status === 401 &&
+    unauthWithRoleOwner.status === 401 &&
+    unauthWithRolePatch.status === 401 &&
+    invalidTokenWithRole.status === 401
+  );
+
+  record(
+    '29. Security: Reject x-user-role header without valid JWT',
+    xRoleBypassBlocked,
+    `Inventory: HTTP ${unauthWithRoleAdmin.status}, Coupons: HTTP ${unauthWithRoleOwner.status}, Status Patch: HTTP ${unauthWithRolePatch.status}, Fake Token: HTTP ${invalidTokenWithRole.status} (All 401 Unauthorized)`
+  );
+
   // 22. D1 Health & Database Ping
   const pingD1 = await req('/api/health');
   record(

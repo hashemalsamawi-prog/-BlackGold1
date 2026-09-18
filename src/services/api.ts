@@ -14,13 +14,10 @@ export const authStorage = {
   },
 };
 
-// Helper to construct authenticated headers with role fallback
+// Helper to construct authenticated headers
 export const getAuthHeaders = (includeJson = true): Record<string, string> => {
   const token = authStorage.getToken();
-  const role = typeof window !== 'undefined' ? localStorage.getItem('bg_user_role') || 'admin' : 'admin';
-  const headers: Record<string, string> = {
-    'x-user-role': role,
-  };
+  const headers: Record<string, string> = {};
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }

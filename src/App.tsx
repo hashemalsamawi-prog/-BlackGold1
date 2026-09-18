@@ -611,8 +611,7 @@ export default function App() {
     try {
       const token = authStorage.getToken();
       const headers: Record<string, string> = { 
-        'Content-Type': 'application/json',
-        'x-user-role': userRole || 'owner'
+        'Content-Type': 'application/json'
       };
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
