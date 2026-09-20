@@ -287,9 +287,17 @@ class DatabaseProxy {
     return d1.getGalleryItems();
   }
 
+  public async getGalleryItemsAsync(): Promise<GalleryItem[]> {
+    return d1.getGalleryItemsAsync();
+  }
+
   public addGalleryItem(item: GalleryItem): GalleryItem {
     d1.getGalleryItems().unshift(item);
     return item;
+  }
+
+  public async addGalleryItemAsync(item: GalleryItem): Promise<GalleryItem> {
+    return d1.addGalleryItemAsync(item);
   }
 
   public updateGalleryItem(id: string, updates: Partial<GalleryItem>): GalleryItem | null {
@@ -297,6 +305,10 @@ class DatabaseProxy {
     if (!item) return null;
     Object.assign(item, updates);
     return item;
+  }
+
+  public async updateGalleryItemAsync(id: string, updates: Partial<GalleryItem>): Promise<GalleryItem | null> {
+    return d1.updateGalleryItemAsync(id, updates);
   }
 
   public deleteGalleryItem(id: string): boolean {
@@ -307,6 +319,10 @@ class DatabaseProxy {
       return true;
     }
     return false;
+  }
+
+  public async deleteGalleryItemAsync(id: string): Promise<boolean> {
+    return d1.deleteGalleryItemAsync(id);
   }
 
   // Inventory Transactions & Audit

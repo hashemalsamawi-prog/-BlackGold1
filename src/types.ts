@@ -247,9 +247,14 @@ export interface StoreSettings {
 export interface GalleryItem {
   id: string;
   titleAr: string;
-  titleEn: string;
-  category: 'fleet' | 'sessions' | 'retail' | 'branding' | 'merch' | string;
+  titleEn?: string;
+  category: 'fleet' | 'sessions' | 'retail' | 'branding' | 'merch' | 'factory' | string;
   image: string;
+  imageUrl?: string;
+  caption?: string;
   descriptionAr?: string;
   descriptionEn?: string;
+  sortOrder?: number;
+  isActive?: boolean;
+  createdAt?: string;
 }

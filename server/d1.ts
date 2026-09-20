@@ -207,7 +207,11 @@ class D1DatabaseAccessLayer {
 
       if (hasD1Credentials) {
         console.log('⚡ Cloudflare D1 is active as PRIMARY authoritative database. Fetching remote tables...');
-        await this.syncFromCloudflareD1();
+        const syncOk = await this.syncFromCloudflareD1();
+        if (!syncOk && process.env.NODE_ENV === 'production') {
+          console.error('CRITICAL: Cloudflare D1 initial sync failed in production environment!');
+          throw new Error('فشل المزامنة الأولية مع قاعدة بيانات Cloudflare D1 في بيئة الإنتاج');
+        }
       } else if (process.env.NODE_ENV !== 'production' && fs.existsSync(this.localDbPath)) {
         // Fallback to local db.json ONLY in local development when D1 credentials are not present
         try {
@@ -675,6 +679,27 @@ class D1DatabaseAccessLayer {
         console.warn('D1 remote store_settings sync warning:', stErr);
       }
 
+      // 12. Gallery Items
+      try {
+        const galResult = await this.executeCloudflareD1Query("SELECT * FROM gallery_items ORDER BY sort_order ASC, created_at DESC;");
+        if (Array.isArray(galResult)) {
+          this.tables.gallery_items = galResult.map((g: any) => ({
+            id: g.id,
+            titleAr: g.title_ar,
+            titleEn: g.title_en || undefined,
+            image: g.image_url || '',
+            imageUrl: g.image_url,
+            category: g.category || 'factory',
+            caption: g.caption || undefined,
+            sortOrder: g.sort_order || 0,
+            isActive: g.is_active !== undefined ? Boolean(g.is_active) : true,
+            createdAt: g.created_at
+          }));
+        }
+      } catch (galErr) {
+        console.warn('D1 remote gallery_items sync warning:', galErr);
+      }
+
       this.ensureDefaultUsers();
 
       console.log('✅ Cloudflare D1 primary sync completed successfully for all operational tables.');
@@ -761,7 +786,11 @@ class D1DatabaseAccessLayer {
 
     try {
       const json = await this.executeCloudflareD1Raw(sql, params);
-      return json.result?.[0]?.results || [];
+      if (!json || json.success === false || !json.result) {
+        console.error('Cloudflare D1 HTTP query failed:', json?.errors || 'Unknown error');
+        return null;
+      }
+      return json.result?.[0]?.results ?? [];
     } catch (err) {
       console.warn('Cloudflare D1 HTTP query warning:', err);
       return null;
@@ -963,12 +992,15 @@ class D1DatabaseAccessLayer {
           return prods;
         }
       } catch (e) {
-        console.warn('D1 getProductsAsync error, returning cached D1 state:', e);
+        console.error('D1 getProductsAsync error:', e);
+      }
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('فشل استعلام المنتجات من قاعدة بيانات Cloudflare D1');
       }
       return this.tables.products;
     }
     if (process.env.NODE_ENV === 'production') {
-      return this.tables.products;
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
     }
     return this.getProducts();
   }
@@ -988,12 +1020,21 @@ class D1DatabaseAccessLayer {
     if (this.isD1Configured()) {
       try {
         const rows = await this.executeCloudflareD1Query("SELECT * FROM products WHERE id = ? LIMIT 1;", [id]);
-        if (Array.isArray(rows) && rows.length > 0) {
-          return this.mapD1ProductToProduct(rows[0]);
+        if (Array.isArray(rows)) {
+          if (rows.length > 0) {
+            return this.mapD1ProductToProduct(rows[0]);
+          }
+          return undefined; // Not found in D1, do not fallback to mock in production
         }
       } catch (e) {
-        console.warn('D1 findProductByIdAsync error:', e);
+        console.error('D1 findProductByIdAsync error:', e);
       }
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('فشل البحث عن المنتج في قاعدة بيانات Cloudflare D1');
+      }
+    }
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
     }
     return this.findProductById(id);
   }
@@ -1114,7 +1155,7 @@ class D1DatabaseAccessLayer {
     if (this.isD1Configured()) {
       try {
         const rows = await this.executeCloudflareD1Query("SELECT * FROM categories ORDER BY sort_order ASC;");
-        if (Array.isArray(rows) && rows.length > 0) {
+        if (Array.isArray(rows)) {
           return rows.map((c: any) => ({
             id: c.id,
             nameAr: c.name_ar,
@@ -1125,8 +1166,14 @@ class D1DatabaseAccessLayer {
           }));
         }
       } catch (e) {
-        console.warn('D1 getCategoriesAsync error:', e);
+        console.error('D1 getCategoriesAsync error:', e);
       }
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('فشل استعلام الأقسام من قاعدة بيانات Cloudflare D1');
+      }
+    }
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
     }
     return this.getCategories();
   }
@@ -1143,14 +1190,20 @@ class D1DatabaseAccessLayer {
     if (this.isD1Configured()) {
       try {
         const rows = await this.executeCloudflareD1Query("SELECT * FROM users;");
-        if (Array.isArray(rows) && rows.length > 0) {
+        if (Array.isArray(rows)) {
           const userAccounts = rows.map((r: any) => this.mapD1UserToUser(r));
           this.tables.users = userAccounts;
           return userAccounts;
         }
       } catch (e) {
-        console.warn('D1 getUsersAsync error:', e);
+        console.error('D1 getUsersAsync error:', e);
       }
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('فشل استعلام المستخدمين من قاعدة بيانات Cloudflare D1');
+      }
+    }
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
     }
     return this.getUsers();
   }
@@ -1163,12 +1216,21 @@ class D1DatabaseAccessLayer {
     if (this.isD1Configured()) {
       try {
         const rows = await this.executeCloudflareD1Query("SELECT * FROM users WHERE id = ? LIMIT 1;", [id]);
-        if (Array.isArray(rows) && rows.length > 0) {
-          return this.mapD1UserToUser(rows[0]);
+        if (Array.isArray(rows)) {
+          if (rows.length > 0) {
+            return this.mapD1UserToUser(rows[0]);
+          }
+          return undefined;
         }
       } catch (e) {
-        console.warn('D1 findUserByIdAsync error:', e);
+        console.error('D1 findUserByIdAsync error:', e);
       }
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('فشل التحقق من المستخدم في قاعدة بيانات Cloudflare D1');
+      }
+    }
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
     }
     return this.findUserById(id);
   }
@@ -1183,12 +1245,21 @@ class D1DatabaseAccessLayer {
     if (this.isD1Configured()) {
       try {
         const rows = await this.executeCloudflareD1Query("SELECT * FROM users WHERE phone = ? LIMIT 1;", [clean]);
-        if (Array.isArray(rows) && rows.length > 0) {
-          return this.mapD1UserToUser(rows[0]);
+        if (Array.isArray(rows)) {
+          if (rows.length > 0) {
+            return this.mapD1UserToUser(rows[0]);
+          }
+          return undefined;
         }
       } catch (e) {
-        console.warn('D1 findUserByPhoneAsync error:', e);
+        console.error('D1 findUserByPhoneAsync error:', e);
       }
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('فشل البحث عن المستخدم برقم الهاتف في قاعدة بيانات Cloudflare D1');
+      }
+    }
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
     }
     return this.findUserByPhone(phone);
   }
@@ -1247,14 +1318,20 @@ class D1DatabaseAccessLayer {
     if (this.isD1Configured()) {
       try {
         const rows = await this.executeCloudflareD1Query("SELECT * FROM customers ORDER BY total_orders DESC;");
-        if (Array.isArray(rows) && rows.length > 0) {
+        if (Array.isArray(rows)) {
           const custs = rows.map((r: any) => this.mapD1CustomerToCustomer(r));
           this.tables.customers = custs;
           return custs;
         }
       } catch (e) {
-        console.warn('D1 getCustomersAsync error:', e);
+        console.error('D1 getCustomersAsync error:', e);
       }
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('فشل استعلام سجل العملاء من قاعدة بيانات Cloudflare D1');
+      }
+    }
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
     }
     return this.getCustomers();
   }
@@ -1348,8 +1425,14 @@ class D1DatabaseAccessLayer {
           return rows.map((r: any) => this.mapD1OrderToOrder(r));
         }
       } catch (e) {
-        console.warn('D1 getOrdersAsync error:', e);
+        console.error('D1 getOrdersAsync error:', e);
       }
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('فشل استعلام الطلبات من قاعدة بيانات Cloudflare D1');
+      }
+    }
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
     }
 
     let result = this.tables.orders;
@@ -1374,12 +1457,21 @@ class D1DatabaseAccessLayer {
           "SELECT * FROM orders WHERE id = ? OR order_number = ? LIMIT 1;",
           [id, id]
         );
-        if (Array.isArray(rows) && rows.length > 0) {
-          return this.mapD1OrderToOrder(rows[0]);
+        if (Array.isArray(rows)) {
+          if (rows.length > 0) {
+            return this.mapD1OrderToOrder(rows[0]);
+          }
+          return undefined;
         }
       } catch (e) {
-        console.warn('D1 findOrderByIdAsync error:', e);
+        console.error('D1 findOrderByIdAsync error:', e);
       }
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('فشل البحث عن الطلب في قاعدة بيانات Cloudflare D1');
+      }
+    }
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
     }
     return this.findOrderById(id);
   }
@@ -1410,8 +1502,14 @@ class D1DatabaseAccessLayer {
           }));
         }
       } catch (e) {
-        console.warn('D1 getOrderItemsAsync error:', e);
+        console.error('D1 getOrderItemsAsync error:', e);
       }
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('فشل استعلام عناصر الطلب من قاعدة بيانات Cloudflare D1');
+      }
+    }
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
     }
     return this.getOrderItems(orderId);
   }
@@ -2141,7 +2239,7 @@ class D1DatabaseAccessLayer {
     if (this.isD1Configured()) {
       try {
         const rows = await this.executeCloudflareD1Query("SELECT * FROM inventory_logs ORDER BY created_at DESC LIMIT 500;");
-        if (Array.isArray(rows) && rows.length > 0) {
+        if (Array.isArray(rows)) {
           return rows.map((l: any) => ({
             id: l.id,
             productId: l.product_id,
@@ -2159,6 +2257,12 @@ class D1DatabaseAccessLayer {
       } catch (err) {
         console.error('Error fetching inventory_logs from D1:', err);
       }
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('فشل استعلام حركات المخزون من قاعدة بيانات Cloudflare D1');
+      }
+    }
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
     }
     return this.tables.inventory_logs;
   }
@@ -2191,10 +2295,12 @@ class D1DatabaseAccessLayer {
       } catch (err) {
         console.error('Error fetching delivery_agents from D1:', err);
       }
-      return this.tables.delivery_agents;
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('فشل استعلام مناديب التوصيل من قاعدة بيانات Cloudflare D1');
+      }
     }
     if (process.env.NODE_ENV === 'production') {
-      return this.tables.delivery_agents;
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
     }
     return this.tables.delivery_agents;
   }
@@ -2233,7 +2339,7 @@ class D1DatabaseAccessLayer {
     if (this.isD1Configured()) {
       try {
         const rows = await this.executeCloudflareD1Query("SELECT * FROM reviews ORDER BY created_at DESC;");
-        if (Array.isArray(rows) && rows.length > 0) {
+        if (Array.isArray(rows)) {
           return rows.map((rv: any) => ({
             id: rv.id,
             productId: rv.product_id,
@@ -2248,6 +2354,12 @@ class D1DatabaseAccessLayer {
       } catch (err) {
         console.error('Error fetching reviews from D1:', err);
       }
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('فشل استعلام تقييمات المنتجات من قاعدة بيانات Cloudflare D1');
+      }
+    }
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
     }
     return this.tables.reviews;
   }
@@ -2308,10 +2420,12 @@ class D1DatabaseAccessLayer {
       } catch (err) {
         console.error('Error fetching coupons from D1:', err);
       }
-      return this.tables.coupons;
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('فشل استعلام الكوبونات من قاعدة بيانات Cloudflare D1');
+      }
     }
     if (process.env.NODE_ENV === 'production') {
-      return this.tables.coupons;
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
     }
     return this.tables.coupons;
   }
@@ -2325,21 +2439,30 @@ class D1DatabaseAccessLayer {
     if (this.isD1Configured()) {
       try {
         const rows = await this.executeCloudflareD1Query("SELECT * FROM coupons WHERE UPPER(code) = ? AND is_active = 1 LIMIT 1;", [cleanCode]);
-        if (Array.isArray(rows) && rows.length > 0) {
-          const cp = rows[0];
-          return {
-            code: cp.code,
-            discountPercent: cp.discount_percent,
-            maxDiscount: cp.max_discount,
-            minOrderAmount: cp.min_order_amount,
-            isActive: Boolean(cp.is_active),
-            validUntil: cp.expiry_date || cp.valid_until || undefined,
-            usageCount: cp.usage_count || 0
-          };
+        if (Array.isArray(rows)) {
+          if (rows.length > 0) {
+            const cp = rows[0];
+            return {
+              code: cp.code,
+              discountPercent: cp.discount_percent,
+              maxDiscount: cp.max_discount,
+              minOrderAmount: cp.min_order_amount,
+              isActive: Boolean(cp.is_active),
+              validUntil: cp.expiry_date || cp.valid_until || undefined,
+              usageCount: cp.usage_count || 0
+            };
+          }
+          return undefined;
         }
       } catch (err) {
         console.error('Error finding coupon in D1:', err);
       }
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('فشل التحقق من الكوبون في قاعدة بيانات Cloudflare D1');
+      }
+    }
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
     }
     return this.findCoupon(cleanCode);
   }
@@ -2389,22 +2512,30 @@ class D1DatabaseAccessLayer {
     if (this.isD1Configured()) {
       try {
         const rows = await this.executeCloudflareD1Query("SELECT * FROM store_settings WHERE id = 'default_settings';");
-        if (Array.isArray(rows) && rows.length > 0) {
-          const st = rows[0];
-          return {
-            ...this.tables.store_settings,
-            storeNameAr: st.store_name_ar || this.tables.store_settings.storeNameAr,
-            storeNameEn: st.store_name_en || this.tables.store_settings.storeNameEn,
-            whatsappPhone: st.whatsapp_phone || this.tables.store_settings.whatsappPhone,
-            supportPhone: st.support_phone || this.tables.store_settings.supportPhone,
-            deliveryDistricts: typeof st.delivery_districts === 'string' ? JSON.parse(st.delivery_districts) : (st.delivery_districts || this.tables.store_settings.deliveryDistricts),
-            workingHoursAr: st.working_hours_ar || (typeof st.working_hours === 'string' ? JSON.parse(st.working_hours)?.ar : undefined) || this.tables.store_settings.workingHoursAr,
-            workingHoursEn: st.working_hours_en || (typeof st.working_hours === 'string' ? JSON.parse(st.working_hours)?.en : undefined) || this.tables.store_settings.workingHoursEn
-          };
+        if (Array.isArray(rows)) {
+          if (rows.length > 0) {
+            const st = rows[0];
+            return {
+              ...this.tables.store_settings,
+              storeNameAr: st.store_name_ar || this.tables.store_settings.storeNameAr,
+              storeNameEn: st.store_name_en || this.tables.store_settings.storeNameEn,
+              whatsappPhone: st.whatsapp_phone || this.tables.store_settings.whatsappPhone,
+              supportPhone: st.support_phone || this.tables.store_settings.supportPhone,
+              deliveryDistricts: typeof st.delivery_districts === 'string' ? JSON.parse(st.delivery_districts) : (st.delivery_districts || this.tables.store_settings.deliveryDistricts),
+              workingHoursAr: st.working_hours_ar || (typeof st.working_hours === 'string' ? JSON.parse(st.working_hours)?.ar : undefined) || this.tables.store_settings.workingHoursAr,
+              workingHoursEn: st.working_hours_en || (typeof st.working_hours === 'string' ? JSON.parse(st.working_hours)?.en : undefined) || this.tables.store_settings.workingHoursEn
+            };
+          }
         }
       } catch (err) {
         console.error('Error fetching store_settings from D1:', err);
       }
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('فشل استعلام إعدادات المتجر من قاعدة بيانات Cloudflare D1');
+      }
+    }
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
     }
     return this.tables.store_settings;
   }
@@ -2421,15 +2552,17 @@ class D1DatabaseAccessLayer {
     if (this.isD1Configured()) {
       try {
         await this.executeCloudflareD1Query(
-          `UPDATE store_settings SET ` +
-          `store_name_ar = COALESCE(?, store_name_ar), ` +
-          `store_name_en = COALESCE(?, store_name_en), ` +
-          `whatsapp_phone = COALESCE(?, whatsapp_phone), ` +
-          `support_phone = COALESCE(?, support_phone), ` +
-          `delivery_districts = COALESCE(?, delivery_districts), ` +
-          `working_hours_ar = COALESCE(?, working_hours_ar), ` +
-          `working_hours_en = COALESCE(?, working_hours_en), ` +
-          `updated_at = datetime('now') WHERE id = 'default_settings';`,
+          `INSERT INTO store_settings (id, store_name_ar, store_name_en, whatsapp_phone, support_phone, delivery_districts, working_hours_ar, working_hours_en, updated_at) ` +
+          `VALUES ('default_settings', ?, ?, ?, ?, ?, ?, ?, datetime('now')) ` +
+          `ON CONFLICT(id) DO UPDATE SET ` +
+          `store_name_ar = COALESCE(excluded.store_name_ar, store_settings.store_name_ar), ` +
+          `store_name_en = COALESCE(excluded.store_name_en, store_settings.store_name_en), ` +
+          `whatsapp_phone = COALESCE(excluded.whatsapp_phone, store_settings.whatsapp_phone), ` +
+          `support_phone = COALESCE(excluded.support_phone, store_settings.support_phone), ` +
+          `delivery_districts = COALESCE(excluded.delivery_districts, store_settings.delivery_districts), ` +
+          `working_hours_ar = COALESCE(excluded.working_hours_ar, store_settings.working_hours_ar), ` +
+          `working_hours_en = COALESCE(excluded.working_hours_en, store_settings.working_hours_en), ` +
+          `updated_at = datetime('now');`,
           [
             newSettings.storeNameAr || null,
             newSettings.storeNameEn || null,
@@ -2450,6 +2583,127 @@ class D1DatabaseAccessLayer {
 
   public getGalleryItems(): GalleryItem[] {
     return this.tables.gallery_items;
+  }
+
+  public async getGalleryItemsAsync(): Promise<GalleryItem[]> {
+    if (this.isD1Configured()) {
+      try {
+        const rows = await this.executeCloudflareD1Query("SELECT * FROM gallery_items ORDER BY sort_order ASC, created_at DESC;");
+        if (Array.isArray(rows)) {
+          const items: GalleryItem[] = rows.map((g: any) => ({
+            id: g.id,
+            titleAr: g.title_ar,
+            titleEn: g.title_en || undefined,
+            image: g.image_url || '',
+            imageUrl: g.image_url,
+            category: g.category || 'factory',
+            caption: g.caption || undefined,
+            sortOrder: g.sort_order || 0,
+            isActive: g.is_active !== undefined ? Boolean(g.is_active) : true,
+            createdAt: g.created_at
+          }));
+          this.tables.gallery_items = items;
+          return items;
+        }
+      } catch (err) {
+        console.error('Error fetching gallery_items from D1:', err);
+      }
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('فشل استعلام صور المعرض من قاعدة بيانات Cloudflare D1');
+      }
+    }
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
+    }
+    return this.tables.gallery_items;
+  }
+
+  public async addGalleryItemAsync(item: GalleryItem): Promise<GalleryItem> {
+    const itemToAdd: GalleryItem = {
+      ...item,
+      image: item.image || item.imageUrl || '',
+      imageUrl: item.imageUrl || item.image || ''
+    };
+    this.tables.gallery_items.push(itemToAdd);
+    this.saveLocal();
+
+    if (this.isD1Configured()) {
+      await this.executeCloudflareD1Query(
+        `INSERT INTO gallery_items (id, title_ar, title_en, image_url, category, caption, sort_order, is_active, created_at) ` +
+        `VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'));`,
+        [
+          itemToAdd.id,
+          itemToAdd.titleAr,
+          itemToAdd.titleEn || null,
+          itemToAdd.imageUrl || itemToAdd.image,
+          itemToAdd.category || 'factory',
+          itemToAdd.caption || null,
+          itemToAdd.sortOrder || 0,
+          itemToAdd.isActive !== false ? 1 : 0
+        ]
+      );
+    }
+    return itemToAdd;
+  }
+
+  public async updateGalleryItemAsync(id: string, updates: Partial<GalleryItem>): Promise<GalleryItem | null> {
+    const idx = this.tables.gallery_items.findIndex(g => g.id === id);
+    if (idx !== -1) {
+      this.tables.gallery_items[idx] = { ...this.tables.gallery_items[idx], ...updates };
+      this.saveLocal();
+    }
+
+    if (this.isD1Configured()) {
+      await this.executeCloudflareD1Query(
+        `UPDATE gallery_items SET ` +
+        `title_ar = COALESCE(?, title_ar), ` +
+        `title_en = COALESCE(?, title_en), ` +
+        `image_url = COALESCE(?, image_url), ` +
+        `category = COALESCE(?, category), ` +
+        `caption = COALESCE(?, caption), ` +
+        `sort_order = COALESCE(?, sort_order), ` +
+        `is_active = COALESCE(?, is_active) ` +
+        `WHERE id = ?;`,
+        [
+          updates.titleAr || null,
+          updates.titleEn || null,
+          updates.imageUrl || updates.image || null,
+          updates.category || null,
+          updates.caption || null,
+          updates.sortOrder !== undefined ? updates.sortOrder : null,
+          updates.isActive !== undefined ? (updates.isActive ? 1 : 0) : null,
+          id
+        ]
+      );
+      const rows = await this.executeCloudflareD1Query("SELECT * FROM gallery_items WHERE id = ? LIMIT 1;", [id]);
+      if (Array.isArray(rows) && rows.length > 0) {
+        const g = rows[0];
+        return {
+          id: g.id,
+          titleAr: g.title_ar,
+          titleEn: g.title_en || undefined,
+          image: g.image_url || '',
+          imageUrl: g.image_url,
+          category: g.category || 'factory',
+          caption: g.caption || undefined,
+          sortOrder: g.sort_order || 0,
+          isActive: g.is_active !== undefined ? Boolean(g.is_active) : true,
+          createdAt: g.created_at
+        };
+      }
+    }
+
+    return idx !== -1 ? this.tables.gallery_items[idx] : null;
+  }
+
+  public async deleteGalleryItemAsync(id: string): Promise<boolean> {
+    this.tables.gallery_items = this.tables.gallery_items.filter(g => g.id !== id);
+    this.saveLocal();
+
+    if (this.isD1Configured()) {
+      await this.executeCloudflareD1Query("DELETE FROM gallery_items WHERE id = ?;", [id]);
+    }
+    return true;
   }
 
   public getNotifications(): NotificationRecord[] {

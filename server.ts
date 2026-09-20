@@ -425,21 +425,36 @@ app.get("/api/d1/status", async (req, res) => {
 });
 
 app.get("/api/categories", async (req, res) => {
-  const categories = await db.getCategoriesAsync();
-  res.json({ success: true, data: categories });
+  try {
+    const categories = await db.getCategoriesAsync();
+    res.json({ success: true, data: categories });
+  } catch (err: any) {
+    console.error("Categories query error:", err);
+    res.status(503).json({ success: false, message: "فشل استعلام الأقسام من قاعدة البيانات", error: err.message });
+  }
 });
 
 app.get("/api/products", async (req, res) => {
-  const products = await db.getProductsAsync();
-  res.json({ success: true, data: products });
+  try {
+    const products = await db.getProductsAsync();
+    res.json({ success: true, data: products });
+  } catch (err: any) {
+    console.error("Products query error:", err);
+    res.status(503).json({ success: false, message: "فشل استعلام المنتجات من قاعدة البيانات", error: err.message });
+  }
 });
 
 app.get("/api/products/:id", async (req, res) => {
-  const p = await db.findProductByIdAsync(req.params.id);
-  if (!p) {
-    return res.status(404).json({ success: false, message: "المنتج غير موجود" });
+  try {
+    const p = await db.findProductByIdAsync(req.params.id);
+    if (!p) {
+      return res.status(404).json({ success: false, message: "المنتج غير موجود" });
+    }
+    res.json({ success: true, data: p });
+  } catch (err: any) {
+    console.error("Product find error:", err);
+    res.status(503).json({ success: false, message: "فشل استعلام المنتج من قاعدة البيانات", error: err.message });
   }
-  res.json({ success: true, data: p });
 });
 
 app.post("/api/products", requireRoles(['owner', 'admin']), async (req: AuthenticatedRequest, res) => {
@@ -588,8 +603,13 @@ app.post("/api/upload", requireRoles(['owner', 'admin', 'employee']), async (req
 
 // Inventory Transaction Ledger
 app.get("/api/inventory/transactions", requireRoles(['owner', 'admin', 'employee']), async (req, res) => {
-  const transactions = await db.getInventoryTransactionsAsync();
-  res.json({ success: true, data: transactions });
+  try {
+    const transactions = await db.getInventoryTransactionsAsync();
+    res.json({ success: true, data: transactions });
+  } catch (err: any) {
+    console.error("Inventory transactions query error:", err);
+    res.status(503).json({ success: false, message: "فشل استعلام حركات المخزون من قاعدة البيانات", error: err.message });
+  }
 });
 
 // Stock Adjustment
@@ -1274,32 +1294,42 @@ app.post("/api/orders/:id/cancel", async (req: AuthenticatedRequest, res) => {
 // ==========================================
 
 app.get("/api/reviews", async (req, res) => {
-  const reviews = await db.getReviewsAsync();
-  res.json({ success: true, data: reviews });
+  try {
+    const reviews = await db.getReviewsAsync();
+    res.json({ success: true, data: reviews });
+  } catch (err: any) {
+    console.error("Reviews query error:", err);
+    res.status(503).json({ success: false, message: "فشل استعلام تقييمات المنتجات من قاعدة البيانات", error: err.message });
+  }
 });
 
 app.post("/api/reviews", async (req: AuthenticatedRequest, res) => {
-  const { productId, rating, comment, userName } = req.body;
-  if (!productId || !comment || !userName) {
-    return res.status(400).json({ success: false, message: "يرجى كتابة الاسم والتعليق وتحديد المنتج" });
+  try {
+    const { productId, rating, comment, userName } = req.body;
+    if (!productId || !comment || !userName) {
+      return res.status(400).json({ success: false, message: "يرجى كتابة الاسم والتعليق وتحديد المنتج" });
+    }
+
+    // Verified purchase check strictly uses authenticated user JWT phone against D1 delivered order history
+    const userPhone = req.user?.phone || '';
+    const isVerified = userPhone ? await db.hasDeliveredOrderForProductAsync(userPhone, productId) : false;
+
+    const newReview = {
+      id: "rev-" + Date.now(),
+      productId: String(productId),
+      userName: sanitizeInputString(userName, 50),
+      rating: Math.min(5, Math.max(1, Number(rating) || 5)),
+      comment: sanitizeInputString(comment, 500),
+      date: new Date().toISOString().split("T")[0],
+      verifiedPurchase: isVerified
+    };
+
+    const added = await db.addReviewAsync(newReview);
+    res.json({ success: true, data: added });
+  } catch (err: any) {
+    console.error("Add review error:", err);
+    res.status(500).json({ success: false, message: "فشل إضافة التقييم في قاعدة البيانات", error: err.message });
   }
-
-  // Verified purchase check strictly uses authenticated user JWT phone against D1 delivered order history
-  const userPhone = req.user?.phone || '';
-  const isVerified = userPhone ? await db.hasDeliveredOrderForProductAsync(userPhone, productId) : false;
-
-  const newReview = {
-    id: "rev-" + Date.now(),
-    productId: String(productId),
-    userName: sanitizeInputString(userName, 50),
-    rating: Math.min(5, Math.max(1, Number(rating) || 5)),
-    comment: sanitizeInputString(comment, 500),
-    date: new Date().toISOString().split("T")[0],
-    verifiedPurchase: isVerified
-  };
-
-  const added = await db.addReviewAsync(newReview);
-  res.json({ success: true, data: added });
 });
 
 // ==========================================
@@ -1307,61 +1337,71 @@ app.post("/api/reviews", async (req: AuthenticatedRequest, res) => {
 // ==========================================
 
 app.post("/api/validate-coupon", couponRateLimiter, async (req, res) => {
-  const { code, amount, items } = req.body;
-  if (!code || typeof code !== 'string') {
-    return res.status(400).json({ success: false, message: "يرجى إدخال كود الكوبون" });
-  }
+  try {
+    const { code, amount, items } = req.body;
+    if (!code || typeof code !== 'string') {
+      return res.status(400).json({ success: false, message: "يرجى إدخال كود الكوبون" });
+    }
 
-  const found = await db.findCouponAsync(code);
-  if (!found || !found.isActive) {
-    return res.status(400).json({ success: false, message: "كوبون غير صالح أو غير مفعل" });
-  }
+    const found = await db.findCouponAsync(code);
+    if (!found || !found.isActive) {
+      return res.status(400).json({ success: false, message: "كوبون غير صالح أو غير مفعل" });
+    }
 
-  if (found.validUntil && new Date(found.validUntil).getTime() < Date.now()) {
-    return res.status(400).json({ success: false, message: "هذا الكوبون منتهي الصلاحية" });
-  }
+    if (found.validUntil && new Date(found.validUntil).getTime() < Date.now()) {
+      return res.status(400).json({ success: false, message: "هذا الكوبون منتهي الصلاحية" });
+    }
 
-  if (found.maxUses && found.usageCount && found.usageCount >= found.maxUses) {
-    return res.status(400).json({ success: false, message: "لقد استنفد هذا الكوبون الحد الأقصى لعدد مرات الاستخدام المسموح بها" });
-  }
+    if (found.maxUses && found.usageCount && found.usageCount >= found.maxUses) {
+      return res.status(400).json({ success: false, message: "لقد استنفد هذا الكوبون الحد الأقصى لعدد مرات الاستخدام المسموح بها" });
+    }
 
-  // Recalculate subtotal server-side if cart items are provided
-  let orderAmount = 0;
-  if (items && Array.isArray(items) && items.length > 0) {
-    const products = await db.getProductsAsync();
-    for (const it of items) {
-      const p = products.find(prod => prod.id === it.productId);
-      if (p) {
-        orderAmount += (p.price * Math.max(1, Number(it.quantity) || 1));
+    // Recalculate subtotal server-side if cart items are provided
+    let orderAmount = 0;
+    if (items && Array.isArray(items) && items.length > 0) {
+      const products = await db.getProductsAsync();
+      for (const it of items) {
+        const p = products.find(prod => prod.id === it.productId);
+        if (p) {
+          orderAmount += (p.price * Math.max(1, Number(it.quantity) || 1));
+        }
       }
+    } else {
+      orderAmount = Math.max(0, Number(amount) || 0);
     }
-  } else {
-    orderAmount = Math.max(0, Number(amount) || 0);
-  }
 
-  if (orderAmount < found.minOrderAmount) {
-    return res.status(400).json({
-      success: false,
-      message: `الحد الأدنى لتطبيق هذا الكوبون هو ${found.minOrderAmount.toLocaleString()} ريال يمني`
+    if (orderAmount < found.minOrderAmount) {
+      return res.status(400).json({
+        success: false,
+        message: `الحد الأدنى لتطبيق هذا الكوبون هو ${found.minOrderAmount.toLocaleString()} ريال يمني`
+      });
+    }
+
+    const discountVal = Math.min((orderAmount * found.discountPercent) / 100, found.maxDiscount);
+    res.json({
+      success: true,
+      discount: discountVal,
+      coupon: {
+        code: found.code,
+        discountPercent: found.discountPercent,
+        maxDiscount: found.maxDiscount,
+        minOrderAmount: found.minOrderAmount
+      }
     });
+  } catch (err: any) {
+    console.error("Validate coupon error:", err);
+    res.status(503).json({ success: false, message: "فشل التحقق من الكوبون في قاعدة البيانات", error: err.message });
   }
-
-  const discountVal = Math.min((orderAmount * found.discountPercent) / 100, found.maxDiscount);
-  res.json({
-    success: true,
-    discount: discountVal,
-    coupon: {
-      code: found.code,
-      discountPercent: found.discountPercent,
-      maxDiscount: found.maxDiscount,
-      minOrderAmount: found.minOrderAmount
-    }
-  });
 });
 
 app.get("/api/coupons", requireRoles(['owner', 'admin', 'employee']), async (req, res) => {
-  const coupons = await db.getCouponsAsync();
-  res.json({ success: true, data: coupons });
+  try {
+    const coupons = await db.getCouponsAsync();
+    res.json({ success: true, data: coupons });
+  } catch (err: any) {
+    console.error("Coupons query error:", err);
+    res.status(503).json({ success: false, message: "فشل استعلام الكوبونات من قاعدة البيانات", error: err.message });
+  }
 });
 
 app.post("/api/coupons", requireRoles(['owner', 'admin']), async (req, res) => {
@@ -1392,61 +1432,102 @@ app.delete("/api/coupons/:code", requireRoles(['owner', 'admin']), async (req, r
 // ==========================================
 
 app.get("/api/settings", async (req, res) => {
-  const settings = await db.getSettingsAsync();
-  res.json({ success: true, data: settings });
+  try {
+    const settings = await db.getSettingsAsync();
+    res.json({ success: true, data: settings });
+  } catch (err: any) {
+    console.error("Settings query error:", err);
+    res.status(503).json({ success: false, message: "فشل استعلام الإعدادات من قاعدة البيانات", error: err.message });
+  }
 });
 
 app.post("/api/settings", requireRoles(['owner', 'admin']), async (req, res) => {
-  const updated = await db.updateSettingsAsync(req.body);
-  res.json({ success: true, data: updated });
+  try {
+    const updated = await db.updateSettingsAsync(req.body);
+    res.json({ success: true, data: updated });
+  } catch (err: any) {
+    console.error("Settings update error:", err);
+    res.status(500).json({ success: false, message: "فشل حفظ الإعدادات في قاعدة البيانات", error: err.message });
+  }
 });
 
 app.get("/api/delivery-agents", async (req: AuthenticatedRequest, res) => {
-  const isAuthorized = req.user && ['owner', 'admin', 'employee', 'delivery'].includes(req.user.role);
-  const agents = await db.getDeliveryAgentsAsync();
-  if (isAuthorized) {
-    return res.json({ success: true, data: agents });
-  }
+  try {
+    const isAuthorized = req.user && ['owner', 'admin', 'employee', 'delivery'].includes(req.user.role);
+    const agents = await db.getDeliveryAgentsAsync();
+    if (isAuthorized) {
+      return res.json({ success: true, data: agents });
+    }
 
-  // Public-safe view: omit phones and sensitive internal fields
-  const safeAgents = agents.map(a => ({
-    id: a.id,
-    name: a.name,
-    vehicleType: a.vehicleType,
-    rating: a.rating,
-    isActive: a.isActive
-  }));
-  res.json({ success: true, data: safeAgents });
+    // Public-safe view: omit phones and sensitive internal fields
+    const safeAgents = agents.map(a => ({
+      id: a.id,
+      name: a.name,
+      vehicleType: a.vehicleType,
+      rating: a.rating,
+      isActive: a.isActive
+    }));
+    res.json({ success: true, data: safeAgents });
+  } catch (err: any) {
+    console.error("Delivery agents error:", err);
+    res.status(503).json({ success: false, message: "فشل استعلام مناديب التوصيل من قاعدة البيانات", error: err.message });
+  }
 });
 
 app.post("/api/delivery-agents", requireRoles(['owner', 'admin']), async (req, res) => {
-  const updated = await db.updateDeliveryAgentsAsync(req.body);
-  res.json({ success: true, data: updated });
-});
-
-app.get("/api/gallery", (req, res) => {
-  res.json({ success: true, data: db.getGalleryItems() });
-});
-
-app.post("/api/gallery", requireRoles(['owner', 'admin']), (req, res) => {
-  const newItem = db.addGalleryItem({
-    id: "g" + Date.now(),
-    ...req.body
-  });
-  res.json({ success: true, data: newItem });
-});
-
-app.put("/api/gallery/:id", requireRoles(['owner', 'admin']), (req, res) => {
-  const updated = db.updateGalleryItem(req.params.id, req.body);
-  if (!updated) {
-    return res.status(404).json({ success: false, message: "عنصر المعرض غير موجود" });
+  try {
+    const updated = await db.updateDeliveryAgentsAsync(req.body);
+    res.json({ success: true, data: updated });
+  } catch (err: any) {
+    console.error("Delivery agents update error:", err);
+    res.status(500).json({ success: false, message: "فشل حفظ بيانات المناديب في قاعدة البيانات", error: err.message });
   }
-  res.json({ success: true, data: updated });
 });
 
-app.delete("/api/gallery/:id", requireRoles(['owner', 'admin']), (req, res) => {
-  db.deleteGalleryItem(req.params.id);
-  res.json({ success: true, message: "تم حذف الصورة من المعرض" });
+app.get("/api/gallery", async (req, res) => {
+  try {
+    const data = await db.getGalleryItemsAsync();
+    res.json({ success: true, data });
+  } catch (err: any) {
+    console.error("Gallery query error:", err);
+    res.status(503).json({ success: false, message: "فشل استعلام المعرض من قاعدة البيانات", error: err.message });
+  }
+});
+
+app.post("/api/gallery", requireRoles(['owner', 'admin']), async (req, res) => {
+  try {
+    const newItem = await db.addGalleryItemAsync({
+      id: "g" + Date.now(),
+      ...req.body
+    });
+    res.json({ success: true, data: newItem });
+  } catch (err: any) {
+    console.error("Gallery add error:", err);
+    res.status(500).json({ success: false, message: "فشل إضافة الصورة للمعرض", error: err.message });
+  }
+});
+
+app.put("/api/gallery/:id", requireRoles(['owner', 'admin']), async (req, res) => {
+  try {
+    const updated = await db.updateGalleryItemAsync(req.params.id, req.body);
+    if (!updated) {
+      return res.status(404).json({ success: false, message: "عنصر المعرض غير موجود" });
+    }
+    res.json({ success: true, data: updated });
+  } catch (err: any) {
+    console.error("Gallery update error:", err);
+    res.status(500).json({ success: false, message: "فشل تعديل عنصر المعرض", error: err.message });
+  }
+});
+
+app.delete("/api/gallery/:id", requireRoles(['owner', 'admin']), async (req, res) => {
+  try {
+    await db.deleteGalleryItemAsync(req.params.id);
+    res.json({ success: true, message: "تم حذف الصورة من المعرض" });
+  } catch (err: any) {
+    console.error("Gallery delete error:", err);
+    res.status(500).json({ success: false, message: "فشل حذف الصورة من المعرض", error: err.message });
+  }
 });
 
 // ==========================================
@@ -1454,99 +1535,114 @@ app.delete("/api/gallery/:id", requireRoles(['owner', 'admin']), (req, res) => {
 // ==========================================
 
 app.get("/api/admin/reports", requireRoles(['owner', 'admin']), async (req, res) => {
-  const orders = await db.getOrdersAsync();
-  const products = await db.getProductsAsync();
+  try {
+    const orders = await db.getOrdersAsync();
+    const products = await db.getProductsAsync();
 
-  const totalRevenue = orders.reduce((sum, o) => o.status !== 'cancelled' ? sum + o.total : sum, 0);
-  const totalOrders = orders.length;
-  const completedOrders = orders.filter(o => o.status === 'delivered').length;
-  const deliveringOrders = orders.filter(o => ['shipped', 'delivering'].includes(o.status)).length;
-  const pendingOrders = orders.filter(o => ['received', 'preparing'].includes(o.status)).length;
+    const totalRevenue = orders.reduce((sum, o) => o.status !== 'cancelled' ? sum + o.total : sum, 0);
+    const totalOrders = orders.length;
+    const completedOrders = orders.filter(o => o.status === 'delivered').length;
+    const deliveringOrders = orders.filter(o => ['shipped', 'delivering'].includes(o.status)).length;
+    const pendingOrders = orders.filter(o => ['received', 'preparing'].includes(o.status)).length;
 
-  const lowStockProducts = products.filter(p => p.stock < 50);
+    const lowStockProducts = products.filter(p => p.stock < 50);
 
-  // Best selling products calculation
-  const productSalesMap: Record<string, { name: string; quantity: number; revenue: number }> = {};
-  orders.forEach(ord => {
-    if (ord.status !== 'cancelled' && ord.items) {
-      ord.items.forEach(it => {
-        if (!productSalesMap[it.productId]) {
-          productSalesMap[it.productId] = { name: it.productNameAr, quantity: 0, revenue: 0 };
-        }
-        productSalesMap[it.productId].quantity += it.quantity;
-        productSalesMap[it.productId].revenue += (it.unitPrice * it.quantity);
-      });
-    }
-  });
+    // Best selling products calculation
+    const productSalesMap: Record<string, { name: string; quantity: number; revenue: number }> = {};
+    orders.forEach(ord => {
+      if (ord.status !== 'cancelled' && ord.items) {
+        ord.items.forEach(it => {
+          if (!productSalesMap[it.productId]) {
+            productSalesMap[it.productId] = { name: it.productNameAr, quantity: 0, revenue: 0 };
+          }
+          productSalesMap[it.productId].quantity += it.quantity;
+          productSalesMap[it.productId].revenue += (it.unitPrice * it.quantity);
+        });
+      }
+    });
 
-  const topProducts = Object.entries(productSalesMap)
-    .map(([id, data]) => ({ id, ...data }))
-    .sort((a, b) => b.quantity - a.quantity);
+    const topProducts = Object.entries(productSalesMap)
+      .map(([id, data]) => ({ id, ...data }))
+      .sort((a, b) => b.quantity - a.quantity);
 
-  res.json({
-    success: true,
-    data: {
-      totalRevenue,
-      totalOrders,
-      completedOrders,
-      deliveringOrders,
-      pendingOrders,
-      averageOrderValue: totalOrders > 0 ? Math.round(totalRevenue / totalOrders) : 0,
-      lowStockProducts,
-      topProducts
-    }
-  });
+    res.json({
+      success: true,
+      data: {
+        totalRevenue,
+        totalOrders,
+        completedOrders,
+        deliveringOrders,
+        pendingOrders,
+        averageOrderValue: totalOrders > 0 ? Math.round(totalRevenue / totalOrders) : 0,
+        lowStockProducts,
+        topProducts
+      }
+    });
+  } catch (err: any) {
+    console.error("Reports query error:", err);
+    res.status(503).json({ success: false, message: "فشل استعلام التقارير من قاعدة البيانات", error: err.message });
+  }
 });
 
 app.get(["/api/customers", "/api/admin/customers"], requireRoles(['owner', 'admin', 'employee']), async (req, res) => {
-  const orders = await db.getOrdersAsync();
-  const customerMap: Record<string, any> = {};
+  try {
+    const orders = await db.getOrdersAsync();
+    const customerMap: Record<string, any> = {};
 
-  orders.forEach(o => {
-    const key = o.customerPhone?.replace(/\D/g, '') || o.customerName;
-    if (!customerMap[key]) {
-      customerMap[key] = {
-        name: o.customerName,
-        phone: o.customerPhone,
-        address: o.address?.district || 'صنعاء',
-        ordersCount: 0,
-        totalSpent: 0,
-        lastOrderDate: o.date
-      };
-    }
-    customerMap[key].ordersCount += 1;
-    if (o.status !== 'cancelled') {
-      customerMap[key].totalSpent += o.total;
-    }
-  });
+    orders.forEach(o => {
+      const key = o.customerPhone?.replace(/\D/g, '') || o.customerName;
+      if (!customerMap[key]) {
+        customerMap[key] = {
+          name: o.customerName,
+          phone: o.customerPhone,
+          address: o.address?.district || 'صنعاء',
+          ordersCount: 0,
+          totalSpent: 0,
+          lastOrderDate: o.date
+        };
+      }
+      customerMap[key].ordersCount += 1;
+      if (o.status !== 'cancelled') {
+        customerMap[key].totalSpent += o.total;
+      }
+    });
 
-  res.json({ success: true, data: Object.values(customerMap) });
+    res.json({ success: true, data: Object.values(customerMap) });
+  } catch (err: any) {
+    console.error("Customers query error:", err);
+    res.status(503).json({ success: false, message: "فشل استعلام العملاء من قاعدة البيانات", error: err.message });
+  }
 });
 
 // B2B Wholesale Profit & Margin Calculation (Management Only)
 app.get("/api/b2b/calculator-data", requireRoles(['owner', 'admin', 'employee']), async (req, res) => {
-  const products = await db.getProductsAsync();
-  const b2bProducts = products.map(p => ({
-    id: p.id,
-    nameAr: p.nameAr,
-    category: p.category,
-    retailPrice: p.price,
-    wholesalePrice: p.category === 'premium' ? Math.round(p.price * 0.8) : Math.round(p.price * 0.76),
-    marginPerUnit: p.category === 'premium' ? Math.round(p.price * 0.2) : Math.round(p.price * 0.24),
-    stock: p.stock
-  }));
+  try {
+    const products = await db.getProductsAsync();
+    const b2bProducts = products.map(p => ({
+      id: p.id,
+      nameAr: p.nameAr,
+      category: p.category,
+      retailPrice: p.price,
+      wholesalePrice: p.category === 'premium' ? Math.round(p.price * 0.8) : Math.round(p.price * 0.76),
+      marginPerUnit: p.category === 'premium' ? Math.round(p.price * 0.2) : Math.round(p.price * 0.24),
+      stock: p.stock
+    }));
 
-  res.json({
-    success: true,
-    data: {
-      products: b2bProducts,
-      incentives: [
-        { tier: 'البقالات الصغرى', minPouches: 24, bonusPerPouch: 50, freeDisplay: true },
-        { tier: 'السوبرماركت الكبرى', minPouches: 96, bonusPerPouch: 100, freeDisplay: true },
-        { tier: 'محلات الشيشة والمقاهي', minKg: 50, discountPercent: 22, directDelivery: true }
-      ]
-    }
-  });
+    res.json({
+      success: true,
+      data: {
+        products: b2bProducts,
+        incentives: [
+          { tier: 'البقالات الصغرى', minPouches: 24, bonusPerPouch: 50, freeDisplay: true },
+          { tier: 'السوبرماركت الكبرى', minPouches: 96, bonusPerPouch: 100, freeDisplay: true },
+          { tier: 'محلات الشيشة والمقاهي', minKg: 50, discountPercent: 22, directDelivery: true }
+        ]
+      }
+    });
+  } catch (err: any) {
+    console.error("B2B calculator query error:", err);
+    res.status(503).json({ success: false, message: "فشل استعلام بيانات B2B من قاعدة البيانات", error: err.message });
+  }
 });
 
 // ==========================================
