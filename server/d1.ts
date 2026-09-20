@@ -113,34 +113,57 @@ class D1DatabaseAccessLayer {
   private isInitialized = false;
 
   // In-memory relational tables matching D1 Schema
+  // In production or when Cloudflare D1 credentials exist, start with clean empty tables to prevent mock data leakage
   private tables = {
     categories: [] as Array<{ id: string; name_ar: string; name_en?: string; slug: string; sort_order: number; is_active: number; created_at: string }>,
-    products: [...INITIAL_PRODUCTS] as Product[],
+    products: (Boolean(CLOUDFLARE_CONFIG.accountId && CLOUDFLARE_CONFIG.apiToken && CLOUDFLARE_CONFIG.databaseId) || process.env.NODE_ENV === 'production')
+      ? [] as Product[]
+      : [...INITIAL_PRODUCTS] as Product[],
     users: [] as UserAccount[],
     customers: [] as CustomerRecord[],
     orders: [] as Order[],
     order_items: [] as OrderItemRecord[],
     inventory: new Map<string, { currentStock: number; reservedStock: number; minThreshold: number; lastCountedAt?: string }>(),
     inventory_logs: [] as InventoryLogRecord[],
-    delivery_agents: [...INITIAL_DELIVERY_AGENTS] as DeliveryAgent[],
+    delivery_agents: (Boolean(CLOUDFLARE_CONFIG.accountId && CLOUDFLARE_CONFIG.apiToken && CLOUDFLARE_CONFIG.databaseId) || process.env.NODE_ENV === 'production')
+      ? [] as DeliveryAgent[]
+      : [...INITIAL_DELIVERY_AGENTS] as DeliveryAgent[],
     reviews: [] as Review[],
-    coupons: [
-      { code: "GOLD2026", discountPercent: 10, maxDiscount: 2000, minOrderAmount: 2000, isActive: true },
-      { code: "SANAA15", discountPercent: 15, maxDiscount: 3500, minOrderAmount: 5000, isActive: true },
-      { code: "VIPBLACK", discountPercent: 20, maxDiscount: 5000, minOrderAmount: 10000, isActive: true }
-    ] as Coupon[],
-    gallery_items: [...INITIAL_GALLERY_ITEMS] as GalleryItem[],
-    store_settings: {
-      ...INITIAL_STORE_SETTINGS,
-      deliveryDistricts: [
-        { id: "d1", nameAr: "حدة وشارع الخمسين والحي السياسي", nameEn: "Hadda & Political Area", fee: 500, etaMinutes: 35, isActive: true },
-        { id: "d2", nameAr: "الأصبحي وشارع المقالح وبيت بوس", nameEn: "Asbahi & Bait Baws", fee: 500, etaMinutes: 40, isActive: true },
-        { id: "d3", nameAr: "التحرير وشارع جمال والقاع", nameEn: "Tahrir & Al-Qaa", fee: 600, etaMinutes: 40, isActive: true },
-        { id: "d4", nameAr: "صنعاء القديمة وباب اليمن وشعوب", nameEn: "Old Sanaa & Bab Al-Yaman", fee: 700, etaMinutes: 45, isActive: true },
-        { id: "d5", nameAr: "شملان ومذبح وشارع الثلاثين", nameEn: "Shamlan & Madhbah", fee: 800, etaMinutes: 45, isActive: true },
-        { id: "d6", nameAr: "الحصبة وشارع المطار والروضة", nameEn: "Hasaba & Airport Rd", fee: 900, etaMinutes: 50, isActive: true }
-      ]
-    } as StoreSettings,
+    coupons: (Boolean(CLOUDFLARE_CONFIG.accountId && CLOUDFLARE_CONFIG.apiToken && CLOUDFLARE_CONFIG.databaseId) || process.env.NODE_ENV === 'production')
+      ? [] as Coupon[]
+      : [
+          { code: "GOLD2026", discountPercent: 10, maxDiscount: 2000, minOrderAmount: 2000, isActive: true },
+          { code: "SANAA15", discountPercent: 15, maxDiscount: 3500, minOrderAmount: 5000, isActive: true },
+          { code: "VIPBLACK", discountPercent: 20, maxDiscount: 5000, minOrderAmount: 10000, isActive: true }
+        ] as Coupon[],
+    gallery_items: (Boolean(CLOUDFLARE_CONFIG.accountId && CLOUDFLARE_CONFIG.apiToken && CLOUDFLARE_CONFIG.databaseId) || process.env.NODE_ENV === 'production')
+      ? [] as GalleryItem[]
+      : [...INITIAL_GALLERY_ITEMS] as GalleryItem[],
+    store_settings: (Boolean(CLOUDFLARE_CONFIG.accountId && CLOUDFLARE_CONFIG.apiToken && CLOUDFLARE_CONFIG.databaseId) || process.env.NODE_ENV === 'production')
+      ? {
+          storeNameAr: 'فحم الذهب الأسود الملكي',
+          storeNameEn: 'BLACK GOLD ROYAL CHARCOAL',
+          whatsappPhone: '967775000150',
+          supportPhone: '967775000150',
+          workingHoursAr: 'يومياً: 8:00 ص - 11:30 م',
+          workingHoursEn: 'Daily: 8:00 AM - 11:30 PM',
+          freeDeliveryThreshold: 8000,
+          freeShippingThreshold: 8000,
+          defaultShippingFee: 800,
+          isOrderingEnabled: true,
+          deliveryDistricts: []
+        } as StoreSettings
+      : {
+          ...INITIAL_STORE_SETTINGS,
+          deliveryDistricts: [
+            { id: "d1", nameAr: "حدة وشارع الخمسين والحي السياسي", nameEn: "Hadda & Political Area", fee: 500, etaMinutes: 35, isActive: true },
+            { id: "d2", nameAr: "الأصبحي وشارع المقالح وبيت بوس", nameEn: "Asbahi & Bait Baws", fee: 500, etaMinutes: 40, isActive: true },
+            { id: "d3", nameAr: "التحرير وشارع جمال والقاع", nameEn: "Tahrir & Al-Qaa", fee: 600, etaMinutes: 40, isActive: true },
+            { id: "d4", nameAr: "صنعاء القديمة وباب اليمن وشعوب", nameEn: "Old Sanaa & Bab Al-Yaman", fee: 700, etaMinutes: 45, isActive: true },
+            { id: "d5", nameAr: "شملان ومذبح وشارع الثلاثين", nameEn: "Shamlan & Madhbah", fee: 800, etaMinutes: 45, isActive: true },
+            { id: "d6", nameAr: "الحصبة وشارع المطار والروضة", nameEn: "Hasaba & Airport Rd", fee: 900, etaMinutes: 50, isActive: true }
+          ]
+        } as StoreSettings,
     payments: [] as PaymentRecord[],
     notifications: [] as NotificationRecord[]
   };
@@ -234,42 +257,40 @@ class D1DatabaseAccessLayer {
         }
       }
 
-      // 3. Ensure Default Products if empty
-      if (this.tables.products.length === 0) {
-        this.tables.products = [...INITIAL_PRODUCTS];
-      }
+      // 3. Ensure Default Fallback Data ONLY in local development when D1 is NOT configured
+      if (!hasD1Credentials && process.env.NODE_ENV !== 'production') {
+        if (this.tables.products.length === 0) {
+          this.tables.products = [...INITIAL_PRODUCTS];
+        }
 
-      // 4. Ensure Default Gallery Items if empty
-      if (this.tables.gallery_items.length === 0) {
-        this.tables.gallery_items = [...INITIAL_GALLERY_ITEMS];
-      }
+        if (this.tables.gallery_items.length === 0) {
+          this.tables.gallery_items = [...INITIAL_GALLERY_ITEMS];
+        }
 
-      // 5. Ensure Default Store Settings if empty
-      if (!this.tables.store_settings || !this.tables.store_settings.whatsappPhone) {
-        this.tables.store_settings = { ...INITIAL_STORE_SETTINGS, deliveryDistricts: [
-          { id: "d1", nameAr: "حدة وشارع الخمسين والحي السياسي", nameEn: "Hadda & Political Area", fee: 500, etaMinutes: 35, isActive: true },
-          { id: "d2", nameAr: "الأصبحي وشارع المقالح وبيت بوس", nameEn: "Asbahi & Bait Baws", fee: 500, etaMinutes: 40, isActive: true },
-          { id: "d3", nameAr: "التحرير وشارع جمال والقاع", nameEn: "Tahrir & Al-Qaa", fee: 600, etaMinutes: 40, isActive: true },
-          { id: "d4", nameAr: "صنعاء القديمة وباب اليمن وشعوب", nameEn: "Old Sanaa & Bab Al-Yaman", fee: 700, etaMinutes: 45, isActive: true },
-          { id: "d5", nameAr: "شملان ومذبح وشارع الثلاثين", nameEn: "Shamlan & Madhbah", fee: 800, etaMinutes: 45, isActive: true },
-          { id: "d6", nameAr: "الحصبة وشارع المطار والروضة", nameEn: "Hasaba & Airport Rd", fee: 900, etaMinutes: 50, isActive: true }
-        ] };
-      }
+        if (!this.tables.store_settings || !this.tables.store_settings.whatsappPhone) {
+          this.tables.store_settings = { ...INITIAL_STORE_SETTINGS, deliveryDistricts: [
+            { id: "d1", nameAr: "حدة وشارع الخمسين والحي السياسي", nameEn: "Hadda & Political Area", fee: 500, etaMinutes: 35, isActive: true },
+            { id: "d2", nameAr: "الأصبحي وشارع المقالح وبيت بوس", nameEn: "Asbahi & Bait Baws", fee: 500, etaMinutes: 40, isActive: true },
+            { id: "d3", nameAr: "التحرير وشارع جمال والقاع", nameEn: "Tahrir & Al-Qaa", fee: 600, etaMinutes: 40, isActive: true },
+            { id: "d4", nameAr: "صنعاء القديمة وباب اليمن وشعوب", nameEn: "Old Sanaa & Bab Al-Yaman", fee: 700, etaMinutes: 45, isActive: true },
+            { id: "d5", nameAr: "شملان ومذبح وشارع الثلاثين", nameEn: "Shamlan & Madhbah", fee: 800, etaMinutes: 45, isActive: true },
+            { id: "d6", nameAr: "الحصبة وشارع المطار والروضة", nameEn: "Hasaba & Airport Rd", fee: 900, etaMinutes: 50, isActive: true }
+          ] };
+        }
 
-      // 6. Ensure Default Delivery Agents if empty
-      if (this.tables.delivery_agents.length === 0) {
-        this.tables.delivery_agents = [...INITIAL_DELIVERY_AGENTS];
-      }
+        if (this.tables.delivery_agents.length === 0) {
+          this.tables.delivery_agents = [...INITIAL_DELIVERY_AGENTS];
+        }
 
-      this.saveLocal();
+        if (this.tables.coupons.length === 0) {
+          this.tables.coupons = [
+            { code: "GOLD2026", discountPercent: 10, maxDiscount: 2000, minOrderAmount: 2000, isActive: true },
+            { code: "SANAA15", discountPercent: 15, maxDiscount: 3500, minOrderAmount: 5000, isActive: true },
+            { code: "VIPBLACK", discountPercent: 20, maxDiscount: 5000, minOrderAmount: 10000, isActive: true }
+          ];
+        }
 
-      // 5. Ensure Default Coupons if empty
-      if (this.tables.coupons.length === 0) {
-        this.tables.coupons = [
-          { code: "GOLD2026", discountPercent: 10, maxDiscount: 2000, minOrderAmount: 2000, isActive: true },
-          { code: "SANAA15", discountPercent: 15, maxDiscount: 3500, minOrderAmount: 5000, isActive: true },
-          { code: "VIPBLACK", discountPercent: 20, maxDiscount: 5000, minOrderAmount: 10000, isActive: true }
-        ];
+        this.saveLocal();
       }
 
       // 6. Ensure Relational order_items exist for all orders
@@ -936,14 +957,18 @@ class D1DatabaseAccessLayer {
     if (this.isD1Configured()) {
       try {
         const rows = await this.executeCloudflareD1Query("SELECT * FROM products ORDER BY id ASC;");
-        if (Array.isArray(rows) && rows.length > 0) {
+        if (Array.isArray(rows)) {
           const prods = rows.map((r: any) => this.mapD1ProductToProduct(r));
           this.tables.products = prods;
           return prods;
         }
       } catch (e) {
-        console.warn('D1 getProductsAsync error, falling back to cache:', e);
+        console.warn('D1 getProductsAsync error, returning cached D1 state:', e);
       }
+      return this.tables.products;
+    }
+    if (process.env.NODE_ENV === 'production') {
+      return this.tables.products;
     }
     return this.getProducts();
   }
@@ -2149,8 +2174,8 @@ class D1DatabaseAccessLayer {
     if (this.isD1Configured()) {
       try {
         const rows = await this.executeCloudflareD1Query("SELECT * FROM delivery_agents;");
-        if (Array.isArray(rows) && rows.length > 0) {
-          return rows.map((da: any) => ({
+        if (Array.isArray(rows)) {
+          const agents = rows.map((da: any) => ({
             id: da.id,
             name: da.name,
             phone: da.phone,
@@ -2160,10 +2185,16 @@ class D1DatabaseAccessLayer {
             rating: da.rating || 5.0,
             isActive: da.is_available !== undefined ? Boolean(da.is_available) : (da.is_active !== undefined ? Boolean(da.is_active) : true)
           }));
+          this.tables.delivery_agents = agents;
+          return agents;
         }
       } catch (err) {
         console.error('Error fetching delivery_agents from D1:', err);
       }
+      return this.tables.delivery_agents;
+    }
+    if (process.env.NODE_ENV === 'production') {
+      return this.tables.delivery_agents;
     }
     return this.tables.delivery_agents;
   }
@@ -2261,8 +2292,8 @@ class D1DatabaseAccessLayer {
     if (this.isD1Configured()) {
       try {
         const rows = await this.executeCloudflareD1Query("SELECT * FROM coupons;");
-        if (Array.isArray(rows) && rows.length > 0) {
-          return rows.map((cp: any) => ({
+        if (Array.isArray(rows)) {
+          const coupons = rows.map((cp: any) => ({
             code: cp.code,
             discountPercent: cp.discount_percent,
             maxDiscount: cp.max_discount,
@@ -2271,10 +2302,16 @@ class D1DatabaseAccessLayer {
             validUntil: cp.expiry_date || cp.valid_until || undefined,
             usageCount: cp.usage_count || 0
           }));
+          this.tables.coupons = coupons;
+          return coupons;
         }
       } catch (err) {
         console.error('Error fetching coupons from D1:', err);
       }
+      return this.tables.coupons;
+    }
+    if (process.env.NODE_ENV === 'production') {
+      return this.tables.coupons;
     }
     return this.tables.coupons;
   }
