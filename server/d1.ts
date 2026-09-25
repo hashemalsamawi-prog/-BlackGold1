@@ -188,23 +188,25 @@ class D1DatabaseAccessLayer {
           fs.mkdirSync(dataDir, { recursive: true });
         }
 
-      // 1. Seed Categories
-      this.tables.categories = [
-        { id: 'cat-pouches', name_ar: 'العبوات الفاخرة Zipper Lock', name_en: 'Premium Pouches', slug: 'pouches', sort_order: 1, is_active: 1, created_at: new Date().toISOString() },
-        { id: 'cat-wholesale', name_ar: 'التوريد والجملة للمطاعم والمقاهي', name_en: 'Wholesale & B2B', slug: 'wholesale', sort_order: 2, is_active: 1, created_at: new Date().toISOString() },
-        { id: 'cat-local', name_ar: 'فحم بلدي طبيعي من مزارع اليمن', name_en: 'Yemeni Local Charcoal', slug: 'local', sort_order: 3, is_active: 1, created_at: new Date().toISOString() },
-        { id: 'cat-premium', name_ar: 'الفحم الملكي الخاص بالشيشة', name_en: 'Royal Shisha Charcoal', slug: 'premium', sort_order: 4, is_active: 1, created_at: new Date().toISOString() },
-        { id: 'cat-bbq', name_ar: 'فحم الشواء والمشاوي عالي الحرارة', name_en: 'High-Heat BBQ Charcoal', slug: 'bbq', sort_order: 5, is_active: 1, created_at: new Date().toISOString() },
-        { id: 'cat-incense', name_ar: 'أقراص البخور والمباخر سريعة الاشتعال', name_en: 'Incense Charcoal Tablets', slug: 'incense', sort_order: 6, is_active: 1, created_at: new Date().toISOString() }
-      ];
-
-      // 2. In production or when Cloudflare D1 credentials are provided, use Cloudflare D1 as PRIMARY data source
       const hasD1Credentials = Boolean(
         CLOUDFLARE_CONFIG.accountId && 
         CLOUDFLARE_CONFIG.apiToken && 
         CLOUDFLARE_CONFIG.databaseId
       );
 
+      // 1. Seed Categories strictly in development when D1 credentials are not present
+      if (process.env.NODE_ENV !== 'production' && !hasD1Credentials) {
+        this.tables.categories = [
+          { id: 'cat-pouches', name_ar: 'العبوات الفاخرة Zipper Lock', name_en: 'Premium Pouches', slug: 'pouches', sort_order: 1, is_active: 1, created_at: new Date().toISOString() },
+          { id: 'cat-wholesale', name_ar: 'التوريد والجملة للمطاعم والمقاهي', name_en: 'Wholesale & B2B', slug: 'wholesale', sort_order: 2, is_active: 1, created_at: new Date().toISOString() },
+          { id: 'cat-local', name_ar: 'فحم بلدي طبيعي من مزارع اليمن', name_en: 'Yemeni Local Charcoal', slug: 'local', sort_order: 3, is_active: 1, created_at: new Date().toISOString() },
+          { id: 'cat-premium', name_ar: 'الفحم الملكي الخاص بالشيشة', name_en: 'Royal Shisha Charcoal', slug: 'premium', sort_order: 4, is_active: 1, created_at: new Date().toISOString() },
+          { id: 'cat-bbq', name_ar: 'فحم الشواء والمشاوي عالي الحرارة', name_en: 'High-Heat BBQ Charcoal', slug: 'bbq', sort_order: 5, is_active: 1, created_at: new Date().toISOString() },
+          { id: 'cat-incense', name_ar: 'أقراص البخور والمباخر سريعة الاشتعال', name_en: 'Incense Charcoal Tablets', slug: 'incense', sort_order: 6, is_active: 1, created_at: new Date().toISOString() }
+        ];
+      }
+
+      // 2. In production or when Cloudflare D1 credentials are provided, use Cloudflare D1 as PRIMARY data source
       if (hasD1Credentials) {
         console.log('⚡ Cloudflare D1 is active as PRIMARY authoritative database. Fetching remote tables...');
         const syncOk = await this.syncFromCloudflareD1();
@@ -212,7 +214,12 @@ class D1DatabaseAccessLayer {
           console.error('CRITICAL: Cloudflare D1 initial sync failed in production environment!');
           throw new Error('فشل المزامنة الأولية مع قاعدة بيانات Cloudflare D1 في بيئة الإنتاج');
         }
-      } else if (process.env.NODE_ENV !== 'production' && fs.existsSync(this.localDbPath)) {
+      } else {
+        if (process.env.NODE_ENV === 'production') {
+          console.error('CRITICAL: Cloudflare D1 credentials missing in production environment!');
+          throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
+        }
+        if (fs.existsSync(this.localDbPath)) {
         // Fallback to local db.json ONLY in local development when D1 credentials are not present
         try {
           const raw = fs.readFileSync(this.localDbPath, 'utf-8');
@@ -260,6 +267,7 @@ class D1DatabaseAccessLayer {
           console.error('Error reading legacy db.json:', err);
         }
       }
+    }
 
       // 3. Ensure Default Fallback Data ONLY in local development when D1 is NOT configured
       if (!hasD1Credentials && process.env.NODE_ENV !== 'production') {
@@ -359,7 +367,9 @@ class D1DatabaseAccessLayer {
       console.log('✅ Cloudflare D1 Database Access Layer Initialized Successfully. Database ID:', CLOUDFLARE_CONFIG.databaseId);
     } catch (e) {
       console.error('Error during D1 DAL initialization:', e);
-    } finally {
+      if (process.env.NODE_ENV === 'production') {
+        throw e;
+      }
       this.isInitialized = true;
     }
   })();
@@ -372,27 +382,53 @@ class D1DatabaseAccessLayer {
    */
   public ensureDefaultUsers() {
     const hasOwner = this.tables.users.some(u => u.role === 'owner');
+    const envAdminPhone = process.env.ADMIN_PHONE ? normalizeDigits(process.env.ADMIN_PHONE.trim()) : '';
+    const envAdminName = process.env.ADMIN_NAME ? process.env.ADMIN_NAME.trim() : 'مالك المتجر';
     const envAdminPin = process.env.ADMIN_PIN ? normalizeDigits(process.env.ADMIN_PIN.trim()) : '';
 
     if (!hasOwner) {
-      const defaultOwner: UserAccount = {
-        id: 'usr-owner-hashem',
-        name: 'هاشم السماوي (المالك)',
-        phone: '777000111',
-        role: 'owner',
-        createdAt: new Date().toISOString()
-      };
-      if (envAdminPin) {
-        defaultOwner.pinHash = hashSecret(envAdminPin);
-      }
-      this.tables.users.push(defaultOwner);
-      this.saveLocal();
+      if (process.env.NODE_ENV === 'production') {
+        // In production, only provision owner if explicit ADMIN_PHONE environment variable is configured
+        if (envAdminPhone) {
+          const ownerAccount: UserAccount = {
+            id: `usr-owner-${envAdminPhone}`,
+            name: envAdminName,
+            phone: envAdminPhone,
+            role: 'owner',
+            createdAt: new Date().toISOString()
+          };
+          if (envAdminPin) {
+            ownerAccount.pinHash = hashSecret(envAdminPin);
+          }
+          this.tables.users.push(ownerAccount);
+          if (this.isD1Configured()) {
+            this.executeCloudflareD1Query(
+              "INSERT OR IGNORE INTO users (id, name, phone, role, pin_hash, created_at) VALUES (?, ?, ?, ?, ?, ?);",
+              [ownerAccount.id, ownerAccount.name, ownerAccount.phone, ownerAccount.role, ownerAccount.pinHash || null, ownerAccount.createdAt]
+            ).catch((err) => { console.warn('Could not sync env owner to D1:', err); });
+          }
+        }
+      } else {
+        // Development only fallback
+        const defaultOwner: UserAccount = {
+          id: 'usr-owner-hashem',
+          name: 'هاشم السماوي (المالك)',
+          phone: envAdminPhone || '777000111',
+          role: 'owner',
+          createdAt: new Date().toISOString()
+        };
+        if (envAdminPin) {
+          defaultOwner.pinHash = hashSecret(envAdminPin);
+        }
+        this.tables.users.push(defaultOwner);
+        this.saveLocal();
 
-      if (CLOUDFLARE_CONFIG.accountId && CLOUDFLARE_CONFIG.apiToken && CLOUDFLARE_CONFIG.databaseId) {
-        this.executeCloudflareD1Query(
-          "INSERT OR IGNORE INTO users (id, name, phone, role, pin_hash, created_at) VALUES (?, ?, ?, ?, ?, ?);",
-          [defaultOwner.id, defaultOwner.name, defaultOwner.phone, defaultOwner.role, defaultOwner.pinHash || null, defaultOwner.createdAt]
-        ).catch(() => {});
+        if (this.isD1Configured()) {
+          this.executeCloudflareD1Query(
+            "INSERT OR IGNORE INTO users (id, name, phone, role, pin_hash, created_at) VALUES (?, ?, ?, ?, ?, ?);",
+            [defaultOwner.id, defaultOwner.name, defaultOwner.phone, defaultOwner.role, defaultOwner.pinHash || null, defaultOwner.createdAt]
+          ).catch(() => {});
+        }
       }
     } else if (envAdminPin) {
       // Sync environment ADMIN_PIN if owner user has no pin/password hash yet
@@ -400,7 +436,7 @@ class D1DatabaseAccessLayer {
       if (owner && !owner.pinHash && !owner.passwordHash) {
         owner.pinHash = hashSecret(envAdminPin);
         this.saveLocal();
-        if (CLOUDFLARE_CONFIG.accountId && CLOUDFLARE_CONFIG.apiToken && CLOUDFLARE_CONFIG.databaseId) {
+        if (this.isD1Configured()) {
           this.executeCloudflareD1Query(
             "UPDATE users SET pin_hash = ? WHERE id = ?;",
             [owner.pinHash, owner.id]
@@ -419,6 +455,9 @@ class D1DatabaseAccessLayer {
    */
   public async syncFromCloudflareD1(): Promise<boolean> {
     if (!this.isD1Configured()) {
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
+      }
       return false;
     }
 
@@ -428,284 +467,240 @@ class D1DatabaseAccessLayer {
         "CREATE TRIGGER IF NOT EXISTS prevent_negative_stock BEFORE UPDATE ON products FOR EACH ROW WHEN NEW.stock < 0 BEGIN SELECT RAISE(ABORT, 'Insufficient stock: product stock cannot be negative'); END;"
       );
 
-      // 1. Categories
+      // 1. Categories (Authoritative D1)
       const categoriesResult = await this.executeCloudflareD1Query("SELECT * FROM categories ORDER BY sort_order ASC;");
-      if (Array.isArray(categoriesResult) && categoriesResult.length > 0) {
-        this.tables.categories = categoriesResult;
-      }
+      this.tables.categories = Array.isArray(categoriesResult) ? categoriesResult : [];
 
-      // 2. Products
+      // 2. Products (Authoritative D1)
       const productsResult = await this.executeCloudflareD1Query("SELECT * FROM products;");
-      if (Array.isArray(productsResult) && productsResult.length > 0) {
-        this.tables.products = productsResult.map((r: any) => {
-          const parsedImages = typeof r.images === 'string' ? JSON.parse(r.images || '[]') : (r.images || []);
-          const primaryImg = parsedImages[0] || r.image || '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg';
-          return {
-            id: r.id,
-            nameAr: r.name_ar,
-            nameEn: r.name_en,
-            category: r.category,
-            price: r.price,
-            originalPrice: r.original_price,
-            discountPercent: r.discount_percent,
-            descriptionAr: r.description_ar,
-            descriptionEn: r.description_en,
-            origin: r.origin,
-            burnDurationHours: r.burn_duration_hours,
-            ashPercentage: r.ash_percentage,
-            moisture: r.moisture,
-            rating: r.rating,
-            reviewCount: r.review_count,
-            image: primaryImg,
-            images: parsedImages.length > 0 ? parsedImages : [primaryImg],
-            specs: typeof r.specs === 'string' ? JSON.parse(r.specs || '[]') : (r.specs || []),
-            weightOptions: typeof r.weight_options === 'string' ? JSON.parse(r.weight_options || '[]') : (r.weight_options || []),
-            isFeatured: Boolean(r.is_featured),
-            isBestSeller: Boolean(r.is_best_seller),
-            stock: r.stock
-          };
-        });
-
-        for (const p of this.tables.products) {
-          this.tables.inventory.set(p.id, {
-            currentStock: p.stock,
-            reservedStock: 0,
-            minThreshold: 15,
-            lastCountedAt: new Date().toISOString()
-          });
-        }
-      }
-
-      // 3. Orders
-      const ordersResult = await this.executeCloudflareD1Query("SELECT * FROM orders ORDER BY created_at DESC;");
-      if (Array.isArray(ordersResult) && ordersResult.length > 0) {
-        this.tables.orders = ordersResult.map((r: any) => ({
+      this.tables.products = Array.isArray(productsResult) ? productsResult.map((r: any) => {
+        const parsedImages = typeof r.images === 'string' ? JSON.parse(r.images || '[]') : (r.images || []);
+        const primaryImg = parsedImages[0] || r.image || '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg';
+        return {
           id: r.id,
-          orderNumber: r.order_number,
-          customerName: r.customer_name,
-          customerPhone: r.customer_phone,
-          customerAddress: r.delivery_address,
-          address: {
-            id: 'addr-d1',
-            title: r.delivery_district,
-            district: r.delivery_district,
-            street: r.delivery_address,
-            phone: r.customer_phone,
-            isDefault: true
-          },
-          items: typeof r.items_json === 'string' ? JSON.parse(r.items_json || '[]') : (r.items_json || []),
-          subtotal: r.subtotal,
-          shippingFee: r.shipping_fee || 0,
-          deliveryFee: r.shipping_fee || 0,
-          discount: r.discount,
-          total: r.total,
-          totalAmount: r.total,
+          nameAr: r.name_ar,
+          nameEn: r.name_en,
+          category: r.category,
+          price: r.price,
+          originalPrice: r.original_price,
+          discountPercent: r.discount_percent,
+          descriptionAr: r.description_ar,
+          descriptionEn: r.description_en,
+          origin: r.origin,
+          burnDurationHours: r.burn_duration_hours,
+          ashPercentage: r.ash_percentage,
+          moisture: r.moisture,
+          rating: r.rating,
+          reviewCount: r.review_count,
+          image: primaryImg,
+          images: parsedImages.length > 0 ? parsedImages : [primaryImg],
+          specs: typeof r.specs === 'string' ? JSON.parse(r.specs || '[]') : (r.specs || []),
+          weightOptions: typeof r.weight_options === 'string' ? JSON.parse(r.weight_options || '[]') : (r.weight_options || []),
+          isFeatured: Boolean(r.is_featured),
+          isBestSeller: Boolean(r.is_best_seller),
+          stock: r.stock
+        };
+      }) : [];
+
+      this.tables.inventory.clear();
+      for (const p of this.tables.products) {
+        this.tables.inventory.set(p.id, {
+          currentStock: p.stock,
+          reservedStock: 0,
+          minThreshold: 15,
+          lastCountedAt: new Date().toISOString()
+        });
+      }
+
+      // 3. Orders (Authoritative D1)
+      const ordersResult = await this.executeCloudflareD1Query("SELECT * FROM orders ORDER BY created_at DESC;");
+      this.tables.orders = Array.isArray(ordersResult) ? ordersResult.map((r: any) => ({
+        id: r.id,
+        orderNumber: r.order_number,
+        customerName: r.customer_name,
+        customerPhone: r.customer_phone,
+        customerAddress: r.delivery_address,
+        address: {
+          id: 'addr-d1',
+          title: r.delivery_district,
           district: r.delivery_district,
-          paymentMethod: r.payment_method,
-          status: r.status,
-          date: r.created_at,
-          createdAt: r.created_at,
-          driverId: r.driver_id || undefined,
-          driverName: r.driver_name || undefined,
-          driverPhone: r.driver_phone || undefined,
-          driverNotes: r.driver_notes || undefined,
-          timeline: typeof r.timeline_json === 'string' ? JSON.parse(r.timeline_json || '[]') : (r.timeline_json || undefined),
-          isStockRolledBack: Boolean(r.is_stock_rolled_back),
-          cancelledAt: r.cancelled_at || undefined,
-          completedAt: r.completed_at || undefined
-        }));
+          street: r.delivery_address,
+          phone: r.customer_phone,
+          isDefault: true
+        },
+        items: typeof r.items_json === 'string' ? JSON.parse(r.items_json || '[]') : (r.items_json || []),
+        subtotal: r.subtotal,
+        shippingFee: r.shipping_fee || 0,
+        deliveryFee: r.shipping_fee || 0,
+        discount: r.discount,
+        total: r.total,
+        totalAmount: r.total,
+        district: r.delivery_district,
+        paymentMethod: r.payment_method,
+        status: r.status,
+        date: r.created_at,
+        createdAt: r.created_at,
+        driverId: r.driver_id || undefined,
+        driverName: r.driver_name || undefined,
+        driverPhone: r.driver_phone || undefined,
+        driverNotes: r.driver_notes || undefined,
+        timeline: typeof r.timeline_json === 'string' ? JSON.parse(r.timeline_json || '[]') : (r.timeline_json || undefined),
+        isStockRolledBack: Boolean(r.is_stock_rolled_back),
+        cancelledAt: r.cancelled_at || undefined,
+        completedAt: r.completed_at || undefined
+      })) : [];
+
+      // 4. Relational Order Items (Authoritative D1)
+      const itemsResult = await this.executeCloudflareD1Query("SELECT * FROM order_items;");
+      this.tables.order_items = Array.isArray(itemsResult) ? itemsResult.map((it: any) => ({
+        id: it.id,
+        orderId: it.order_id,
+        productId: it.product_id,
+        productNameAr: it.product_name_ar,
+        productNameEn: it.product_name_en,
+        weightOption: it.weight_option,
+        quantity: it.quantity,
+        unitPrice: it.unit_price,
+        totalPrice: it.total_price,
+        createdAt: it.created_at
+      })) : [];
+
+      // 5. Customers (Authoritative D1)
+      const custResult = await this.executeCloudflareD1Query("SELECT * FROM customers;");
+      this.tables.customers = Array.isArray(custResult) ? custResult.map((c: any) => ({
+        id: c.id,
+        name: c.name,
+        phone: c.phone,
+        district: c.district,
+        totalOrders: c.total_orders || 0,
+        totalSpent: c.total_spent || 0,
+        loyaltyPoints: c.loyalty_points || 0,
+        createdAt: c.created_at || new Date().toISOString(),
+        updatedAt: c.updated_at || new Date().toISOString()
+      })) : [];
+
+      // 6. Users & Owner (Authoritative D1)
+      const usersResult = await this.executeCloudflareD1Query("SELECT * FROM users;");
+      this.tables.users = Array.isArray(usersResult) ? usersResult.map((u: any) => ({
+        id: u.id,
+        name: u.name,
+        phone: u.phone,
+        email: u.email || undefined,
+        role: u.role,
+        passwordHash: u.password_hash || undefined,
+        pinHash: u.pin_hash || undefined,
+        createdAt: u.created_at || new Date().toISOString(),
+        lastLogin: u.last_login || undefined
+      })) : [];
+
+      // 7. Inventory Logs (Authoritative D1)
+      const logsResult = await this.executeCloudflareD1Query("SELECT * FROM inventory_logs ORDER BY created_at DESC LIMIT 500;");
+      this.tables.inventory_logs = Array.isArray(logsResult) ? logsResult.map((l: any) => ({
+        id: l.id,
+        productId: l.product_id,
+        productName: l.product_name,
+        type: l.type,
+        quantity: l.quantity,
+        previousStock: l.previous_stock,
+        newStock: l.new_stock,
+        reason: l.reason,
+        orderId: l.order_id || undefined,
+        performedBy: l.performed_by,
+        createdAt: l.created_at
+      })) : [];
+
+      // 8. Delivery Agents (Authoritative D1)
+      const daResult = await this.executeCloudflareD1Query("SELECT * FROM delivery_agents;");
+      this.tables.delivery_agents = Array.isArray(daResult) ? daResult.map((da: any) => ({
+        id: da.id,
+        name: da.name,
+        phone: da.phone,
+        vehicleType: da.vehicle_type || da.vehicle || 'motorcycle',
+        assignedDistricts: typeof da.assigned_districts === 'string' ? JSON.parse(da.assigned_districts || '[]') : (da.assigned_districts || []),
+        completedOrdersCount: da.total_delivered_count || da.completed_orders_count || 0,
+        rating: da.rating || 5.0,
+        isActive: da.is_available !== undefined ? Boolean(da.is_available) : (da.is_active !== undefined ? Boolean(da.is_active) : true)
+      })) : [];
+
+      // 9. Coupons (Authoritative D1)
+      const couponResult = await this.executeCloudflareD1Query("SELECT * FROM coupons;");
+      this.tables.coupons = Array.isArray(couponResult) ? couponResult.map((cp: any) => ({
+        code: cp.code,
+        discountPercent: cp.discount_percent,
+        maxDiscount: cp.max_discount,
+        minOrderAmount: cp.min_order_amount,
+        isActive: Boolean(cp.is_active),
+        validUntil: cp.valid_until || undefined,
+        usageCount: cp.usage_count || 0,
+        maxUses: cp.max_uses !== undefined && cp.max_uses !== null ? Number(cp.max_uses) : undefined
+      })) : [];
+
+      // 10. Reviews (Authoritative D1)
+      const revResult = await this.executeCloudflareD1Query("SELECT * FROM reviews ORDER BY created_at DESC;");
+      this.tables.reviews = Array.isArray(revResult) ? revResult.map((rv: any) => ({
+        id: rv.id,
+        productId: rv.product_id,
+        userName: rv.customer_name || rv.user_name || 'عميل المتجر',
+        userPhone: rv.customer_phone || rv.user_phone || undefined,
+        rating: Number(rv.rating || 5),
+        comment: rv.comment || '',
+        verifiedPurchase: Boolean(rv.is_verified ?? rv.verified_purchase),
+        date: rv.created_at
+      })) : [];
+
+      // 11. Store Settings (Authoritative D1)
+      const stResult = await this.executeCloudflareD1Query("SELECT * FROM store_settings WHERE id = 'default_settings';");
+      if (Array.isArray(stResult) && stResult.length > 0) {
+        const st = stResult[0];
+        const districts = typeof st.delivery_districts === 'string'
+          ? JSON.parse(st.delivery_districts || '[]')
+          : (st.delivery_districts || this.tables.store_settings.deliveryDistricts);
+
+        this.tables.store_settings = {
+          ...this.tables.store_settings,
+          storeNameAr: st.store_name_ar || this.tables.store_settings.storeNameAr,
+          storeNameEn: st.store_name_en || this.tables.store_settings.storeNameEn,
+          sloganAr: st.slogan_ar || this.tables.store_settings.sloganAr,
+          logoText: st.logo_text || this.tables.store_settings.logoText,
+          customLogoUrl: st.custom_logo_url || this.tables.store_settings.customLogoUrl,
+          topBannerNoticeAr: st.top_banner_notice_ar || this.tables.store_settings.topBannerNoticeAr,
+          topBannerNoticeEn: st.top_banner_notice_en || this.tables.store_settings.topBannerNoticeEn,
+          whatsappPhone: st.whatsapp_phone || this.tables.store_settings.whatsappPhone,
+          whatsappNumber: st.whatsapp_phone || this.tables.store_settings.whatsappNumber,
+          supportPhone: st.call_phone || this.tables.store_settings.supportPhone,
+          supportEmail: st.contact_email || this.tables.store_settings.supportEmail,
+          freeDeliveryThreshold: Number(st.free_delivery_threshold || this.tables.store_settings.freeDeliveryThreshold),
+          freeShippingThreshold: Number(st.free_delivery_threshold || this.tables.store_settings.freeShippingThreshold),
+          defaultShippingFee: st.default_delivery_fee || this.tables.store_settings.defaultShippingFee,
+          isOrderingEnabled: st.is_store_open !== undefined ? Boolean(st.is_store_open) : true,
+          deliveryDistricts: districts
+        };
       }
 
-      // 4. Relational Order Items
-      try {
-        const itemsResult = await this.executeCloudflareD1Query("SELECT * FROM order_items;");
-        if (Array.isArray(itemsResult) && itemsResult.length > 0) {
-          this.tables.order_items = itemsResult.map((it: any) => ({
-            id: it.id,
-            orderId: it.order_id,
-            productId: it.product_id,
-            productNameAr: it.product_name_ar,
-            productNameEn: it.product_name_en,
-            weightOption: it.weight_option,
-            quantity: it.quantity,
-            unitPrice: it.unit_price,
-            totalPrice: it.total_price,
-            createdAt: it.created_at
-          }));
-        }
-      } catch (itemsErr) {
-        console.warn('D1 remote order_items sync warning:', itemsErr);
-      }
-
-      // 5. Customers
-      try {
-        const custResult = await this.executeCloudflareD1Query("SELECT * FROM customers;");
-        if (Array.isArray(custResult) && custResult.length > 0) {
-          this.tables.customers = custResult.map((c: any) => ({
-            id: c.id,
-            name: c.name,
-            phone: c.phone,
-            district: c.district,
-            totalOrders: c.total_orders || 0,
-            totalSpent: c.total_spent || 0,
-            loyaltyPoints: c.loyalty_points || 0,
-            createdAt: c.created_at || new Date().toISOString(),
-            updatedAt: c.updated_at || new Date().toISOString()
-          }));
-        }
-      } catch (custErr) {
-        console.warn('D1 remote customers sync warning:', custErr);
-      }
-
-      // 6. Users & Owner
-      try {
-        const usersResult = await this.executeCloudflareD1Query("SELECT * FROM users;");
-        if (Array.isArray(usersResult) && usersResult.length > 0) {
-          this.tables.users = usersResult.map((u: any) => ({
-            id: u.id,
-            name: u.name,
-            phone: u.phone,
-            email: u.email || undefined,
-            role: u.role,
-            passwordHash: u.password_hash || undefined,
-            pinHash: u.pin_hash || undefined,
-            createdAt: u.created_at || new Date().toISOString(),
-            lastLogin: u.last_login || undefined
-          }));
-        }
-      } catch (userErr) {
-        console.warn('D1 remote users sync warning:', userErr);
-      }
-
-      // 7. Inventory Logs
-      try {
-        const logsResult = await this.executeCloudflareD1Query("SELECT * FROM inventory_logs ORDER BY created_at DESC LIMIT 500;");
-        if (Array.isArray(logsResult) && logsResult.length > 0) {
-          this.tables.inventory_logs = logsResult.map((l: any) => ({
-            id: l.id,
-            productId: l.product_id,
-            productName: l.product_name,
-            type: l.type,
-            quantity: l.quantity,
-            previousStock: l.previous_stock,
-            newStock: l.new_stock,
-            reason: l.reason,
-            orderId: l.order_id || undefined,
-            performedBy: l.performed_by,
-            createdAt: l.created_at
-          }));
-        }
-      } catch (logErr) {
-        console.warn('D1 remote inventory_logs sync warning:', logErr);
-      }
-
-      // 8. Delivery Agents
-      try {
-        const daResult = await this.executeCloudflareD1Query("SELECT * FROM delivery_agents;");
-        if (Array.isArray(daResult) && daResult.length > 0) {
-          this.tables.delivery_agents = daResult.map((da: any) => ({
-            id: da.id,
-            name: da.name,
-            phone: da.phone,
-            vehicleType: da.vehicle_type || da.vehicle || 'motorcycle',
-            assignedDistricts: typeof da.assigned_districts === 'string' ? JSON.parse(da.assigned_districts || '[]') : (da.assigned_districts || []),
-            completedOrdersCount: da.total_delivered_count || da.completed_orders_count || 0,
-            rating: da.rating || 5.0,
-            isActive: da.is_available !== undefined ? Boolean(da.is_available) : (da.is_active !== undefined ? Boolean(da.is_active) : true)
-          }));
-        }
-      } catch (daErr) {
-        console.warn('D1 remote delivery_agents sync warning:', daErr);
-      }
-
-      // 9. Coupons
-      try {
-        const couponResult = await this.executeCloudflareD1Query("SELECT * FROM coupons;");
-        if (Array.isArray(couponResult) && couponResult.length > 0) {
-          this.tables.coupons = couponResult.map((cp: any) => ({
-            code: cp.code,
-            discountPercent: cp.discount_percent,
-            maxDiscount: cp.max_discount,
-            minOrderAmount: cp.min_order_amount,
-            isActive: Boolean(cp.is_active),
-            expiryDate: cp.expiry_date || undefined,
-            usageCount: cp.usage_count || 0
-          }));
-        }
-      } catch (cpErr) {
-        console.warn('D1 remote coupons sync warning:', cpErr);
-      }
-
-      // 10. Reviews
-      try {
-        const revResult = await this.executeCloudflareD1Query("SELECT * FROM reviews ORDER BY created_at DESC;");
-        if (Array.isArray(revResult) && revResult.length > 0) {
-          this.tables.reviews = revResult.map((rv: any) => ({
-            id: rv.id,
-            productId: rv.product_id,
-            userName: rv.user_name,
-            userPhone: rv.user_phone || undefined,
-            rating: rv.rating,
-            comment: rv.comment,
-            verifiedPurchase: Boolean(rv.verified_purchase),
-            date: rv.created_at
-          }));
-        }
-      } catch (rvErr) {
-        console.warn('D1 remote reviews sync warning:', rvErr);
-      }
-
-      // 11. Store Settings
-      try {
-        const stResult = await this.executeCloudflareD1Query("SELECT * FROM store_settings WHERE id = 'default_settings';");
-        if (Array.isArray(stResult) && stResult.length > 0) {
-          const st = stResult[0];
-          this.tables.store_settings = {
-            ...this.tables.store_settings,
-            storeNameAr: st.store_name_ar || this.tables.store_settings.storeNameAr,
-            storeNameEn: st.store_name_en || this.tables.store_settings.storeNameEn,
-            whatsappPhone: st.whatsapp_phone || this.tables.store_settings.whatsappPhone,
-            whatsappNumber: st.whatsapp_phone || this.tables.store_settings.whatsappNumber,
-            supportPhone: st.phone || this.tables.store_settings.supportPhone,
-            supportEmail: st.email || this.tables.store_settings.supportEmail,
-            freeDeliveryThreshold: st.free_delivery_threshold || this.tables.store_settings.freeDeliveryThreshold,
-            freeShippingThreshold: st.free_delivery_threshold || this.tables.store_settings.freeShippingThreshold,
-            defaultShippingFee: st.default_delivery_fee || this.tables.store_settings.defaultShippingFee,
-            isOrderingEnabled: st.is_delivery_available !== undefined ? Boolean(st.is_delivery_available) : true,
-            deliveryDistricts: typeof st.delivery_districts_json === 'string' ? JSON.parse(st.delivery_districts_json || '[]') : (st.delivery_districts_json || this.tables.store_settings.deliveryDistricts)
-          };
-        }
-      } catch (stErr) {
-        console.warn('D1 remote store_settings sync warning:', stErr);
-      }
-
-      // 12. Gallery Items
-      try {
-        const galResult = await this.executeCloudflareD1Query("SELECT * FROM gallery_items ORDER BY sort_order ASC, created_at DESC;");
-        if (Array.isArray(galResult)) {
-          this.tables.gallery_items = galResult.map((g: any) => ({
-            id: g.id,
-            titleAr: g.title_ar,
-            titleEn: g.title_en || undefined,
-            image: g.image_url || '',
-            imageUrl: g.image_url,
-            category: g.category || 'factory',
-            caption: g.caption || undefined,
-            sortOrder: g.sort_order || 0,
-            isActive: g.is_active !== undefined ? Boolean(g.is_active) : true,
-            createdAt: g.created_at
-          }));
-        }
-      } catch (galErr) {
-        console.warn('D1 remote gallery_items sync warning:', galErr);
-      }
+      // 12. Gallery Items (Authoritative D1)
+      const galResult = await this.executeCloudflareD1Query("SELECT * FROM gallery_items ORDER BY sort_order ASC, created_at DESC;");
+      this.tables.gallery_items = Array.isArray(galResult) ? galResult.map((g: any) => ({
+        id: g.id,
+        titleAr: g.title_ar,
+        titleEn: g.title_en || undefined,
+        image: g.image_url || '',
+        imageUrl: g.image_url,
+        category: g.category || 'factory',
+        caption: g.caption || undefined,
+        sortOrder: g.sort_order || 0,
+        isActive: g.is_active !== undefined ? Boolean(g.is_active) : true,
+        createdAt: g.created_at
+      })) : [];
 
       this.ensureDefaultUsers();
 
       console.log('✅ Cloudflare D1 primary sync completed successfully for all operational tables.');
       return true;
     } catch (e) {
-      console.warn('D1 remote sync warning:', e);
+      console.error('CRITICAL: D1 remote sync failed on one or more tables:', e);
+      if (process.env.NODE_ENV === 'production') {
+        throw e;
+      }
       return false;
     }
   }
@@ -777,24 +772,25 @@ class D1DatabaseAccessLayer {
   }
 
   /**
-   * Execute query directly on Cloudflare D1 HTTP REST API if token, account & database ID are provided
+   * Execute query directly on Cloudflare D1 HTTP REST API.
+   * Throws an explicit error on failure or when D1 is unconfigured in production.
+   * Returns empty array if query succeeded and returned no rows.
    */
-  public async executeCloudflareD1Query(sql: string, params: any[] = []): Promise<any> {
+  public async executeCloudflareD1Query(sql: string, params: any[] = []): Promise<any[]> {
     if (!this.isD1Configured()) {
-      return null;
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
+      }
+      throw new Error('Cloudflare D1 is not configured');
     }
 
-    try {
-      const json = await this.executeCloudflareD1Raw(sql, params);
-      if (!json || json.success === false || !json.result) {
-        console.error('Cloudflare D1 HTTP query failed:', json?.errors || 'Unknown error');
-        return null;
-      }
-      return json.result?.[0]?.results ?? [];
-    } catch (err) {
-      console.warn('Cloudflare D1 HTTP query warning:', err);
-      return null;
+    const json = await this.executeCloudflareD1Raw(sql, params);
+    if (!json || json.success === false || !json.result) {
+      const errMsg = (json?.errors || []).map((e: any) => e.message || JSON.stringify(e)).join('; ') || 'D1 query failed';
+      console.error('Cloudflare D1 HTTP query failed:', errMsg, 'SQL:', sql);
+      throw new Error(`فشل استعلام Cloudflare D1: ${errMsg}`);
     }
+    return json.result?.[0]?.results ?? [];
   }
 
   private saveLocal() {
@@ -890,6 +886,8 @@ class D1DatabaseAccessLayer {
       customerName: r.customer_name || r.customerName || '',
       customerPhone: r.customer_phone || r.customerPhone || '',
       paymentMethod: r.payment_method || r.paymentMethod || 'cash',
+      paymentStatus: r.payment_status || r.paymentStatus || 'pending',
+      couponCode: r.coupon_code || r.couponCode || undefined,
       notes: r.notes || '',
       driverNotes: r.driver_notes || '',
       driverId: r.driver_id || '',
@@ -937,8 +935,9 @@ class D1DatabaseAccessLayer {
       maxDiscount: r.max_discount ? Number(r.max_discount) : undefined,
       minOrderAmount: Number(r.min_order_amount || 0),
       isActive: Boolean(r.is_active),
-      validUntil: r.expiry_date || r.valid_until || undefined,
-      usageCount: Number(r.usage_count || 0)
+      validUntil: r.valid_until || undefined,
+      usageCount: Number(r.usage_count || 0),
+      maxUses: r.max_uses !== undefined && r.max_uses !== null ? Number(r.max_uses) : undefined
     };
   }
 
@@ -946,10 +945,11 @@ class D1DatabaseAccessLayer {
     return {
       id: r.id,
       productId: r.product_id,
-      userName: r.user_name,
+      userName: r.customer_name || r.user_name || 'عميل المتجر',
+      userPhone: r.customer_phone || r.user_phone || undefined,
       rating: Number(r.rating || 5),
       comment: r.comment || '',
-      verifiedPurchase: Boolean(r.verified_purchase),
+      verifiedPurchase: Boolean(r.is_verified ?? r.verified_purchase),
       date: r.created_at
     };
   }
@@ -1083,7 +1083,21 @@ class D1DatabaseAccessLayer {
         ]
       );
       const created = await this.findProductByIdAsync(product.id);
-      if (created) return created;
+      if (created) {
+        // Keep inventory table in sync with new product
+        await this.executeCloudflareD1Query(
+          `INSERT INTO inventory (product_id, current_stock, min_threshold, updated_at) VALUES (?, ?, 10, datetime('now')) ` +
+          `ON CONFLICT(product_id) DO UPDATE SET current_stock = excluded.current_stock, updated_at = datetime('now');`,
+          [product.id, product.stock ?? 100]
+        );
+        this.tables.products.push(created);
+        return created;
+      }
+      throw new Error('فشل تأكيد إضافة المنتج في قاعدة بيانات Cloudflare D1');
+    }
+
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
     }
 
     return this.addProduct(product);
@@ -1113,19 +1127,65 @@ class D1DatabaseAccessLayer {
       const current = await this.findProductByIdAsync(id);
       if (!current) return null;
 
-      const finalNameAr = updates.nameAr || current.nameAr;
-      const finalPrice = updates.price !== undefined ? updates.price : current.price;
-      const finalOrigPrice = updates.originalPrice !== undefined ? updates.originalPrice : (current.originalPrice || finalPrice);
+      const finalNameAr = updates.nameAr !== undefined ? updates.nameAr : current.nameAr;
+      const finalNameEn = updates.nameEn !== undefined ? updates.nameEn : (current.nameEn || '');
+      const finalCategory = updates.category !== undefined ? updates.category : (current.category || 'pouches');
+      const finalPrice = updates.price !== undefined ? Number(updates.price) : current.price;
+      const finalOrigPrice = updates.originalPrice !== undefined ? Number(updates.originalPrice) : (current.originalPrice || finalPrice);
+      const finalDiscount = updates.discountPercent !== undefined ? Number(updates.discountPercent) : (current.discountPercent || 0);
       const finalDescAr = updates.descriptionAr !== undefined ? updates.descriptionAr : current.descriptionAr;
-      const finalStock = updates.stock !== undefined ? updates.stock : current.stock;
-      const finalImages = updates.images || current.images;
+      const finalDescEn = updates.descriptionEn !== undefined ? updates.descriptionEn : (current.descriptionEn || '');
+      const finalStock = updates.stock !== undefined ? Math.max(0, Number(updates.stock)) : current.stock;
+      
+      let finalImages = current.images || [];
+      if (updates.images && updates.images.length > 0) {
+        finalImages = updates.images;
+      } else if (updates.image) {
+        finalImages = [updates.image, ...(current.images?.filter(img => img !== updates.image) || [])];
+      }
+
+      const finalWeightOptions = updates.weightOptions !== undefined ? updates.weightOptions : (current.weightOptions || []);
+      const finalSpecs = updates.specs !== undefined ? updates.specs : (current.specs || []);
+      const finalIsFeatured = updates.isFeatured !== undefined ? (updates.isFeatured ? 1 : 0) : (current.isFeatured ? 1 : 0);
+      const finalIsBestSeller = updates.isBestSeller !== undefined ? (updates.isBestSeller ? 1 : 0) : (current.isBestSeller ? 1 : 0);
 
       await this.executeCloudflareD1Query(
-        "UPDATE products SET name_ar = ?, price = ?, original_price = ?, description_ar = ?, stock = ?, images = ?, updated_at = datetime('now') WHERE id = ?;",
-        [finalNameAr, finalPrice, finalOrigPrice, finalDescAr, finalStock, JSON.stringify(finalImages), id]
+        `UPDATE products SET ` +
+        `name_ar = ?, name_en = ?, category = ?, price = ?, original_price = ?, discount_percent = ?, ` +
+        `description_ar = ?, description_en = ?, stock = ?, images = ?, weight_options = ?, specs = ?, ` +
+        `is_featured = ?, is_best_seller = ?, updated_at = datetime('now') WHERE id = ?;`,
+        [
+          finalNameAr, finalNameEn, finalCategory, finalPrice, finalOrigPrice, finalDiscount,
+          finalDescAr, finalDescEn, finalStock, JSON.stringify(finalImages), JSON.stringify(finalWeightOptions), JSON.stringify(finalSpecs),
+          finalIsFeatured, finalIsBestSeller, id
+        ]
       );
 
-      return await this.findProductByIdAsync(id) || null;
+      // Keep inventory table in sync with product stock
+      if (updates.stock !== undefined) {
+        await this.executeCloudflareD1Query(
+          `INSERT INTO inventory (product_id, current_stock, min_threshold, updated_at) VALUES (?, ?, 10, datetime('now')) ` +
+          `ON CONFLICT(product_id) DO UPDATE SET current_stock = excluded.current_stock, updated_at = datetime('now');`,
+          [id, finalStock]
+        );
+      }
+
+      const updated = await this.findProductByIdAsync(id);
+      if (updated) {
+        const idx = this.tables.products.findIndex(p => p.id === id);
+        if (idx !== -1) this.tables.products[idx] = updated;
+        const inv = this.tables.inventory.get(id);
+        if (inv && updates.stock !== undefined) {
+          inv.currentStock = finalStock;
+        }
+        this.saveLocal();
+        return updated;
+      }
+      return null;
+    }
+
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
     }
 
     return this.updateProduct(id, updates);
@@ -1140,10 +1200,22 @@ class D1DatabaseAccessLayer {
 
   public async deleteProductAsync(id: string): Promise<boolean> {
     if (this.isD1Configured()) {
+      // Remove dependent records first if any exist
+      try {
+        await this.executeCloudflareD1Query("DELETE FROM inventory WHERE product_id = ?;", [id]);
+        await this.executeCloudflareD1Query("DELETE FROM inventory_logs WHERE product_id = ?;", [id]);
+      } catch (e) {
+        // Continue with product deletion
+      }
       await this.executeCloudflareD1Query("DELETE FROM products WHERE id = ?;", [id]);
       this.tables.products = this.tables.products.filter(p => p.id !== id);
       return true;
     }
+
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
+    }
+
     return this.deleteProduct(id);
   }
 
@@ -1286,8 +1358,19 @@ class D1DatabaseAccessLayer {
         [user.id, user.name, clean, user.role, user.pinHash || null, user.passwordHash || null, user.createdAt || new Date().toISOString(), user.lastLogin || new Date().toISOString()]
       );
       const readBack = await this.findUserByPhoneAsync(clean);
-      if (readBack) return readBack;
+      if (readBack) {
+        const idx = this.tables.users.findIndex(u => u.phone.replace(/\D/g, '') === clean || u.id === user.id);
+        if (idx >= 0) this.tables.users[idx] = readBack;
+        else this.tables.users.push(readBack);
+        return readBack;
+      }
+      throw new Error('فشل التحقق من إضافة المستخدم في قاعدة بيانات Cloudflare D1');
     }
+
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
+    }
+
     return this.addUser(user);
   }
 
@@ -1305,8 +1388,19 @@ class D1DatabaseAccessLayer {
         `UPDATE users SET name = COALESCE(?, name), pin_hash = COALESCE(?, pin_hash), password_hash = COALESCE(?, password_hash), last_login = COALESCE(?, last_login) WHERE id = ?;`,
         [updates.name || null, updates.pinHash || null, updates.passwordHash || null, updates.lastLogin || null, id]
       );
-      return await this.findUserByIdAsync(id) || null;
+      const readBack = await this.findUserByIdAsync(id);
+      if (readBack) {
+        const idx = this.tables.users.findIndex(u => u.id === id);
+        if (idx >= 0) this.tables.users[idx] = readBack;
+        return readBack;
+      }
+      return null;
     }
+
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
+    }
+
     return this.updateUser(id, updates);
   }
 
@@ -1385,8 +1479,17 @@ class D1DatabaseAccessLayer {
 
       const rows = await this.executeCloudflareD1Query("SELECT * FROM customers WHERE phone = ? LIMIT 1;", [cleanPhone]);
       if (Array.isArray(rows) && rows.length > 0) {
-        return this.mapD1CustomerToCustomer(rows[0]);
+        const cust = this.mapD1CustomerToCustomer(rows[0]);
+        const idx = this.tables.customers.findIndex(c => c.phone.replace(/\D/g, '') === cleanPhone);
+        if (idx >= 0) this.tables.customers[idx] = cust;
+        else this.tables.customers.push(cust);
+        return cust;
       }
+      throw new Error('فشل تسجيل أو استرجاع بيانات العميل من قاعدة بيانات Cloudflare D1');
+    }
+
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
     }
 
     return this.findOrCreateCustomer(name, phone, district);
@@ -1536,7 +1639,7 @@ class D1DatabaseAccessLayer {
     notes?: string;
     couponCode?: string;
     idempotencyKey?: string;
-    assignedDriver: { id: string; name: string; phone: string };
+    assignedDriver?: { id: string; name: string; phone: string };
     timeline: Array<{ status: string; time: string; titleAr: string; titleEn: string }>;
     date: string;
   }): Promise<{ success: boolean; order?: Order; message?: string; isDuplicate?: boolean }> {
@@ -1655,18 +1758,21 @@ class D1DatabaseAccessLayer {
           params: [itemRowId, orderData.orderId, it.productId, it.productId, it.productNameAr, it.productNameEn || '', it.weight, it.quantity, it.unitPrice, it.unitPrice * it.quantity]
         });
 
+        const currentProd = this.findProductById(it.productId);
+        const prevStock = currentProd ? currentProd.stock : 0;
+        const newStock = Math.max(0, prevStock - it.quantity);
         const logId = `tx-sale-${Date.now()}-${it.productId}-${Math.random().toString(36).substring(2, 6)}`;
         batchStatements.push({
           sql: `INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, order_id, performed_by, created_at) ` +
-            `VALUES (?, ?, ?, 'sale', ?, 0, 0, ?, ?, 'نظام الطلبات الذري', datetime('now'));`,
-          params: [logId, it.productId, it.productNameAr, -it.quantity, `مبيعات طلب جديد #${orderData.orderNumber}`, orderData.orderId]
+            `VALUES (?, ?, ?, 'sale', ?, ?, ?, ?, ?, 'نظام الطلبات الذري', datetime('now'));`,
+          params: [logId, it.productId, it.productNameAr, -it.quantity, prevStock, newStock, `مبيعات طلب جديد #${orderData.orderNumber}`, orderData.orderId]
         });
       }
 
       // 5. Coupon usage statement
       if (orderData.couponCode) {
         batchStatements.push({
-          sql: "UPDATE coupons SET usage_count = usage_count + 1 WHERE code = ?;",
+          sql: "UPDATE coupons SET usage_count = usage_count + 1 WHERE UPPER(code) = UPPER(?);",
           params: [orderData.couponCode]
         });
       }
@@ -1690,30 +1796,55 @@ class D1DatabaseAccessLayer {
         this.tables.orders.unshift(createdFromD1);
         for (const it of orderData.validatedItems) {
           const p = this.findProductById(it.productId);
-          if (p) p.stock = Math.max(0, p.stock - it.quantity);
+          const prev = p ? p.stock : 0;
+          const next = Math.max(0, prev - it.quantity);
+          if (p) p.stock = next;
+          const inv = this.tables.inventory.get(it.productId);
+          if (inv) {
+            inv.currentStock = next;
+            inv.lastCountedAt = new Date().toISOString();
+          }
+          this.tables.inventory_logs.unshift({
+            id: `tx-sale-${Date.now()}-${it.productId}`,
+            productId: it.productId,
+            productName: it.productNameAr,
+            type: 'sale',
+            quantity: -it.quantity,
+            previousStock: prev,
+            newStock: next,
+            reason: `مبيعات طلب جديد #${orderData.orderNumber}`,
+            orderId: orderData.orderId,
+            performedBy: 'نظام الطلبات الذري',
+            createdAt: new Date().toISOString()
+          });
         }
         return { success: true, order: createdFromD1 };
       }
-    } else {
-      // Local fallback verification: ensure sufficient stock before modifying
-      for (const it of orderData.validatedItems) {
-        const p = this.findProductById(it.productId);
-        if (!p || p.stock < it.quantity) {
-          return {
-            success: false,
-            message: `عذراً! الكمية المطلوبة من "${it.productNameAr}" تتجاوز المخزون المتاح حالياً.`
-          };
-        }
-      }
+      return { success: false, message: 'فشل استرجاع الطلب المعتمد من قاعدة بيانات Cloudflare D1' };
+    }
 
-      if (orderData.couponCode) {
-        const c = this.findCoupon(orderData.couponCode);
-        if (c && c.maxUses && c.usageCount >= c.maxUses) {
-          return {
-            success: false,
-            message: 'عذراً! وصل هذا الكوبون للحد الأقصى من مرات الاستخدام المسموح بها.'
-          };
-        }
+    if (process.env.NODE_ENV === 'production') {
+      return { success: false, message: 'قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج' };
+    }
+
+    // Local fallback verification: ONLY in development when D1 is unconfigured
+    for (const it of orderData.validatedItems) {
+      const p = this.findProductById(it.productId);
+      if (!p || p.stock < it.quantity) {
+        return {
+          success: false,
+          message: `عذراً! الكمية المطلوبة من "${it.productNameAr}" تتجاوز المخزون المتاح حالياً.`
+        };
+      }
+    }
+
+    if (orderData.couponCode) {
+      const c = this.findCoupon(orderData.couponCode);
+      if (c && c.maxUses && c.usageCount >= c.maxUses) {
+        return {
+          success: false,
+          message: 'عذراً! وصل هذا الكوبون للحد الأقصى من مرات الاستخدام المسموح بها.'
+        };
       }
     }
 
@@ -1883,11 +2014,6 @@ class D1DatabaseAccessLayer {
       }
     }
 
-    // Mark order as rolled back immediately to ensure transactional idempotency
-    order.isStockRolledBack = true;
-    order.status = 'cancelled';
-    order.cancelledAt = new Date().toISOString();
-
     // 3. Resolve order items: check in-order items array or relational order_items table
     let itemsToRollback = order.items;
     if (!itemsToRollback || itemsToRollback.length === 0) {
@@ -1911,6 +2037,7 @@ class D1DatabaseAccessLayer {
 
     // 4. Batch restoration statements for D1
     const rollbackBatch: Array<{ sql: string; params?: any[] }> = [];
+    const memoryUpdates: Array<{ product: Product | undefined; newStock: number; logRecord: InventoryLogRecord }> = [];
 
     for (const it of itemsToRollback) {
       const product = await this.findProductByIdAsync(it.productId);
@@ -1935,37 +2062,70 @@ class D1DatabaseAccessLayer {
         });
       }
 
-      if (product) {
-        product.stock = newStock;
-      }
-
-      // Create and register audit transaction in in-memory inventory_logs
-      const logRecord: InventoryLogRecord = {
-        id: logId,
-        productId: it.productId,
-        productName: it.productNameAr,
-        type: 'STOCK_ROLLBACK',
-        quantity: restoredQty,
-        previousStock: prevStock,
-        newStock: newStock,
-        reason: `استرجاع مخزون لإلغاء الطلب #${order.orderNumber || order.id}`,
-        orderId: order.id,
-        performedBy: actor || 'نظام إدارة الطلبات',
-        createdAt: new Date().toISOString()
-      };
-      this.tables.inventory_logs.unshift(logRecord);
+      memoryUpdates.push({
+        product,
+        newStock,
+        logRecord: {
+          id: logId,
+          productId: it.productId,
+          productName: it.productNameAr,
+          type: 'STOCK_ROLLBACK',
+          quantity: restoredQty,
+          previousStock: prevStock,
+          newStock: newStock,
+          reason: `استرجاع مخزون لإلغاء الطلب #${order.orderNumber || order.id}`,
+          orderId: order.id,
+          performedBy: actor || 'نظام إدارة الطلبات',
+          createdAt: new Date().toISOString()
+        }
+      });
     }
 
     // Restore coupon usage count if coupon was applied
-    if (order.couponCode && this.isD1Configured()) {
+    const appliedCoupon = order.couponCode || (order as any).coupon_code;
+    if (appliedCoupon && this.isD1Configured()) {
       rollbackBatch.push({
-        sql: "UPDATE coupons SET usage_count = MAX(0, usage_count - 1) WHERE code = ?;",
-        params: [order.couponCode]
+        sql: "UPDATE coupons SET usage_count = MAX(0, usage_count - 1) WHERE UPPER(code) = UPPER(?);",
+        params: [appliedCoupon]
+      });
+    }
+
+    // Mark order as rolled back in D1 database
+    if (this.isD1Configured()) {
+      rollbackBatch.push({
+        sql: "UPDATE orders SET is_stock_rolled_back = 1, status = 'cancelled', cancelled_at = datetime('now'), updated_at = datetime('now') WHERE id = ? OR order_number = ?;",
+        params: [order.id, order.orderNumber || order.id]
       });
     }
 
     if (this.isD1Configured() && rollbackBatch.length > 0) {
       await this.executeCloudflareD1BatchRaw(rollbackBatch);
+    } else if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
+    }
+
+    // ONLY after D1 execution succeeds, update memory cache
+    order.isStockRolledBack = true;
+    order.status = 'cancelled';
+    order.cancelledAt = new Date().toISOString();
+
+    if (appliedCoupon) {
+      const c = this.tables.coupons.find(cp => cp.code.toUpperCase() === appliedCoupon.toUpperCase());
+      if (c && c.usageCount && c.usageCount > 0) {
+        c.usageCount--;
+      }
+    }
+
+    for (const update of memoryUpdates) {
+      if (update.product) {
+        update.product.stock = update.newStock;
+      }
+      const inv = this.tables.inventory.get(update.logRecord.productId);
+      if (inv) {
+        inv.currentStock = update.newStock;
+        inv.lastCountedAt = new Date().toISOString();
+      }
+      this.tables.inventory_logs.unshift(update.logRecord);
     }
 
     // 5. Update payment status if exists to cancelled / failed
@@ -2008,6 +2168,15 @@ class D1DatabaseAccessLayer {
     const finalDriverName = verifiedAgent.name;
     const finalDriverPhone = verifiedAgent.phone;
 
+    if (this.isD1Configured()) {
+      await this.executeCloudflareD1Query(
+        `UPDATE orders SET driver_id = ?, driver_name = ?, driver_phone = ?, updated_at = datetime('now') WHERE id = ? OR order_number = ?;`,
+        [finalDriverId, finalDriverName, finalDriverPhone, order.id, order.orderNumber || order.id]
+      );
+    } else if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
+    }
+
     order.driverId = finalDriverId;
     order.driverName = finalDriverName;
     order.driverPhone = finalDriverPhone;
@@ -2017,13 +2186,6 @@ class D1DatabaseAccessLayer {
       inMem.driverId = finalDriverId;
       inMem.driverName = finalDriverName;
       inMem.driverPhone = finalDriverPhone;
-    }
-
-    if (this.isD1Configured()) {
-      await this.executeCloudflareD1Query(
-        `UPDATE orders SET driver_id = ?, driver_name = ?, driver_phone = ?, updated_at = datetime('now') WHERE id = ? OR order_number = ?;`,
-        [finalDriverId, finalDriverName, finalDriverPhone, order.id, order.orderNumber || order.id]
-      );
     }
 
     this.saveLocal();
@@ -2057,11 +2219,9 @@ class D1DatabaseAccessLayer {
       }
     }
 
-    order.status = status;
-
-    if (driverNotes) {
-      order.driverNotes = driverNotes;
-    }
+    let finalDriverId = order.driverId;
+    let finalDriverName = order.driverName;
+    let finalDriverPhone = order.driverPhone;
 
     if (driverInfo && driverInfo.driverId) {
       const agents = await this.getDeliveryAgentsAsync();
@@ -2069,23 +2229,21 @@ class D1DatabaseAccessLayer {
       if (!verified) {
         throw new Error("المندوب المحدد غير موجود في سجل المناديب المعتمدين");
       }
-      order.driverId = verified.id;
-      order.driverName = verified.name;
-      order.driverPhone = verified.phone;
+      finalDriverId = verified.id;
+      finalDriverName = verified.name;
+      finalDriverPhone = verified.phone;
     }
 
     const now = new Date();
     const timeFormatted = now.toLocaleTimeString("ar-YE", { hour: "2-digit", minute: "2-digit" });
 
-    if (!order.timeline) {
-      order.timeline = [];
-    }
+    const newTimeline = [...(order.timeline || [])];
 
     const titleMap: Record<string, { ar: string; en: string }> = {
       pending: { ar: "تم استلام الطلب بانتظار التأكيد", en: "Order Pending" },
       received: { ar: "تم استلام الطلب وتأكيده بالنظام", en: "Order Received" },
       confirmed: { ar: "تم تأكيد واعتماد الطلب من الإدارة", en: "Order Confirmed" },
-      assigned: { ar: `تم تكليف المندوب (${order.driverName || 'المعتمد'}) للتوصيل`, en: "Driver Assigned" },
+      assigned: { ar: `تم تكليف المندوب (${finalDriverName || 'المعتمد'}) للتوصيل`, en: "Driver Assigned" },
       preparing: { ar: "جاري تجهيز وتعبئة الفحم في المستودع", en: "Preparing Charcoal" },
       shipped: { ar: "خرج الفحم مع المندوب للتوصيل المباشر", en: "Out for Delivery" },
       on_way: { ar: "المندوب في الطريق إلى موقع العميل", en: "Driver On The Way" },
@@ -2097,12 +2255,32 @@ class D1DatabaseAccessLayer {
 
     const statusInfo = titleMap[status] || { ar: `تم تحديث الحالة إلى: ${status}`, en: `Status: ${status}` };
 
-    order.timeline.push({
+    newTimeline.push({
       status,
       time: timeFormatted,
       titleAr: statusInfo.ar,
       titleEn: statusInfo.en
     });
+
+    // Sync order status to Cloudflare D1 SQL FIRST
+    if (this.isD1Configured()) {
+      const compDateCol = status === 'delivered' ? ", completed_at = datetime('now')" : (status === 'cancelled' ? ", cancelled_at = datetime('now')" : "");
+      await this.executeCloudflareD1Query(
+        `UPDATE orders SET status = ?, driver_notes = COALESCE(?, driver_notes), driver_id = COALESCE(?, driver_id), driver_name = COALESCE(?, driver_name), driver_phone = COALESCE(?, driver_phone), timeline_json = ?${compDateCol}, updated_at = datetime('now') WHERE id = ? OR order_number = ?;`,
+        [status, driverNotes || null, finalDriverId || null, finalDriverName || null, finalDriverPhone || null, JSON.stringify(newTimeline), order.id, order.orderNumber || order.id]
+      );
+    } else if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
+    }
+
+    // Now update cache after D1 success
+    order.status = status;
+    if (driverNotes) order.driverNotes = driverNotes;
+    order.driverId = finalDriverId;
+    order.driverName = finalDriverName;
+    order.driverPhone = finalDriverPhone;
+    order.timeline = newTimeline;
+    if (status === 'cancelled') order.isStockRolledBack = true;
 
     // Update payment status if delivered
     if (status === 'delivered') {
@@ -2113,23 +2291,14 @@ class D1DatabaseAccessLayer {
       }
     }
 
-    // Sync order status to Cloudflare D1 SQL
-    if (this.isD1Configured()) {
-      const compDateCol = status === 'delivered' ? ", completed_at = datetime('now')" : (status === 'cancelled' ? ", cancelled_at = datetime('now')" : "");
-      await this.executeCloudflareD1Query(
-        `UPDATE orders SET status = ?, driver_notes = COALESCE(?, driver_notes), driver_id = COALESCE(?, driver_id), driver_name = COALESCE(?, driver_name), driver_phone = COALESCE(?, driver_phone), timeline_json = ?${compDateCol}, updated_at = datetime('now') WHERE id = ? OR order_number = ?;`,
-        [status, driverNotes || null, order.driverId || null, order.driverName || null, order.driverPhone || null, JSON.stringify(order.timeline), order.id, order.orderNumber || order.id]
-      );
-    }
-
     const inMem = this.findOrderById(orderId);
     if (inMem) {
       inMem.status = status;
       if (driverNotes) inMem.driverNotes = driverNotes;
-      if (order.driverId) inMem.driverId = order.driverId;
-      if (order.driverName) inMem.driverName = order.driverName;
-      if (order.driverPhone) inMem.driverPhone = order.driverPhone;
-      inMem.timeline = order.timeline;
+      if (finalDriverId) inMem.driverId = finalDriverId;
+      if (finalDriverName) inMem.driverName = finalDriverName;
+      if (finalDriverPhone) inMem.driverPhone = finalDriverPhone;
+      inMem.timeline = newTimeline;
       if (status === 'cancelled') inMem.isStockRolledBack = true;
     }
 
@@ -2190,6 +2359,10 @@ class D1DatabaseAccessLayer {
         [params.newStock, params.productId]
       );
       await this.executeCloudflareD1Query(
+        "UPDATE inventory SET current_stock = ?, updated_at = datetime('now') WHERE product_id = ?;",
+        [params.newStock, params.productId]
+      );
+      await this.executeCloudflareD1Query(
         "INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, performed_by, created_at) " +
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'));",
         [
@@ -2204,6 +2377,8 @@ class D1DatabaseAccessLayer {
           params.performedBy
         ]
       );
+    } else if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
     }
 
     // Update in-memory state
@@ -2306,26 +2481,138 @@ class D1DatabaseAccessLayer {
   }
 
   public async updateDeliveryAgentsAsync(agents: DeliveryAgent[]): Promise<DeliveryAgent[]> {
-    this.tables.delivery_agents = agents;
-    this.saveLocal();
-
     if (this.isD1Configured()) {
       for (const da of agents) {
         await this.executeCloudflareD1Query(
-          `INSERT INTO delivery_agents (id, name, phone, vehicle_type, assigned_districts, total_delivered_count, rating, is_available, created_at, updated_at) ` +
-          `VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now')) ` +
+          `INSERT INTO delivery_agents (id, name, phone, vehicle_type, total_deliveries, rating, is_active, created_at) ` +
+          `VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now')) ` +
           `ON CONFLICT(id) DO UPDATE SET ` +
-          `name = excluded.name, phone = excluded.phone, vehicle_type = excluded.vehicle_type, assigned_districts = excluded.assigned_districts, ` +
-          `total_delivered_count = excluded.total_delivered_count, rating = excluded.rating, is_available = excluded.is_available, updated_at = datetime('now');`,
+          `name = excluded.name, phone = excluded.phone, vehicle_type = excluded.vehicle_type, ` +
+          `total_deliveries = excluded.total_deliveries, rating = excluded.rating, is_active = excluded.is_active;`,
           [
-            da.id, da.name, da.phone, da.vehicleType, JSON.stringify(da.assignedDistricts),
-            da.completedOrdersCount, da.rating, da.isActive ? 1 : 0
+            da.id, da.name, da.phone, da.vehicleType,
+            da.completedOrdersCount || 0, da.rating || 5.0, da.isActive ? 1 : 0
           ]
         );
       }
+    } else if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
     }
 
+    this.tables.delivery_agents = agents;
+    this.saveLocal();
     return agents;
+  }
+
+  public async findDeliveryAgentByIdAsync(id: string): Promise<DeliveryAgent | undefined> {
+    if (this.isD1Configured()) {
+      const rows = await this.executeCloudflareD1Query("SELECT * FROM delivery_agents WHERE id = ? LIMIT 1;", [id]);
+      if (Array.isArray(rows) && rows.length > 0) {
+        const da = rows[0];
+        return {
+          id: da.id,
+          name: da.name,
+          phone: da.phone,
+          vehicleType: da.vehicle_type || da.vehicle || 'motorcycle',
+          assignedDistricts: typeof da.assigned_districts === 'string' ? JSON.parse(da.assigned_districts || '[]') : (da.assigned_districts || []),
+          completedOrdersCount: da.total_deliveries || da.total_delivered_count || 0,
+          rating: da.rating || 5.0,
+          isActive: da.is_active !== undefined ? Boolean(da.is_active) : (da.is_available !== undefined ? Boolean(da.is_available) : true)
+        };
+      }
+      return undefined;
+    }
+    return this.tables.delivery_agents.find(d => d.id === id);
+  }
+
+  public async addDeliveryAgentAsync(agent: DeliveryAgent, pin?: string): Promise<DeliveryAgent> {
+    const cleanPhone = agent.phone.replace(/\D/g, '');
+    if (this.isD1Configured()) {
+      await this.executeCloudflareD1Query(
+        `INSERT INTO delivery_agents (id, name, phone, vehicle_type, is_active, rating, total_deliveries, created_at) ` +
+        `VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now')) ` +
+        `ON CONFLICT(id) DO UPDATE SET ` +
+        `name = excluded.name, phone = excluded.phone, vehicle_type = excluded.vehicle_type, is_active = excluded.is_active, rating = excluded.rating;`,
+        [agent.id, agent.name, cleanPhone, agent.vehicleType || 'motorcycle', agent.isActive ? 1 : 0, agent.rating || 5.0, agent.completedOrdersCount || 0]
+      );
+
+      if (pin) {
+        const hashed = hashSecret(normalizeDigits(pin).trim());
+        await this.executeCloudflareD1Query(
+          `INSERT INTO users (id, name, phone, role, pin_hash, created_at, last_login) ` +
+          `VALUES (?, ?, ?, 'delivery', ?, datetime('now'), datetime('now')) ` +
+          `ON CONFLICT(phone) DO UPDATE SET ` +
+          `name = excluded.name, role = 'delivery', pin_hash = excluded.pin_hash;`,
+          [agent.id, agent.name, cleanPhone, hashed]
+        );
+      }
+    } else if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
+    }
+
+    const idx = this.tables.delivery_agents.findIndex(d => d.id === agent.id);
+    if (idx !== -1) this.tables.delivery_agents[idx] = agent;
+    else this.tables.delivery_agents.push(agent);
+    this.saveLocal();
+    return agent;
+  }
+
+  public async updateDeliveryAgentAsync(id: string, updates: Partial<DeliveryAgent>, pin?: string): Promise<DeliveryAgent | null> {
+    if (this.isD1Configured()) {
+      const cleanPhone = updates.phone ? updates.phone.replace(/\D/g, '') : null;
+      await this.executeCloudflareD1Query(
+        `UPDATE delivery_agents SET ` +
+        `name = COALESCE(?, name), ` +
+        `phone = COALESCE(?, phone), ` +
+        `vehicle_type = COALESCE(?, vehicle_type), ` +
+        `is_active = CASE WHEN ? IS NOT NULL THEN ? ELSE is_active END ` +
+        `WHERE id = ?;`,
+        [
+          updates.name ?? null,
+          cleanPhone,
+          updates.vehicleType ?? null,
+          updates.isActive !== undefined ? (updates.isActive ? 1 : 0) : null,
+          updates.isActive !== undefined ? (updates.isActive ? 1 : 0) : null,
+          id
+        ]
+      );
+
+      if (pin && cleanPhone) {
+        const hashed = hashSecret(normalizeDigits(pin).trim());
+        await this.executeCloudflareD1Query(
+          `UPDATE users SET pin_hash = ? WHERE phone = ?;`,
+          [hashed, cleanPhone]
+        );
+      }
+
+      const readBack = await this.findDeliveryAgentByIdAsync(id);
+      if (readBack) {
+        const idx = this.tables.delivery_agents.findIndex(d => d.id === id);
+        if (idx !== -1) this.tables.delivery_agents[idx] = readBack;
+        return readBack;
+      }
+      return null;
+    } else if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
+    }
+
+    const d = this.tables.delivery_agents.find(da => da.id === id);
+    if (!d) return null;
+    Object.assign(d, updates);
+    this.saveLocal();
+    return d;
+  }
+
+  public async deleteDeliveryAgentAsync(id: string): Promise<boolean> {
+    if (this.isD1Configured()) {
+      await this.executeCloudflareD1Query("DELETE FROM delivery_agents WHERE id = ?;", [id]);
+    } else if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
+    }
+
+    this.tables.delivery_agents = this.tables.delivery_agents.filter(d => d.id !== id);
+    this.saveLocal();
+    return true;
   }
 
   // ==========================================
@@ -2343,11 +2630,11 @@ class D1DatabaseAccessLayer {
           return rows.map((rv: any) => ({
             id: rv.id,
             productId: rv.product_id,
-            userName: rv.user_name,
-            userPhone: rv.user_phone || undefined,
+            userName: rv.customer_name || rv.user_name || 'عميل',
+            userPhone: rv.customer_phone || rv.user_phone || undefined,
             rating: rv.rating,
             comment: rv.comment,
-            verifiedPurchase: Boolean(rv.verified_purchase),
+            verifiedPurchase: Boolean(rv.is_verified ?? rv.verified_purchase),
             date: rv.created_at
           }));
         }
@@ -2379,20 +2666,17 @@ class D1DatabaseAccessLayer {
   }
 
   public async addReviewAsync(review: Review): Promise<Review> {
-    this.addReview(review);
-
     if (this.isD1Configured()) {
-      try {
-        await this.executeCloudflareD1Query(
-          `INSERT INTO reviews (id, product_id, user_name, user_phone, rating, comment, verified_purchase, created_at) ` +
-          `VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'));`,
-          [review.id, review.productId, review.userName, (review as any).userPhone || null, review.rating, review.comment, review.verifiedPurchase ? 1 : 0]
-        );
-      } catch (err) {
-        console.error('Error adding review to D1:', err);
-      }
+      await this.executeCloudflareD1Query(
+        `INSERT INTO reviews (id, product_id, customer_name, customer_phone, rating, comment, is_verified, created_at) ` +
+        `VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'));`,
+        [review.id, review.productId, review.userName, (review as any).userPhone || null, review.rating, review.comment, review.verifiedPurchase ? 1 : 0]
+      );
+    } else if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
     }
 
+    this.addReview(review);
     return review;
   }
 
@@ -2411,8 +2695,9 @@ class D1DatabaseAccessLayer {
             maxDiscount: cp.max_discount,
             minOrderAmount: cp.min_order_amount,
             isActive: Boolean(cp.is_active),
-            validUntil: cp.expiry_date || cp.valid_until || undefined,
-            usageCount: cp.usage_count || 0
+            validUntil: cp.valid_until || cp.expiry_date || undefined,
+            usageCount: cp.usage_count || 0,
+            maxUses: cp.max_uses !== undefined && cp.max_uses !== null ? Number(cp.max_uses) : undefined
           }));
           this.tables.coupons = coupons;
           return coupons;
@@ -2448,8 +2733,9 @@ class D1DatabaseAccessLayer {
               maxDiscount: cp.max_discount,
               minOrderAmount: cp.min_order_amount,
               isActive: Boolean(cp.is_active),
-              validUntil: cp.expiry_date || cp.valid_until || undefined,
-              usageCount: cp.usage_count || 0
+              validUntil: cp.valid_until || cp.expiry_date || undefined,
+              usageCount: cp.usage_count || 0,
+              maxUses: cp.max_uses !== undefined && cp.max_uses !== null ? Number(cp.max_uses) : undefined
             };
           }
           return undefined;
@@ -2468,6 +2754,28 @@ class D1DatabaseAccessLayer {
   }
 
   public async addCouponAsync(coupon: Coupon): Promise<Coupon> {
+    if (this.isD1Configured()) {
+      await this.executeCloudflareD1Query(
+        `INSERT INTO coupons (code, discount_percent, max_discount, min_order_amount, is_active, valid_until, usage_count, max_uses, created_at) ` +
+        `VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now')) ` +
+        `ON CONFLICT(code) DO UPDATE SET ` +
+        `discount_percent = excluded.discount_percent, max_discount = excluded.max_discount, min_order_amount = excluded.min_order_amount, ` +
+        `is_active = excluded.is_active, valid_until = excluded.valid_until, max_uses = excluded.max_uses;`,
+        [
+          coupon.code.toUpperCase(),
+          coupon.discountPercent,
+          coupon.maxDiscount || 0,
+          coupon.minOrderAmount || 0,
+          coupon.isActive !== false ? 1 : 0,
+          coupon.validUntil || (coupon as any).expiresAt || (coupon as any).expiry_date || null,
+          coupon.usageCount || 0,
+          coupon.maxUses ?? 100
+        ]
+      );
+    } else if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
+    }
+
     const existingIdx = this.tables.coupons.findIndex(c => c.code.toUpperCase() === coupon.code.trim().toUpperCase());
     if (existingIdx >= 0) {
       this.tables.coupons[existingIdx] = coupon;
@@ -2476,28 +2784,74 @@ class D1DatabaseAccessLayer {
     }
     this.saveLocal();
 
+    return coupon;
+  }
+
+  public async updateCouponAsync(code: string, updates: Partial<Coupon>): Promise<Coupon | null> {
+    const cleanCode = code.trim().toUpperCase();
     if (this.isD1Configured()) {
       await this.executeCloudflareD1Query(
-        `INSERT INTO coupons (code, discount_percent, max_discount, min_order_amount, is_active, expiry_date, usage_count, created_at) ` +
-        `VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now')) ` +
-        `ON CONFLICT(code) DO UPDATE SET ` +
-        `discount_percent = excluded.discount_percent, max_discount = excluded.max_discount, min_order_amount = excluded.min_order_amount, ` +
-        `is_active = excluded.is_active, expiry_date = excluded.expiry_date;`,
-        [coupon.code.toUpperCase(), coupon.discountPercent, coupon.maxDiscount, coupon.minOrderAmount, coupon.isActive ? 1 : 0, coupon.validUntil || (coupon as any).expiryDate || null, coupon.usageCount || 0]
+        `UPDATE coupons SET ` +
+        `discount_percent = COALESCE(?, discount_percent), ` +
+        `max_discount = COALESCE(?, max_discount), ` +
+        `min_order_amount = COALESCE(?, min_order_amount), ` +
+        `is_active = CASE WHEN ? IS NOT NULL THEN ? ELSE is_active END, ` +
+        `valid_until = COALESCE(?, valid_until), ` +
+        `max_uses = COALESCE(?, max_uses) ` +
+        `WHERE UPPER(code) = ?;`,
+        [
+          updates.discountPercent ?? null,
+          updates.maxDiscount ?? null,
+          updates.minOrderAmount ?? null,
+          updates.isActive !== undefined ? (updates.isActive ? 1 : 0) : null,
+          updates.isActive !== undefined ? (updates.isActive ? 1 : 0) : null,
+          updates.validUntil ?? null,
+          updates.maxUses ?? null,
+          cleanCode
+        ]
       );
+
+      const rows = await this.executeCloudflareD1Query("SELECT * FROM coupons WHERE UPPER(code) = ? LIMIT 1;", [cleanCode]);
+      if (Array.isArray(rows) && rows.length > 0) {
+        const cp = rows[0];
+        const updated: Coupon = {
+          code: cp.code,
+          discountPercent: cp.discount_percent,
+          maxDiscount: cp.max_discount,
+          minOrderAmount: cp.min_order_amount,
+          isActive: Boolean(cp.is_active),
+          validUntil: cp.valid_until || cp.expiry_date || undefined,
+          usageCount: cp.usage_count || 0,
+          maxUses: cp.max_uses !== undefined && cp.max_uses !== null ? Number(cp.max_uses) : undefined
+        };
+        const idx = this.tables.coupons.findIndex(c => c.code.toUpperCase() === cleanCode);
+        if (idx !== -1) this.tables.coupons[idx] = updated;
+        else this.tables.coupons.push(updated);
+        this.saveLocal();
+        return updated;
+      }
+      return null;
+    } else if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
     }
 
-    return coupon;
+    const c = this.tables.coupons.find(cp => cp.code.toUpperCase() === cleanCode);
+    if (!c) return null;
+    Object.assign(c, updates);
+    this.saveLocal();
+    return c;
   }
 
   public async deleteCouponAsync(code: string): Promise<boolean> {
     const cleanCode = code.trim().toUpperCase();
-    this.tables.coupons = this.tables.coupons.filter(c => c.code.toUpperCase() !== cleanCode);
-    this.saveLocal();
-
     if (this.isD1Configured()) {
       await this.executeCloudflareD1Query("DELETE FROM coupons WHERE UPPER(code) = ?;", [cleanCode]);
+    } else if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
     }
+
+    this.tables.coupons = this.tables.coupons.filter(c => c.code.toUpperCase() !== cleanCode);
+    this.saveLocal();
     return true;
   }
 
@@ -2512,20 +2866,33 @@ class D1DatabaseAccessLayer {
     if (this.isD1Configured()) {
       try {
         const rows = await this.executeCloudflareD1Query("SELECT * FROM store_settings WHERE id = 'default_settings';");
-        if (Array.isArray(rows)) {
-          if (rows.length > 0) {
-            const st = rows[0];
-            return {
-              ...this.tables.store_settings,
-              storeNameAr: st.store_name_ar || this.tables.store_settings.storeNameAr,
-              storeNameEn: st.store_name_en || this.tables.store_settings.storeNameEn,
-              whatsappPhone: st.whatsapp_phone || this.tables.store_settings.whatsappPhone,
-              supportPhone: st.support_phone || this.tables.store_settings.supportPhone,
-              deliveryDistricts: typeof st.delivery_districts === 'string' ? JSON.parse(st.delivery_districts) : (st.delivery_districts || this.tables.store_settings.deliveryDistricts),
-              workingHoursAr: st.working_hours_ar || (typeof st.working_hours === 'string' ? JSON.parse(st.working_hours)?.ar : undefined) || this.tables.store_settings.workingHoursAr,
-              workingHoursEn: st.working_hours_en || (typeof st.working_hours === 'string' ? JSON.parse(st.working_hours)?.en : undefined) || this.tables.store_settings.workingHoursEn
-            };
-          }
+        if (Array.isArray(rows) && rows.length > 0) {
+          const st = rows[0];
+          const districts = typeof st.delivery_districts === 'string'
+            ? JSON.parse(st.delivery_districts || '[]')
+            : (st.delivery_districts || this.tables.store_settings.deliveryDistricts);
+
+          const mapped: StoreSettings = {
+            ...this.tables.store_settings,
+            storeNameAr: st.store_name_ar || this.tables.store_settings.storeNameAr,
+            storeNameEn: st.store_name_en || this.tables.store_settings.storeNameEn,
+            sloganAr: st.slogan_ar || this.tables.store_settings.sloganAr,
+            logoText: st.logo_text || this.tables.store_settings.logoText,
+            customLogoUrl: st.custom_logo_url || this.tables.store_settings.customLogoUrl,
+            topBannerNoticeAr: st.top_banner_notice_ar || this.tables.store_settings.topBannerNoticeAr,
+            topBannerNoticeEn: st.top_banner_notice_en || this.tables.store_settings.topBannerNoticeEn,
+            whatsappPhone: st.whatsapp_phone || this.tables.store_settings.whatsappPhone,
+            whatsappNumber: st.whatsapp_phone || this.tables.store_settings.whatsappNumber,
+            supportPhone: st.call_phone || this.tables.store_settings.supportPhone,
+            supportEmail: st.contact_email || this.tables.store_settings.supportEmail,
+            freeDeliveryThreshold: Number(st.free_delivery_threshold || this.tables.store_settings.freeDeliveryThreshold),
+            freeShippingThreshold: Number(st.free_delivery_threshold || this.tables.store_settings.freeShippingThreshold),
+            defaultShippingFee: st.default_delivery_fee || this.tables.store_settings.defaultShippingFee,
+            isOrderingEnabled: st.is_store_open !== undefined ? Boolean(st.is_store_open) : true,
+            deliveryDistricts: districts
+          };
+          this.tables.store_settings = mapped;
+          return mapped;
         }
       } catch (err) {
         console.error('Error fetching store_settings from D1:', err);
@@ -2547,37 +2914,60 @@ class D1DatabaseAccessLayer {
   }
 
   public async updateSettingsAsync(newSettings: Partial<StoreSettings>): Promise<StoreSettings> {
-    const updated = this.updateSettings(newSettings);
-
     if (this.isD1Configured()) {
-      try {
-        await this.executeCloudflareD1Query(
-          `INSERT INTO store_settings (id, store_name_ar, store_name_en, whatsapp_phone, support_phone, delivery_districts, working_hours_ar, working_hours_en, updated_at) ` +
-          `VALUES ('default_settings', ?, ?, ?, ?, ?, ?, ?, datetime('now')) ` +
-          `ON CONFLICT(id) DO UPDATE SET ` +
-          `store_name_ar = COALESCE(excluded.store_name_ar, store_settings.store_name_ar), ` +
-          `store_name_en = COALESCE(excluded.store_name_en, store_settings.store_name_en), ` +
-          `whatsapp_phone = COALESCE(excluded.whatsapp_phone, store_settings.whatsapp_phone), ` +
-          `support_phone = COALESCE(excluded.support_phone, store_settings.support_phone), ` +
-          `delivery_districts = COALESCE(excluded.delivery_districts, store_settings.delivery_districts), ` +
-          `working_hours_ar = COALESCE(excluded.working_hours_ar, store_settings.working_hours_ar), ` +
-          `working_hours_en = COALESCE(excluded.working_hours_en, store_settings.working_hours_en), ` +
-          `updated_at = datetime('now');`,
-          [
-            newSettings.storeNameAr || null,
-            newSettings.storeNameEn || null,
-            newSettings.whatsappPhone || null,
-            newSettings.supportPhone || null,
-            newSettings.deliveryDistricts ? JSON.stringify(newSettings.deliveryDistricts) : null,
-            newSettings.workingHoursAr || null,
-            newSettings.workingHoursEn || null
-          ]
-        );
-      } catch (err) {
-        console.error('Error updating store_settings in D1:', err);
-      }
+      const current = await this.getSettingsAsync();
+      const merged: StoreSettings = { ...current, ...newSettings };
+
+      const storeNameAr = merged.storeNameAr || current.storeNameAr;
+      const storeNameEn = merged.storeNameEn || current.storeNameEn;
+      const sloganAr = merged.sloganAr || current.sloganAr || '';
+      const logoText = merged.logoText || current.logoText || '';
+      const customLogoUrl = merged.customLogoUrl || current.customLogoUrl || '';
+      const topBannerNoticeAr = merged.topBannerNoticeAr || current.topBannerNoticeAr || '';
+      const topBannerNoticeEn = merged.topBannerNoticeEn || current.topBannerNoticeEn || '';
+      const whatsappPhone = merged.whatsappPhone || merged.whatsappNumber || current.whatsappPhone;
+      const callPhone = merged.supportPhone || current.supportPhone;
+      const contactEmail = merged.supportEmail || current.supportEmail || '';
+      const freeDeliveryThreshold = Number(merged.freeDeliveryThreshold ?? merged.freeShippingThreshold ?? current.freeDeliveryThreshold ?? 8000);
+      const isStoreOpen = merged.isOrderingEnabled !== undefined ? (merged.isOrderingEnabled ? 1 : 0) : 1;
+      const districtsJson = JSON.stringify(merged.deliveryDistricts || current.deliveryDistricts || []);
+
+      await this.executeCloudflareD1Query(
+        `INSERT INTO store_settings (` +
+        `id, store_name_ar, store_name_en, slogan_ar, logo_text, custom_logo_url, ` +
+        `top_banner_notice_ar, top_banner_notice_en, whatsapp_phone, call_phone, ` +
+        `contact_email, free_delivery_threshold, is_store_open, delivery_districts, updated_at` +
+        `) VALUES ('default_settings', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now')) ` +
+        `ON CONFLICT(id) DO UPDATE SET ` +
+        `store_name_ar = excluded.store_name_ar, ` +
+        `store_name_en = excluded.store_name_en, ` +
+        `slogan_ar = excluded.slogan_ar, ` +
+        `logo_text = excluded.logo_text, ` +
+        `custom_logo_url = excluded.custom_logo_url, ` +
+        `top_banner_notice_ar = excluded.top_banner_notice_ar, ` +
+        `top_banner_notice_en = excluded.top_banner_notice_en, ` +
+        `whatsapp_phone = excluded.whatsapp_phone, ` +
+        `call_phone = excluded.call_phone, ` +
+        `contact_email = excluded.contact_email, ` +
+        `free_delivery_threshold = excluded.free_delivery_threshold, ` +
+        `is_store_open = excluded.is_store_open, ` +
+        `delivery_districts = excluded.delivery_districts, ` +
+        `updated_at = datetime('now');`,
+        [
+          storeNameAr, storeNameEn, sloganAr, logoText, customLogoUrl,
+          topBannerNoticeAr, topBannerNoticeEn, whatsappPhone, callPhone,
+          contactEmail, freeDeliveryThreshold, isStoreOpen, districtsJson
+        ]
+      );
+
+      this.tables.store_settings = merged;
+      this.saveLocal();
+      return merged;
+    } else if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
     }
 
+    const updated = this.updateSettings(newSettings);
     return updated;
   }
 
@@ -2624,8 +3014,6 @@ class D1DatabaseAccessLayer {
       image: item.image || item.imageUrl || '',
       imageUrl: item.imageUrl || item.image || ''
     };
-    this.tables.gallery_items.push(itemToAdd);
-    this.saveLocal();
 
     if (this.isD1Configured()) {
       await this.executeCloudflareD1Query(
@@ -2642,17 +3030,16 @@ class D1DatabaseAccessLayer {
           itemToAdd.isActive !== false ? 1 : 0
         ]
       );
+    } else if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
     }
+
+    this.tables.gallery_items.push(itemToAdd);
+    this.saveLocal();
     return itemToAdd;
   }
 
   public async updateGalleryItemAsync(id: string, updates: Partial<GalleryItem>): Promise<GalleryItem | null> {
-    const idx = this.tables.gallery_items.findIndex(g => g.id === id);
-    if (idx !== -1) {
-      this.tables.gallery_items[idx] = { ...this.tables.gallery_items[idx], ...updates };
-      this.saveLocal();
-    }
-
     if (this.isD1Configured()) {
       await this.executeCloudflareD1Query(
         `UPDATE gallery_items SET ` +
@@ -2678,7 +3065,7 @@ class D1DatabaseAccessLayer {
       const rows = await this.executeCloudflareD1Query("SELECT * FROM gallery_items WHERE id = ? LIMIT 1;", [id]);
       if (Array.isArray(rows) && rows.length > 0) {
         const g = rows[0];
-        return {
+        const updatedItem: GalleryItem = {
           id: g.id,
           titleAr: g.title_ar,
           titleEn: g.title_en || undefined,
@@ -2690,19 +3077,37 @@ class D1DatabaseAccessLayer {
           isActive: g.is_active !== undefined ? Boolean(g.is_active) : true,
           createdAt: g.created_at
         };
+        const idx = this.tables.gallery_items.findIndex(item => item.id === id);
+        if (idx !== -1) {
+          this.tables.gallery_items[idx] = updatedItem;
+        } else {
+          this.tables.gallery_items.push(updatedItem);
+        }
+        return updatedItem;
       }
+      return null;
+    } else if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
     }
 
-    return idx !== -1 ? this.tables.gallery_items[idx] : null;
+    const idx = this.tables.gallery_items.findIndex(g => g.id === id);
+    if (idx !== -1) {
+      this.tables.gallery_items[idx] = { ...this.tables.gallery_items[idx], ...updates };
+      this.saveLocal();
+      return this.tables.gallery_items[idx];
+    }
+    return null;
   }
 
   public async deleteGalleryItemAsync(id: string): Promise<boolean> {
-    this.tables.gallery_items = this.tables.gallery_items.filter(g => g.id !== id);
-    this.saveLocal();
-
     if (this.isD1Configured()) {
       await this.executeCloudflareD1Query("DELETE FROM gallery_items WHERE id = ?;", [id]);
+    } else if (process.env.NODE_ENV === 'production') {
+      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
     }
+
+    this.tables.gallery_items = this.tables.gallery_items.filter(g => g.id !== id);
+    this.saveLocal();
     return true;
   }
 

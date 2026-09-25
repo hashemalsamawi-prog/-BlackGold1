@@ -245,6 +245,10 @@ class DatabaseProxy {
     return d1.deleteCouponAsync(code);
   }
 
+  public async updateCouponAsync(code: string, updates: Partial<Coupon>): Promise<Coupon | null> {
+    return d1.updateCouponAsync(code, updates);
+  }
+
   // Delivery Agents
   public getDeliveryAgents(): DeliveryAgent[] {
     return d1.getDeliveryAgents();
@@ -252,6 +256,22 @@ class DatabaseProxy {
 
   public async getDeliveryAgentsAsync(): Promise<DeliveryAgent[]> {
     return d1.getDeliveryAgentsAsync();
+  }
+
+  public async findDeliveryAgentByIdAsync(id: string): Promise<DeliveryAgent | undefined> {
+    return d1.findDeliveryAgentByIdAsync(id);
+  }
+
+  public async addDeliveryAgentAsync(agent: DeliveryAgent, pin?: string): Promise<DeliveryAgent> {
+    return d1.addDeliveryAgentAsync(agent, pin);
+  }
+
+  public async updateDeliveryAgentAsync(id: string, updates: Partial<DeliveryAgent>, pin?: string): Promise<DeliveryAgent | null> {
+    return d1.updateDeliveryAgentAsync(id, updates, pin);
+  }
+
+  public async deleteDeliveryAgentAsync(id: string): Promise<boolean> {
+    return d1.deleteDeliveryAgentAsync(id);
   }
 
   public updateDeliveryAgents(agents: DeliveryAgent[]): DeliveryAgent[] {

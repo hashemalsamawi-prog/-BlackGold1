@@ -139,6 +139,7 @@ export interface Review {
   productId: string;
   customerName?: string;
   userName?: string;
+  userPhone?: string;
   rating: number;
   comment: string;
   createdAt?: string;
@@ -228,6 +229,10 @@ export interface StoreSettings {
   districts: DistrictDeliveryConfig[];
   deliveryDistricts?: any[];
   loyaltyPointsPer1000YER: number;
+  sloganAr?: string;
+  logoText?: string;
+  topBannerNoticeAr?: string;
+  topBannerNoticeEn?: string;
   customLogoUrl?: string;
   logo?: string;
   heroBannerImage?: string;

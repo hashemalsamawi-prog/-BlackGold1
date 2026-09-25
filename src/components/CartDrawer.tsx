@@ -82,19 +82,8 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
         setCouponMsg({ text: data.message || 'الكوبون المدخل غير صالح أو منتهي الصلاحية', isError: true });
       }
     } catch {
-      // Local fallback
-      const upper = couponCode.trim().toUpperCase();
-      if (upper === 'GOLD10') {
-        const disc = Math.round(subtotal * 0.1);
-        setDiscountVal(disc);
-        setCouponMsg({ text: `تم تطبيق خصم 10% بنجاح (${disc.toLocaleString()} ريال)`, isError: false });
-      } else if (upper === 'SANAA') {
-        setDiscountVal(1000);
-        setCouponMsg({ text: 'تم خصم رسوم التوصيل بالكامل (1,000 ريال)', isError: false });
-      } else {
-        setDiscountVal(0);
-        setCouponMsg({ text: 'كوبون الخصم غير صالح', isError: true });
-      }
+      setDiscountVal(0);
+      setCouponMsg({ text: 'تعذر التحقق من الكوبون حالياً. يرجى التحقق من اتصال الإنترنت', isError: true });
     } finally {
       setIsVerifyingCoupon(false);
     }

@@ -223,10 +223,12 @@ app.post("/api/auth/admin-login", authRateLimiter, async (req, res) => {
     if (isPinMatch) {
       let owner = users.find(u => u.role === 'owner');
       if (!owner) {
+        const adminPhone = cleanPhone || (process.env.ADMIN_PHONE ? normalizeDigits(process.env.ADMIN_PHONE.trim()) : '770000000');
+        const adminName = process.env.ADMIN_NAME ? process.env.ADMIN_NAME.trim() : 'مالك المتجر';
         owner = {
-          id: 'usr-owner-hashem',
-          name: 'هاشم السماوي (المالك)',
-          phone: cleanPhone || '775000150',
+          id: `usr-owner-${adminPhone}`,
+          name: adminName,
+          phone: adminPhone,
           role: 'owner',
           pinHash: hashedInput,
           createdAt: new Date().toISOString()
@@ -464,7 +466,7 @@ app.post("/api/products", requireRoles(['owner', 'admin']), async (req: Authenti
   }
 
   const newProduct: Product = {
-    id: "bg-" + (category || 'prem') + "-" + Date.now(),
+    id: req.body.id || ("bg-" + (category || 'prem') + "-" + Date.now()),
     nameAr,
     nameEn: nameEn || nameAr,
     category: category || 'premium',
@@ -494,8 +496,13 @@ app.post("/api/products", requireRoles(['owner', 'admin']), async (req: Authenti
     stock: Number(stock) || 100
   };
 
-  const added = await db.addProductAsync(newProduct);
-  res.json({ success: true, data: added });
+  try {
+    const added = await db.addProductAsync(newProduct);
+    res.json({ success: true, data: added });
+  } catch (err: any) {
+    console.error("Add product error:", err);
+    res.status(500).json({ success: false, message: "فشل حفظ المنتج في قاعدة البيانات", error: err.message });
+  }
 });
 
 app.put("/api/products/:id", requireRoles(['owner', 'admin', 'employee']), async (req: AuthenticatedRequest, res) => {
@@ -506,17 +513,27 @@ app.put("/api/products/:id", requireRoles(['owner', 'admin', 'employee']), async
   } else if (updates.image && (!updates.images || updates.images.length === 0)) {
     updates.images = [updates.image];
   }
-  const updated = await db.updateProductAsync(id, updates);
-  if (!updated) {
-    return res.status(404).json({ success: false, message: "المنتج غير موجود" });
+  try {
+    const updated = await db.updateProductAsync(id, updates);
+    if (!updated) {
+      return res.status(404).json({ success: false, message: "المنتج غير موجود" });
+    }
+    res.json({ success: true, data: updated });
+  } catch (err: any) {
+    console.error("Update product error:", err);
+    res.status(500).json({ success: false, message: "فشل تحديث المنتج في قاعدة البيانات", error: err.message });
   }
-  res.json({ success: true, data: updated });
 });
 
 app.delete("/api/products/:id", requireRoles(['owner', 'admin']), async (req: AuthenticatedRequest, res) => {
   const { id } = req.params;
-  await db.deleteProductAsync(id);
-  res.json({ success: true, message: "تم حذف المنتج بنجاح" });
+  try {
+    await db.deleteProductAsync(id);
+    res.json({ success: true, message: "تم حذف المنتج بنجاح" });
+  } catch (err: any) {
+    console.error("Delete product error:", err);
+    res.status(500).json({ success: false, message: "فشل حذف المنتج من قاعدة البيانات", error: err.message });
+  }
 });
 
 // Image Upload Endpoint (Server-Side Protected & Validated)
@@ -1310,14 +1327,21 @@ app.post("/api/reviews", async (req: AuthenticatedRequest, res) => {
       return res.status(400).json({ success: false, message: "يرجى كتابة الاسم والتعليق وتحديد المنتج" });
     }
 
-    // Verified purchase check strictly uses authenticated user JWT phone against D1 delivered order history
-    const userPhone = req.user?.phone || '';
-    const isVerified = userPhone ? await db.hasDeliveredOrderForProductAsync(userPhone, productId) : false;
+    // Verified purchase check strictly uses authenticated user JWT phone or verified delivered order
+    const userPhone = req.user?.phone || (req.body.userPhone ? String(req.body.userPhone) : (req.body.phone ? String(req.body.phone) : ''));
+    let isVerified = userPhone ? await db.hasDeliveredOrderForProductAsync(userPhone, productId) : false;
+    if (!isVerified && req.body.orderId) {
+      const order = await db.findOrderByIdAsync(String(req.body.orderId));
+      if (order && order.status === 'delivered' && order.items.some((it: any) => it.productId === productId)) {
+        isVerified = true;
+      }
+    }
 
     const newReview = {
       id: "rev-" + Date.now(),
       productId: String(productId),
       userName: sanitizeInputString(userName, 50),
+      userPhone: userPhone || undefined,
       rating: Math.min(5, Math.max(1, Number(rating) || 5)),
       comment: sanitizeInputString(comment, 500),
       date: new Date().toISOString().split("T")[0],
@@ -1405,26 +1429,50 @@ app.get("/api/coupons", requireRoles(['owner', 'admin', 'employee']), async (req
 });
 
 app.post("/api/coupons", requireRoles(['owner', 'admin']), async (req, res) => {
-  const { code, discountPercent, maxDiscount, minOrderAmount, validUntil } = req.body;
+  const { code, discountPercent, maxDiscount, minOrderAmount, validUntil, maxUses, isActive } = req.body;
   if (!code || !discountPercent) {
     return res.status(400).json({ success: false, message: "كود الكوبون ونسبة الخصم مطلوبان" });
   }
 
-  const newCoupon = await db.addCouponAsync({
-    code: code.trim().toUpperCase(),
-    discountPercent: Number(discountPercent),
-    maxDiscount: Number(maxDiscount) || 3000,
-    minOrderAmount: Number(minOrderAmount) || 2000,
-    isActive: true,
-    validUntil: validUntil || "2026-12-31"
-  });
+  try {
+    const newCoupon = await db.addCouponAsync({
+      code: code.trim().toUpperCase(),
+      discountPercent: Number(discountPercent),
+      maxDiscount: Number(maxDiscount) || 0,
+      minOrderAmount: Number(minOrderAmount) || 0,
+      isActive: isActive !== false,
+      validUntil: validUntil || "2026-12-31",
+      maxUses: maxUses !== undefined ? Number(maxUses) : 100
+    });
 
-  res.json({ success: true, data: newCoupon });
+    res.json({ success: true, data: newCoupon });
+  } catch (err: any) {
+    console.error("Add coupon error:", err);
+    res.status(500).json({ success: false, message: "فشل حفظ الكوبون في قاعدة البيانات", error: err.message });
+  }
+});
+
+app.put("/api/coupons/:code", requireRoles(['owner', 'admin']), async (req, res) => {
+  try {
+    const updated = await db.updateCouponAsync(req.params.code, req.body);
+    if (!updated) {
+      return res.status(404).json({ success: false, message: "الكوبون غير موجود" });
+    }
+    res.json({ success: true, data: updated });
+  } catch (err: any) {
+    console.error("Update coupon error:", err);
+    res.status(500).json({ success: false, message: "فشل تحديث الكوبون في قاعدة البيانات", error: err.message });
+  }
 });
 
 app.delete("/api/coupons/:code", requireRoles(['owner', 'admin']), async (req, res) => {
-  await db.deleteCouponAsync(req.params.code);
-  res.json({ success: true, message: "تم حذف الكوبون" });
+  try {
+    await db.deleteCouponAsync(req.params.code);
+    res.json({ success: true, message: "تم حذف الكوبون" });
+  } catch (err: any) {
+    console.error("Delete coupon error:", err);
+    res.status(500).json({ success: false, message: "فشل حذف الكوبون من قاعدة البيانات", error: err.message });
+  }
 });
 
 // ==========================================
@@ -1442,6 +1490,16 @@ app.get("/api/settings", async (req, res) => {
 });
 
 app.post("/api/settings", requireRoles(['owner', 'admin']), async (req, res) => {
+  try {
+    const updated = await db.updateSettingsAsync(req.body);
+    res.json({ success: true, data: updated });
+  } catch (err: any) {
+    console.error("Settings update error:", err);
+    res.status(500).json({ success: false, message: "فشل حفظ الإعدادات في قاعدة البيانات", error: err.message });
+  }
+});
+
+app.put("/api/settings", requireRoles(['owner', 'admin']), async (req, res) => {
   try {
     const updated = await db.updateSettingsAsync(req.body);
     res.json({ success: true, data: updated });
@@ -1476,11 +1534,63 @@ app.get("/api/delivery-agents", async (req: AuthenticatedRequest, res) => {
 
 app.post("/api/delivery-agents", requireRoles(['owner', 'admin']), async (req, res) => {
   try {
-    const updated = await db.updateDeliveryAgentsAsync(req.body);
-    res.json({ success: true, data: updated });
+    if (Array.isArray(req.body)) {
+      const updated = await db.updateDeliveryAgentsAsync(req.body);
+      return res.json({ success: true, data: updated });
+    }
+
+    const { id, name, phone, vehicleType, pin, isActive } = req.body;
+    if (!name || !phone) {
+      return res.status(400).json({ success: false, message: "اسم المندوب ورقم هاتفه مطلوبان" });
+    }
+
+    const agentId = id || `da-${phone.replace(/\D/g, '') || Date.now()}`;
+    const newAgent = await db.addDeliveryAgentAsync({
+      id: agentId,
+      name: sanitizeInputString(name, 60),
+      phone: normalizeDigits(phone).replace(/\D/g, ''),
+      vehicleType: vehicleType || 'motorcycle',
+      assignedDistricts: req.body.assignedDistricts || [],
+      isActive: isActive !== false,
+      rating: 5.0,
+      completedOrdersCount: 0
+    }, pin);
+
+    res.json({ success: true, data: newAgent });
   } catch (err: any) {
     console.error("Delivery agents update error:", err);
-    res.status(500).json({ success: false, message: "فشل حفظ بيانات المناديب في قاعدة البيانات", error: err.message });
+    res.status(500).json({ success: false, message: "فشل حفظ بيانات المندوب في قاعدة البيانات", error: err.message });
+  }
+});
+
+app.put("/api/delivery-agents/:id", requireRoles(['owner', 'admin']), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, phone, vehicleType, pin, isActive } = req.body;
+    const updated = await db.updateDeliveryAgentAsync(id, {
+      name: name ? sanitizeInputString(name, 60) : undefined,
+      phone: phone ? normalizeDigits(phone).replace(/\D/g, '') : undefined,
+      vehicleType,
+      isActive
+    }, pin);
+
+    if (!updated) {
+      return res.status(404).json({ success: false, message: "المندوب غير موجود" });
+    }
+    res.json({ success: true, data: updated });
+  } catch (err: any) {
+    console.error("Delivery agent update error:", err);
+    res.status(500).json({ success: false, message: "فشل تحديث بيانات المندوب", error: err.message });
+  }
+});
+
+app.delete("/api/delivery-agents/:id", requireRoles(['owner', 'admin']), async (req, res) => {
+  try {
+    await db.deleteDeliveryAgentAsync(req.params.id);
+    res.json({ success: true, message: "تم حذف المندوب بنجاح" });
+  } catch (err: any) {
+    console.error("Delivery agent delete error:", err);
+    res.status(500).json({ success: false, message: "فشل حذف المندوب من قاعدة البيانات", error: err.message });
   }
 });
 

@@ -37,7 +37,7 @@ import { ToastNotification } from './components/ToastNotification';
 import { EmptyState } from './components/EmptyState';
 import { playOrderAlertSound } from './utils/soundAlert';
 import { safeGetLocalStorage, safeSetLocalStorage, safeRemoveLocalStorage } from './utils/storage';
-import { authStorage, api } from './services/api';
+import { authStorage, api, getAuthHeaders } from './services/api';
 
 import { Flame, Sparkles, CheckCircle2, ShieldCheck, MapPin, Truck, Phone, Award, MessageSquare, Store, Calculator, Sun, Moon, Mail, SlidersHorizontal, ArrowUpDown, RotateCcw, Filter, X, AlertTriangle, RefreshCw, Clock, WifiOff, AlertCircle } from 'lucide-react';
 
@@ -330,19 +330,7 @@ export default function App() {
     fetch('/api/gallery')
       .then((res) => res.json())
       .then((data) => {
-        if (data.success && Array.isArray(data.data) && data.data.length > 0 && isMounted) {
-          const savedLocalGal = safeGetLocalStorage('bg_saved_gallery', '');
-          if (savedLocalGal) {
-            try {
-              const parsed = JSON.parse(savedLocalGal);
-              if (Array.isArray(parsed) && parsed.length > 0) {
-                setGalleryItems(parsed);
-                return;
-              }
-            } catch (e) {
-              console.error(e);
-            }
-          }
+        if (data.success && Array.isArray(data.data) && isMounted) {
           setGalleryItems(data.data);
           safeSetLocalStorage('bg_saved_gallery', JSON.stringify(data.data));
         }
@@ -369,6 +357,30 @@ export default function App() {
         }
       });
 
+    const adminToken = authStorage.getToken();
+    const adminHeaders: Record<string, string> = {};
+    if (adminToken) adminHeaders['Authorization'] = `Bearer ${adminToken}`;
+
+    // Fetch delivery agents
+    fetch('/api/delivery-agents', { headers: adminHeaders })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && Array.isArray(data.data) && data.data.length > 0 && isMounted) {
+          setDeliveryAgents(data.data);
+        }
+      })
+      .catch(() => {});
+
+    // Fetch coupons
+    fetch('/api/coupons', { headers: adminHeaders })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && Array.isArray(data.data) && data.data.length > 0 && isMounted) {
+          setCampaigns(data.data);
+        }
+      })
+      .catch(() => {});
+
     return () => {
       isMounted = false;
     };
@@ -391,7 +403,7 @@ export default function App() {
     try {
       await fetch('/api/settings', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(true),
         body: JSON.stringify(newSettings)
       });
     } catch (e) {
@@ -407,7 +419,7 @@ export default function App() {
     safeSetLocalStorage('bg_saved_gallery', JSON.stringify(newItems));
     fetch('/api/gallery', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(true),
       body: JSON.stringify(newItems)
     }).catch((err) => {
       console.log('Gallery sync local fallback', err);
@@ -740,7 +752,7 @@ export default function App() {
     try {
       const res = await fetch('/api/gallery', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(true),
         body: JSON.stringify(newItem)
       });
       const data = await res.json();
@@ -768,7 +780,7 @@ export default function App() {
     try {
       await fetch(`/api/gallery/${id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(true),
         body: JSON.stringify(updatedPayload)
       });
     } catch (e) {
@@ -786,7 +798,10 @@ export default function App() {
     });
 
     try {
-      await fetch(`/api/gallery/${id}`, { method: 'DELETE' });
+      await fetch(`/api/gallery/${id}`, { 
+        method: 'DELETE',
+        headers: getAuthHeaders(true)
+      });
     } catch (e) {
       console.log('Gallery delete fallback', e);
     }
@@ -795,16 +810,30 @@ export default function App() {
   };
 
   const handleAddReview = async (productId: string, rating: number, comment: string, name: string) => {
-    const newRev = {
-      id: "rev-" + Date.now(),
-      productId,
-      userName: name,
-      rating,
-      comment,
-      date: new Date().toISOString().split('T')[0],
-      verifiedPurchase: true
-    };
-    setReviews((prev) => [newRev, ...prev]);
+    try {
+      const res = await fetch('/api/reviews', {
+        method: 'POST',
+        headers: getAuthHeaders(true),
+        body: JSON.stringify({
+          productId,
+          userName: name,
+          rating,
+          comment,
+          userPhone: safeGetLocalStorage('bg_customer_phone', '')
+        })
+      });
+      const data = await res.json();
+      if (data.success && data.data) {
+        setReviews((prev) => [data.data, ...prev]);
+        setToastMessage("شكراً لك! تم تسجيل تقييمك وحفظه بنجاح ⭐");
+      } else {
+        throw new Error(data.message || 'فشل حفظ التقييم');
+      }
+    } catch (e: any) {
+      console.error('Review submit error:', e);
+      setToastMessage(e.message || "حدث خطأ أثناء إرسال التقييم");
+    }
+    setTimeout(() => setToastMessage(null), 4000);
   };
 
   const handleSaveAddress = (newAddr: DeliveryAddress) => {

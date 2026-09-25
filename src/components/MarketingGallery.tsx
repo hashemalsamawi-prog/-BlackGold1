@@ -15,7 +15,7 @@ export const MarketingGallery: React.FC<MarketingGalleryProps> = ({
   items, 
   enableAnimations = true 
 }) => {
-  const displayItems = items && items.length > 0 ? items : INITIAL_GALLERY_ITEMS;
+  const displayItems = items !== undefined ? items : INITIAL_GALLERY_ITEMS;
   const [selectedImageIndex, setSelectedImageIndex] = useState<number | null>(null);
 
   const selectedItem = selectedImageIndex !== null ? displayItems[selectedImageIndex] : null;
@@ -46,50 +46,58 @@ export const MarketingGallery: React.FC<MarketingGalleryProps> = ({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {displayItems.map((item, idx) => (
-          <div
-            key={item.id || idx}
-            onClick={() => setSelectedImageIndex(idx)}
-            className={`group relative rounded-2xl overflow-hidden bg-zinc-900 border border-zinc-800 hover:border-amber-500/50 cursor-pointer aspect-video sm:aspect-square transition-all duration-300 shadow-lg hover:shadow-amber-500/15 ${
-              enableAnimations ? 'transform hover:-translate-y-1' : ''
-            }`}
-          >
-            <img
-              src={resolveAsset(item.image)}
-              alt={item.titleAr}
-              className={`w-full h-full object-cover transition-transform duration-700 ${
-                enableAnimations ? 'group-hover:scale-105' : ''
+      {displayItems.length === 0 ? (
+        <div className="p-8 rounded-2xl bg-[#0F0F16] border border-zinc-800 text-center space-y-2">
+          <ImageIcon className="w-8 h-8 text-zinc-600 mx-auto" />
+          <p className="text-zinc-400 text-sm font-bold">لا توجد صور مضافة في المعرض حالياً</p>
+          <p className="text-zinc-500 text-xs">سيتم إضافة صور حية من خطوط الإنتاج وفعاليات المتجر قريباً</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {displayItems.map((item, idx) => (
+            <div
+              key={item.id || idx}
+              onClick={() => setSelectedImageIndex(idx)}
+              className={`group relative rounded-2xl overflow-hidden bg-zinc-900 border border-zinc-800 hover:border-amber-500/50 cursor-pointer aspect-video sm:aspect-square transition-all duration-300 shadow-lg hover:shadow-amber-500/15 ${
+                enableAnimations ? 'transform hover:-translate-y-1' : ''
               }`}
-              referrerPolicy="no-referrer"
-              onError={(e) => {
-                const target = e.target as HTMLImageElement;
-                if (target.src !== ASSETS.pouchPair) {
-                  target.src = ASSETS.pouchPair;
-                }
-              }}
-            />
-            <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/40 to-transparent opacity-90 group-hover:opacity-95 transition-opacity" />
+            >
+              <img
+                src={resolveAsset(item.image)}
+                alt={item.titleAr}
+                className={`w-full h-full object-cover transition-transform duration-700 ${
+                  enableAnimations ? 'group-hover:scale-105' : ''
+                }`}
+                referrerPolicy="no-referrer"
+                onError={(e) => {
+                  const target = e.target as HTMLImageElement;
+                  if (target.src !== ASSETS.pouchPair) {
+                    target.src = ASSETS.pouchPair;
+                  }
+                }}
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/40 to-transparent opacity-90 group-hover:opacity-95 transition-opacity" />
 
-            <div className="absolute bottom-3 right-3 left-3 space-y-1">
-              <span className="text-[10px] font-black text-amber-400 uppercase tracking-wider block">
-                {item.category === 'fleet'
-                  ? 'أسطول صنعاء'
-                  : item.category === 'sessions'
-                  ? 'جلسات الروقان'
-                  : item.category === 'retail'
-                  ? 'نقاط البيع'
-                  : 'الهوية الملكية'}
-              </span>
-              <h4 className="text-xs font-black text-white line-clamp-1">{item.titleAr}</h4>
-            </div>
+              <div className="absolute bottom-3 right-3 left-3 space-y-1">
+                <span className="text-[10px] font-black text-amber-400 uppercase tracking-wider block">
+                  {item.category === 'fleet'
+                    ? 'أسطول صنعاء'
+                    : item.category === 'sessions'
+                    ? 'جلسات الروقان'
+                    : item.category === 'retail'
+                    ? 'نقاط البيع'
+                    : 'الهوية الملكية'}
+                </span>
+                <h4 className="text-xs font-black text-white line-clamp-1">{item.titleAr}</h4>
+              </div>
 
-            <div className="absolute top-3 left-3 opacity-0 group-hover:opacity-100 transition-opacity p-2 rounded-xl bg-black/70 backdrop-blur-md text-amber-400 shadow-lg border border-amber-500/30">
-              <Eye className="w-4 h-4" />
+              <div className="absolute top-3 left-3 opacity-0 group-hover:opacity-100 transition-opacity p-2 rounded-xl bg-black/70 backdrop-blur-md text-amber-400 shadow-lg border border-amber-500/30">
+                <Eye className="w-4 h-4" />
+              </div>
             </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
 
       {/* Lightbox Preview */}
       {selectedItem && (

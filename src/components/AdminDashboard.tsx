@@ -17,7 +17,7 @@ import { Logo } from './Logo';
 import { playOrderAlertSound } from '../utils/soundAlert';
 import { resolveAsset, ASSETS } from '../assets/images';
 import { compressImage, safeSetLocalStorage, safeRemoveLocalStorage, safeGetLocalStorage } from '../utils/storage';
-import { api } from '../services/api';
+import { api, authStorage } from '../services/api';
 import { InvoiceReceiptModal } from './InvoiceReceiptModal';
 
 interface AdminDashboardProps {
@@ -214,6 +214,152 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       })
       .catch(() => {});
   }, [activeTab]);
+
+  // Driver CRUD Handlers
+  const handleSaveDriver = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!driverForm.name.trim() || !driverForm.phone.trim()) return;
+    try {
+      const token = authStorage.getToken();
+      const res = await fetch('/api/delivery-agents', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          name: driverForm.name.trim(),
+          phone: driverForm.phone.trim(),
+          vehicleType: driverForm.vehicleType,
+          districtZone: driverForm.districtZone,
+          vehiclePlate: driverForm.vehiclePlate,
+          pin: (driverForm as any).pin || '1234',
+          isActive: true
+        })
+      });
+      const data = await res.json();
+      if (data.success && data.data) {
+        onUpdateDeliveryAgents([...deliveryAgents, data.data]);
+        setDriverModalOpen(false);
+        setDriverForm({
+          name: '',
+          phone: '',
+          vehicleType: 'motorcycle',
+          districtZone: 'حدة والسبعين',
+          vehiclePlate: 'صنعاء - 14920 د'
+        });
+      }
+    } catch (err) {
+      console.error('Error saving driver:', err);
+    }
+  };
+
+  const handleDeleteDriver = async (driverId: string) => {
+    if (!window.confirm('هل أنت متأكد من حذف هذا المندوب من الأسطول؟')) return;
+    try {
+      const token = authStorage.getToken();
+      await fetch(`/api/delivery-agents/${driverId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      onUpdateDeliveryAgents(deliveryAgents.filter(d => d.id !== driverId));
+    } catch (err) {
+      console.error('Error deleting driver:', err);
+    }
+  };
+
+  const handleToggleDriverActive = async (driver: DeliveryAgent) => {
+    try {
+      const token = authStorage.getToken();
+      const newStatus = !driver.isActive;
+      await fetch(`/api/delivery-agents/${driver.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ isActive: newStatus })
+      });
+      onUpdateDeliveryAgents(
+        deliveryAgents.map(d => d.id === driver.id ? { ...d, isActive: newStatus } : d)
+      );
+    } catch (err) {
+      console.error('Error toggling driver status:', err);
+    }
+  };
+
+  // Coupon CRUD Handlers
+  const handleSaveCoupon = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!couponForm.code.trim()) return;
+    try {
+      const token = authStorage.getToken();
+      const res = await fetch('/api/coupons', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          code: couponForm.code.trim().toUpperCase(),
+          discountPercent: Number(couponForm.discountPercent),
+          maxDiscount: Number(couponForm.maxDiscount),
+          minOrderAmount: Number(couponForm.minOrderAmount),
+          validUntil: couponForm.validUntil,
+          maxUses: (couponForm as any).maxUses ? Number((couponForm as any).maxUses) : 100,
+          isActive: true
+        })
+      });
+      const data = await res.json();
+      if (data.success && data.data) {
+        onUpdateCampaigns([...campaigns, data.data]);
+        setCouponModalOpen(false);
+        setCouponForm({
+          code: '',
+          discountPercent: 10,
+          minOrderAmount: 2000,
+          maxDiscount: 2000,
+          validUntil: '2026-12-31'
+        });
+      }
+    } catch (err) {
+      console.error('Error saving coupon:', err);
+    }
+  };
+
+  const handleDeleteCoupon = async (code: string) => {
+    if (!window.confirm(`هل أنت متأكد من حذف الكوبون ${code}؟`)) return;
+    try {
+      const token = authStorage.getToken();
+      await fetch(`/api/coupons/${encodeURIComponent(code)}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      onUpdateCampaigns(campaigns.filter(c => c.code.toUpperCase() !== code.toUpperCase()));
+    } catch (err) {
+      console.error('Error deleting coupon:', err);
+    }
+  };
+
+  const handleToggleCouponActive = async (cp: Coupon | MarketingCampaign) => {
+    try {
+      const token = authStorage.getToken();
+      const newStatus = !(cp.isActive !== false);
+      await fetch(`/api/coupons/${encodeURIComponent(cp.code)}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ isActive: newStatus })
+      });
+      onUpdateCampaigns(
+        campaigns.map(c => c.code.toUpperCase() === cp.code.toUpperCase() ? { ...c, isActive: newStatus } : c)
+      );
+    } catch (err) {
+      console.error('Error toggling coupon status:', err);
+    }
+  };
 
   // High-Resolution Image Processing from Gallery / Studio with canvas auto-compression
   const processImageFile = async (file: File) => {
@@ -436,15 +582,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const handleDeleteGalleryItem = (id: string) => {
-    if (galleryList.length <= 1) {
-      alert('يجب الإبقاء على صورة واحدة على الأقل في المعرض.');
-      return;
-    }
     const updated = galleryList.filter(item => item.id !== id);
     setGalleryList(updated);
     safeSetLocalStorage('bg_saved_gallery', JSON.stringify(updated));
     if (onUpdateGalleryItems) onUpdateGalleryItems(updated);
-    showMediaToast('تم حذف العنصر من المعرض');
+    showMediaToast('تم حذف العنصر من المعرض بنجاح');
   };
 
   const handleResetGallery = () => {
@@ -1509,32 +1651,50 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
                       <div className="font-black text-white text-sm">{ag.name}</div>
-                      <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold">
-                        متصل 🛵
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleToggleDriverActive(ag)}
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold cursor-pointer transition-all ${
+                            ag.isActive !== false
+                              ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                              : 'bg-zinc-800 text-zinc-400 border border-zinc-700'
+                          }`}
+                        >
+                          {ag.isActive !== false ? 'متاح 🟢' : 'معطل 🔴'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteDriver(ag.id)}
+                          className="p-1 rounded-lg hover:bg-rose-500/20 text-rose-400 cursor-pointer"
+                          title="حذف المندوب"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
 
                     <div className="space-y-1 text-[11px] text-slate-300">
                       <div>📞 الهاتف: <strong className="text-amber-300 font-mono">{ag.phone}</strong></div>
-                      <div>📍 النطاق: <strong className="text-slate-200">{ag.districtZone}</strong></div>
-                      <div>🛵 المركبة: <strong className="text-slate-200">{ag.vehiclePlate}</strong></div>
+                      <div>📍 النطاق: <strong className="text-slate-200">{ag.districtZone || 'كافة أحياء صنعاء'}</strong></div>
+                      <div>🛵 المركبة: <strong className="text-slate-200">{ag.vehiclePlate || ag.vehicleType || 'دراجة نارية'}</strong></div>
                     </div>
 
                     <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-800 text-center text-[10px]">
                       <div className="p-2 rounded-lg bg-slate-950">
                         <span className="text-slate-400 block">نشط حالياً</span>
-                        <strong className="text-amber-400 text-xs font-mono">{ag.activeOrdersCount}</strong>
+                        <strong className="text-amber-400 text-xs font-mono">{ag.activeOrdersCount || 0}</strong>
                       </div>
                       <div className="p-2 rounded-lg bg-slate-950">
                         <span className="text-slate-400 block">طلبات مسلمة</span>
-                        <strong className="text-emerald-400 text-xs font-mono">{ag.deliveredCount}</strong>
+                        <strong className="text-emerald-400 text-xs font-mono">{ag.deliveredCount || ag.completedOrdersCount || 0}</strong>
                       </div>
                     </div>
                   </div>
 
                   <button
                     onClick={() => onOpenDriverScreen(ag.name)}
-                    className="w-full py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 font-black text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                    className="w-full py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 font-black text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer mt-2"
                   >
                     <ExternalLink className="w-3.5 h-3.5 text-amber-400" />
                     <span>دخول شاشة الكابتن الميدانية</span>
@@ -1551,7 +1711,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {activeTab === 'coupons' && (
           <div className="space-y-4 overflow-y-auto pr-1">
             <div className="flex items-center justify-between">
-              <h3 className="font-bold text-white text-xs">كوبونات الخصم والحملات الترويجية:</h3>
+              <h3 className="font-bold text-white text-xs">كوبونات الخصم والحملات الترويجية ({campaigns.length}):</h3>
               <button
                 onClick={() => setCouponModalOpen(true)}
                 className="px-3 py-1.5 rounded-xl gold-gradient-bg text-slate-950 font-black text-xs flex items-center gap-1 cursor-pointer"
@@ -1568,13 +1728,42 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <span className="px-3 py-1 bg-amber-500/20 border border-amber-500/40 text-amber-300 font-mono font-black rounded-lg text-sm">
                       {cp.code}
                     </span>
-                    <span className="text-emerald-400 font-bold text-xs">خصم {cp.discountPercent}%</span>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleToggleCouponActive(cp)}
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold cursor-pointer transition-all ${
+                          cp.isActive !== false
+                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                            : 'bg-zinc-800 text-zinc-400 border border-zinc-700'
+                        }`}
+                      >
+                        {cp.isActive !== false ? 'مفعل ✓' : 'معطل ✕'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteCoupon(cp.code)}
+                        className="p-1 rounded-lg hover:bg-rose-500/20 text-rose-400 cursor-pointer"
+                        title="حذف الكوبون"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
-                  <div className="text-[11px] text-slate-400 pt-1">
-                    الحد الأدنى للطلب: <strong className="text-white font-mono">{cp.minOrderAmount?.toLocaleString()} YER</strong>
+                  <div className="flex items-center justify-between text-[11px] pt-1">
+                    <span className="text-emerald-400 font-bold">خصم {cp.discountPercent}%</span>
+                    {(cp as any).maxDiscount ? (
+                      <span className="text-zinc-400 font-mono">سقف: {(cp as any).maxDiscount.toLocaleString()} YER</span>
+                    ) : null}
                   </div>
-                  <div className="text-[10px] text-slate-500">
-                    صالح حتى: {cp.validUntil || '2026-12-31'}
+                  <div className="text-[11px] text-slate-400">
+                    الحد الأدنى للطلب: <strong className="text-white font-mono">{cp.minOrderAmount?.toLocaleString() || 0} YER</strong>
+                  </div>
+                  <div className="flex items-center justify-between text-[10px] text-slate-500 pt-1 border-t border-slate-800">
+                    <span>صالح حتى: {cp.validUntil || (cp as any).expiresAt || '2026-12-31'}</span>
+                    {(cp as any).usageCount !== undefined ? (
+                      <span className="font-mono text-amber-400">استخدم {(cp as any).usageCount} مرة</span>
+                    ) : null}
                   </div>
                 </div>
               ))}
@@ -2037,12 +2226,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
 
               {/* Gallery Cards Grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                {galleryList.map((item) => (
-                  <div
-                    key={item.id}
-                    className="group relative rounded-2xl overflow-hidden bg-slate-950 border border-slate-800 hover:border-amber-500/50 transition-all flex flex-col justify-between shadow-lg"
-                  >
+              {galleryList.length === 0 ? (
+                <div className="p-8 rounded-2xl bg-slate-950 border border-slate-800 text-center space-y-3">
+                  <Image className="w-10 h-10 text-slate-600 mx-auto" />
+                  <p className="text-white font-bold text-sm">معرض الصور فارغ حالياً</p>
+                  <p className="text-slate-400 text-xs">يمكنك إضافة صور جديدة ومبتكرة لمنتجات وفعاليات المتجر باستخدام زر "إضافة صورة للمعرض" أعلاه</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                  {galleryList.map((item) => (
+                    <div
+                      key={item.id}
+                      className="group relative rounded-2xl overflow-hidden bg-slate-950 border border-slate-800 hover:border-amber-500/50 transition-all flex flex-col justify-between shadow-lg"
+                    >
                     {/* Image Box */}
                     <div className="relative aspect-video sm:aspect-square overflow-hidden bg-black flex items-center justify-center">
                       <img
@@ -2123,6 +2319,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                 ))}
               </div>
+              )}
             </div>
 
             {/* SECTION 4: GLOBAL ANIMATIONS SWITCH */}
@@ -2663,6 +2860,212 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </button>
                 </div>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL: ADD DELIVERY AGENT / DRIVER */}
+        {driverModalOpen && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+            <div className="bg-[#121218] border border-amber-500/50 rounded-3xl max-w-md w-full p-5 text-slate-100 space-y-4 shadow-2xl">
+              <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+                <div className="flex items-center gap-2">
+                  <Truck className="w-5 h-5 text-amber-400" />
+                  <h4 className="font-black text-white text-sm">إضافة كابتن توصيل جديد للأسطول</h4>
+                </div>
+                <button
+                  onClick={() => setDriverModalOpen(false)}
+                  className="text-slate-400 hover:text-white p-1 rounded-lg"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveDriver} className="space-y-3 text-xs">
+                <div>
+                  <label className="text-slate-300 font-bold block mb-1">اسم الكابتن:</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="مثال: الكابتن عصام الحاشدي"
+                    value={driverForm.name}
+                    onChange={(e) => setDriverForm({ ...driverForm, name: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 text-white p-2.5 rounded-xl font-bold text-xs"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-slate-300 font-bold block mb-1">رقم الهاتف (يمني):</label>
+                  <input
+                    type="tel"
+                    required
+                    placeholder="77XXXXXXX"
+                    value={driverForm.phone}
+                    onChange={(e) => setDriverForm({ ...driverForm, phone: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 text-amber-400 font-mono p-2.5 rounded-xl text-xs"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-slate-300 font-bold block mb-1">نوع المركبة:</label>
+                    <select
+                      value={driverForm.vehicleType}
+                      onChange={(e) => setDriverForm({ ...driverForm, vehicleType: e.target.value as any })}
+                      className="w-full bg-slate-950 border border-slate-800 text-white p-2.5 rounded-xl text-xs"
+                    >
+                      <option value="motorcycle">دراجة نارية 🛵</option>
+                      <option value="car">سيارة 🚗</option>
+                      <option value="van">باص / فان 🚐</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-slate-300 font-bold block mb-1">رمز PIN للدخول:</label>
+                    <input
+                      type="password"
+                      placeholder="مثال: 5566"
+                      value={(driverForm as any).pin || ''}
+                      onChange={(e) => setDriverForm({ ...driverForm, pin: e.target.value } as any)}
+                      className="w-full bg-slate-950 border border-slate-800 text-white p-2.5 rounded-xl text-xs font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-slate-300 font-bold block mb-1">نطاق التوصيل الأساسي في صنعاء:</label>
+                  <input
+                    type="text"
+                    placeholder="مثال: حدة، الأصبحي، بيت بوس"
+                    value={driverForm.districtZone}
+                    onChange={(e) => setDriverForm({ ...driverForm, districtZone: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 text-white p-2.5 rounded-xl text-xs"
+                  />
+                </div>
+
+                <div className="pt-2 flex items-center justify-end gap-2 border-t border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setDriverModalOpen(false)}
+                    className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold"
+                  >
+                    إلغاء
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 font-black text-xs hover:brightness-110 shadow-lg cursor-pointer"
+                  >
+                    حفظ وإضافة الكابتن
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL: ADD / CREATE COUPON */}
+        {couponModalOpen && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+            <div className="bg-[#121218] border border-amber-500/50 rounded-3xl max-w-md w-full p-5 text-slate-100 space-y-4 shadow-2xl">
+              <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+                <div className="flex items-center gap-2">
+                  <Tag className="w-5 h-5 text-amber-400" />
+                  <h4 className="font-black text-white text-sm">إنشاء كود خصم جديد (Coupon)</h4>
+                </div>
+                <button
+                  onClick={() => setCouponModalOpen(false)}
+                  className="text-slate-400 hover:text-white p-1 rounded-lg"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveCoupon} className="space-y-3 text-xs">
+                <div>
+                  <label className="text-slate-300 font-bold block mb-1">كود الخصم (بالإنجليزي):</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="مثال: SANAA2026"
+                    value={couponForm.code}
+                    onChange={(e) => setCouponForm({ ...couponForm, code: e.target.value.toUpperCase() })}
+                    className="w-full bg-slate-950 border border-slate-800 text-amber-300 font-mono font-black p-2.5 rounded-xl text-xs uppercase"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-slate-300 font-bold block mb-1">نسبة الخصم (%):</label>
+                    <input
+                      type="number"
+                      required
+                      min={1}
+                      max={100}
+                      value={couponForm.discountPercent}
+                      onChange={(e) => setCouponForm({ ...couponForm, discountPercent: Number(e.target.value) })}
+                      className="w-full bg-slate-950 border border-slate-800 text-white p-2.5 rounded-xl text-xs font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-slate-300 font-bold block mb-1">أقصى مبلغ خصم (YER):</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={couponForm.maxDiscount}
+                      onChange={(e) => setCouponForm({ ...couponForm, maxDiscount: Number(e.target.value) })}
+                      className="w-full bg-slate-950 border border-slate-800 text-white p-2.5 rounded-xl text-xs font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-slate-300 font-bold block mb-1">الحد الأدنى للطلب (YER):</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={couponForm.minOrderAmount}
+                      onChange={(e) => setCouponForm({ ...couponForm, minOrderAmount: Number(e.target.value) })}
+                      className="w-full bg-slate-950 border border-slate-800 text-white p-2.5 rounded-xl text-xs font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-slate-300 font-bold block mb-1">تاريخ الانتهاء:</label>
+                    <input
+                      type="date"
+                      value={couponForm.validUntil}
+                      onChange={(e) => setCouponForm({ ...couponForm, validUntil: e.target.value })}
+                      className="w-full bg-slate-950 border border-slate-800 text-white p-2.5 rounded-xl text-xs"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-slate-300 font-bold block mb-1">أقصى عدد مرات استخدام (Max Uses):</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={(couponForm as any).maxUses || 100}
+                    onChange={(e) => setCouponForm({ ...couponForm, maxUses: Number(e.target.value) } as any)}
+                    className="w-full bg-slate-950 border border-slate-800 text-white p-2.5 rounded-xl text-xs font-mono"
+                  />
+                </div>
+
+                <div className="pt-2 flex items-center justify-end gap-2 border-t border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setCouponModalOpen(false)}
+                    className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold"
+                  >
+                    إلغاء
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 font-black text-xs hover:brightness-110 shadow-lg cursor-pointer"
+                  >
+                    إنشاء وتفعيل الكوبون
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         )}

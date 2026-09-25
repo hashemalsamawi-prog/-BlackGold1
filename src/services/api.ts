@@ -264,4 +264,75 @@ export const api = {
       throw networkErr;
     }
   },
+
+  async getCoupons() {
+    const res = await fetch('/api/coupons', { headers: getAuthHeaders(false) });
+    return res.json();
+  },
+
+  async addCoupon(couponData: any) {
+    const res = await fetch('/api/coupons', {
+      method: 'POST',
+      headers: getAuthHeaders(true),
+      body: JSON.stringify(couponData),
+    });
+    return res.json();
+  },
+
+  async updateCoupon(code: string, couponData: any) {
+    const res = await fetch(`/api/coupons/${encodeURIComponent(code)}`, {
+      method: 'PUT',
+      headers: getAuthHeaders(true),
+      body: JSON.stringify(couponData),
+    });
+    return res.json();
+  },
+
+  async deleteCoupon(code: string) {
+    const res = await fetch(`/api/coupons/${encodeURIComponent(code)}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders(false),
+    });
+    return res.json();
+  },
+
+  async validateCoupon(code: string, amount: number, items?: any[]) {
+    const res = await fetch('/api/validate-coupon', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, amount, items }),
+    });
+    return res.json();
+  },
+
+  async getDeliveryAgents() {
+    const res = await fetch('/api/delivery-agents', { headers: getAuthHeaders(false) });
+    return res.json();
+  },
+
+  async addDeliveryAgent(agentData: any) {
+    const res = await fetch('/api/delivery-agents', {
+      method: 'POST',
+      headers: getAuthHeaders(true),
+      body: JSON.stringify(agentData),
+    });
+    return res.json();
+  },
+
+  async updateDeliveryAgent(id: string, agentData: any) {
+    const res = await fetch(`/api/delivery-agents/${id}`, {
+      method: 'PUT',
+      headers: getAuthHeaders(true),
+      body: JSON.stringify(agentData),
+    });
+    return res.json();
+  },
+
+  async deleteDeliveryAgent(id: string) {
+    const res = await fetch(`/api/delivery-agents/${id}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders(false),
+    });
+    return res.json();
+  },
 };
