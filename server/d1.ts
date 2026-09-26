@@ -359,8 +359,8 @@ class D1DatabaseAccessLayer {
         });
       }
 
-      // 8. Ensure Default Master Owner Account (هاشم السماوي) exists
-      this.ensureDefaultUsers();
+      // 8. Ensure Default Master Owner Account exists
+      await this.ensureDefaultUsersAsync();
 
       this.isInitialized = true;
       this.saveLocal();
@@ -378,72 +378,82 @@ class D1DatabaseAccessLayer {
 }
 
   /**
-   * Ensure Owner Account structure exists and loads credentials strictly from environment or D1
+   * Ensure Owner Account structure exists and loads credentials strictly from environment or D1.
+   * In Production: Owner is ONLY provisioned from environment variables (ADMIN_PHONE, ADMIN_PIN, ADMIN_NAME).
+   * Zero hardcoded phones or PINs. D1 is updated first; memory is only updated upon successful D1 operation.
    */
-  public ensureDefaultUsers() {
-    const hasOwner = this.tables.users.some(u => u.role === 'owner');
+  public async ensureDefaultUsersAsync(): Promise<void> {
     const envAdminPhone = process.env.ADMIN_PHONE ? normalizeDigits(process.env.ADMIN_PHONE.trim()) : '';
     const envAdminName = process.env.ADMIN_NAME ? process.env.ADMIN_NAME.trim() : 'مالك المتجر';
     const envAdminPin = process.env.ADMIN_PIN ? normalizeDigits(process.env.ADMIN_PIN.trim()) : '';
 
-    if (!hasOwner) {
-      if (process.env.NODE_ENV === 'production') {
-        // In production, only provision owner if explicit ADMIN_PHONE environment variable is configured
-        if (envAdminPhone) {
-          const ownerAccount: UserAccount = {
-            id: `usr-owner-${envAdminPhone}`,
-            name: envAdminName,
-            phone: envAdminPhone,
-            role: 'owner',
-            createdAt: new Date().toISOString()
-          };
-          if (envAdminPin) {
-            ownerAccount.pinHash = hashSecret(envAdminPin);
-          }
-          this.tables.users.push(ownerAccount);
-          if (this.isD1Configured()) {
-            this.executeCloudflareD1Query(
-              "INSERT OR IGNORE INTO users (id, name, phone, role, pin_hash, created_at) VALUES (?, ?, ?, ?, ?, ?);",
-              [ownerAccount.id, ownerAccount.name, ownerAccount.phone, ownerAccount.role, ownerAccount.pinHash || null, ownerAccount.createdAt]
-            ).catch((err) => { console.warn('Could not sync env owner to D1:', err); });
-          }
+    if (this.isD1Configured()) {
+      // 1. Check existing owner directly in D1
+      const ownerRows = await this.executeCloudflareD1Query("SELECT * FROM users WHERE role = 'owner' LIMIT 1;");
+      if (Array.isArray(ownerRows) && ownerRows.length > 0) {
+        const existingOwner = this.mapD1UserToUser(ownerRows[0]);
+        // Update pin_hash in D1 if ADMIN_PIN environment variable is provided and owner has none
+        if (envAdminPin && !existingOwner.pinHash && !existingOwner.passwordHash) {
+          const pinHash = hashSecret(envAdminPin);
+          await this.executeCloudflareD1Query("UPDATE users SET pin_hash = ? WHERE id = ?;", [pinHash, existingOwner.id]);
+          existingOwner.pinHash = pinHash;
         }
-      } else {
-        // Development only fallback
-        const defaultOwner: UserAccount = {
-          id: 'usr-owner-hashem',
-          name: 'هاشم السماوي (المالك)',
-          phone: envAdminPhone || '777000111',
+        const idx = this.tables.users.findIndex(u => u.role === 'owner');
+        if (idx >= 0) {
+          this.tables.users[idx] = existingOwner;
+        } else {
+          this.tables.users.push(existingOwner);
+        }
+        return;
+      }
+
+      // No owner exists in D1: Provision only if explicit ADMIN_PHONE is provided
+      if (envAdminPhone) {
+        const ownerAccount: UserAccount = {
+          id: `usr-owner-${envAdminPhone}`,
+          name: envAdminName,
+          phone: envAdminPhone,
           role: 'owner',
           createdAt: new Date().toISOString()
         };
         if (envAdminPin) {
-          defaultOwner.pinHash = hashSecret(envAdminPin);
+          ownerAccount.pinHash = hashSecret(envAdminPin);
         }
-        this.tables.users.push(defaultOwner);
-        this.saveLocal();
-
-        if (this.isD1Configured()) {
-          this.executeCloudflareD1Query(
-            "INSERT OR IGNORE INTO users (id, name, phone, role, pin_hash, created_at) VALUES (?, ?, ?, ?, ?, ?);",
-            [defaultOwner.id, defaultOwner.name, defaultOwner.phone, defaultOwner.role, defaultOwner.pinHash || null, defaultOwner.createdAt]
-          ).catch(() => {});
-        }
+        // D1-FIRST write: execute INSERT in D1 first
+        await this.executeCloudflareD1Query(
+          "INSERT INTO users (id, name, phone, role, pin_hash, created_at) VALUES (?, ?, ?, ?, ?, ?);",
+          [ownerAccount.id, ownerAccount.name, ownerAccount.phone, ownerAccount.role, ownerAccount.pinHash || null, ownerAccount.createdAt]
+        );
+        // Add to memory ONLY after D1 success
+        this.tables.users.push(ownerAccount);
       }
-    } else if (envAdminPin) {
-      // Sync environment ADMIN_PIN if owner user has no pin/password hash yet
-      const owner = this.tables.users.find(u => u.role === 'owner');
-      if (owner && !owner.pinHash && !owner.passwordHash) {
-        owner.pinHash = hashSecret(envAdminPin);
-        this.saveLocal();
-        if (this.isD1Configured()) {
-          this.executeCloudflareD1Query(
-            "UPDATE users SET pin_hash = ? WHERE id = ?;",
-            [owner.pinHash, owner.id]
-          ).catch(() => {});
+    } else {
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
+      }
+      // Development only fallback if D1 not configured
+      const hasOwner = this.tables.users.some(u => u.role === 'owner');
+      if (!hasOwner && envAdminPhone) {
+        const devOwner: UserAccount = {
+          id: `usr-owner-${envAdminPhone}`,
+          name: envAdminName,
+          phone: envAdminPhone,
+          role: 'owner',
+          createdAt: new Date().toISOString()
+        };
+        if (envAdminPin) {
+          devOwner.pinHash = hashSecret(envAdminPin);
         }
+        this.tables.users.push(devOwner);
+        this.saveLocal();
       }
     }
+  }
+
+  public ensureDefaultUsers() {
+    this.ensureDefaultUsersAsync().catch(err => {
+      console.error('ensureDefaultUsersAsync error:', err);
+    });
   }
 
   public isD1Configured(): boolean {
@@ -692,7 +702,7 @@ class D1DatabaseAccessLayer {
         createdAt: g.created_at
       })) : [];
 
-      this.ensureDefaultUsers();
+      await this.ensureDefaultUsersAsync();
 
       console.log('✅ Cloudflare D1 primary sync completed successfully for all operational tables.');
       return true;
@@ -1200,15 +1210,20 @@ class D1DatabaseAccessLayer {
 
   public async deleteProductAsync(id: string): Promise<boolean> {
     if (this.isD1Configured()) {
-      // Remove dependent records first if any exist
-      try {
-        await this.executeCloudflareD1Query("DELETE FROM inventory WHERE product_id = ?;", [id]);
-        await this.executeCloudflareD1Query("DELETE FROM inventory_logs WHERE product_id = ?;", [id]);
-      } catch (e) {
-        // Continue with product deletion
+      // Execute atomic compound batch deletion on Cloudflare D1
+      const batchResult = await this.executeCloudflareD1BatchRaw([
+        { sql: "DELETE FROM inventory WHERE product_id = ?;", params: [id] },
+        { sql: "DELETE FROM inventory_logs WHERE product_id = ?;", params: [id] },
+        { sql: "DELETE FROM products WHERE id = ?;", params: [id] }
+      ]);
+      if (!batchResult || !batchResult.success) {
+        const errMsg = (batchResult?.errors || []).map((e: any) => e.message).join('; ') || 'Batch deletion failed';
+        throw new Error(`فشل حذف المنتج وملحقاته من Cloudflare D1: ${errMsg}`);
       }
-      await this.executeCloudflareD1Query("DELETE FROM products WHERE id = ?;", [id]);
       this.tables.products = this.tables.products.filter(p => p.id !== id);
+      this.tables.inventory.delete(id);
+      this.tables.inventory_logs = this.tables.inventory_logs.filter(l => l.productId !== id);
+      this.saveLocal();
       return true;
     }
 
@@ -2341,6 +2356,7 @@ class D1DatabaseAccessLayer {
     newStock: number;
     reason: string;
     performedBy: string;
+    orderId?: string;
   }): Promise<{ product: Product; transaction: InventoryLogRecord }> {
     const product = this.findProductById(params.productId);
     if (!product) throw new Error("المنتج غير موجود");
@@ -2350,38 +2366,45 @@ class D1DatabaseAccessLayer {
     }
 
     const txId = 'tx-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
-    const sqlEsc = (s: any) => String(s ?? '').replace(/'/g, "''");
 
-    // Execute on Cloudflare D1 with proper parameterized queries
+    // Execute atomically on Cloudflare D1 via compound batch
     if (this.isD1Configured()) {
-      await this.executeCloudflareD1Query(
-        "UPDATE products SET stock = ?, updated_at = datetime('now') WHERE id = ?;",
-        [params.newStock, params.productId]
-      );
-      await this.executeCloudflareD1Query(
-        "UPDATE inventory SET current_stock = ?, updated_at = datetime('now') WHERE product_id = ?;",
-        [params.newStock, params.productId]
-      );
-      await this.executeCloudflareD1Query(
-        "INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, performed_by, created_at) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'));",
-        [
-          txId,
-          params.productId,
-          product.nameAr,
-          params.type,
-          params.quantity,
-          params.previousStock,
-          params.newStock,
-          params.reason,
-          params.performedBy
-        ]
-      );
+      const batchResult = await this.executeCloudflareD1BatchRaw([
+        {
+          sql: "UPDATE products SET stock = ?, updated_at = datetime('now') WHERE id = ?;",
+          params: [params.newStock, params.productId]
+        },
+        {
+          sql: "UPDATE inventory SET current_stock = ?, updated_at = datetime('now') WHERE product_id = ?;",
+          params: [params.newStock, params.productId]
+        },
+        {
+          sql: "INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, order_id, performed_by, created_at) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'));",
+          params: [
+            txId,
+            params.productId,
+            product.nameAr,
+            params.type,
+            params.quantity,
+            params.previousStock,
+            params.newStock,
+            params.reason,
+            params.orderId || null,
+            params.performedBy
+          ]
+        }
+      ]);
+
+      if (!batchResult || !batchResult.success) {
+        const errMsg = (batchResult?.errors || []).map((e: any) => e.message).join('; ') || 'Batch inventory update failed';
+        throw new Error(`فشل تحديث المخزون في Cloudflare D1: ${errMsg}`);
+      }
     } else if (process.env.NODE_ENV === 'production') {
       throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
     }
 
-    // Update in-memory state
+    // Update in-memory state ONLY after D1 batch succeeds
     product.stock = params.newStock;
     product.updatedAt = new Date().toISOString();
 
@@ -2400,6 +2423,7 @@ class D1DatabaseAccessLayer {
       previousStock: params.previousStock,
       newStock: params.newStock,
       reason: params.reason,
+      orderId: params.orderId,
       performedBy: params.performedBy,
       createdAt: new Date().toISOString()
     };
@@ -2672,6 +2696,20 @@ class D1DatabaseAccessLayer {
         `VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'));`,
         [review.id, review.productId, review.userName, (review as any).userPhone || null, review.rating, review.comment, review.verifiedPurchase ? 1 : 0]
       );
+
+      // Recalculate product rating and review count from D1
+      const stats = await this.executeCloudflareD1Query(
+        "SELECT COUNT(*) as cnt, AVG(rating) as avg_rating FROM reviews WHERE product_id = ?;",
+        [review.productId]
+      );
+      if (stats && stats.length > 0) {
+        const revCount = Number(stats[0].cnt || 1);
+        const avgRating = Number(Number(stats[0].avg_rating || review.rating).toFixed(1));
+        await this.executeCloudflareD1Query(
+          "UPDATE products SET rating = ?, review_count = ?, updated_at = datetime('now') WHERE id = ?;",
+          [avgRating, revCount, review.productId]
+        );
+      }
     } else if (process.env.NODE_ENV === 'production') {
       throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
     }

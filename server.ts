@@ -159,10 +159,10 @@ app.post("/api/auth/quick-customer", authRateLimiter, async (req, res) => {
     };
     await db.addUserAsync(user);
   } else {
-    user = db.updateUser(user.id, {
+    user = (await db.updateUserAsync(user.id, {
       name: safeName,
       lastLogin: new Date().toISOString()
-    }) || user;
+    })) || user;
   }
 
   const token = generateToken({
@@ -223,7 +223,10 @@ app.post("/api/auth/admin-login", authRateLimiter, async (req, res) => {
     if (isPinMatch) {
       let owner = users.find(u => u.role === 'owner');
       if (!owner) {
-        const adminPhone = cleanPhone || (process.env.ADMIN_PHONE ? normalizeDigits(process.env.ADMIN_PHONE.trim()) : '770000000');
+        const adminPhone = cleanPhone || (process.env.ADMIN_PHONE ? normalizeDigits(process.env.ADMIN_PHONE.trim()) : '');
+        if (!adminPhone) {
+          return res.status(401).json({ success: false, message: "لم يتم تكوين رقم هاتف الإدارة في متغيرات النظام (ADMIN_PHONE)" });
+        }
         const adminName = process.env.ADMIN_NAME ? process.env.ADMIN_NAME.trim() : 'مالك المتجر';
         owner = {
           id: `usr-owner-${adminPhone}`,
@@ -315,6 +318,7 @@ app.post("/api/auth/driver-login", authRateLimiter, async (req, res) => {
           existingUser.role = 'delivery';
           existingUser.pinHash = hashedSecret;
           matchedDriver = existingUser;
+          await db.updateUserAsync(existingUser.id, { role: 'delivery', pinHash: hashedSecret });
         } else {
           matchedDriver = {
             id: matchedAgent.id || `dr-${cleanPhone}`,
@@ -806,7 +810,10 @@ app.post("/api/orders", orderRateLimiter, async (req: AuthenticatedRequest, res)
       (!coupon.validUntil || new Date(coupon.validUntil).getTime() >= Date.now()) &&
       (!coupon.maxUses || !coupon.usageCount || coupon.usageCount < coupon.maxUses);
     if (isCouponValid && calculatedSubtotal >= coupon.minOrderAmount) {
-      calculatedDiscount = Math.min((calculatedSubtotal * coupon.discountPercent) / 100, coupon.maxDiscount);
+      const rawDiscount = (calculatedSubtotal * coupon.discountPercent) / 100;
+      calculatedDiscount = (coupon.maxDiscount && coupon.maxDiscount > 0)
+        ? Math.min(rawDiscount, coupon.maxDiscount)
+        : rawDiscount;
     }
   }
 
@@ -1401,7 +1408,10 @@ app.post("/api/validate-coupon", couponRateLimiter, async (req, res) => {
       });
     }
 
-    const discountVal = Math.min((orderAmount * found.discountPercent) / 100, found.maxDiscount);
+    const rawDiscount = (orderAmount * found.discountPercent) / 100;
+    const discountVal = (found.maxDiscount && found.maxDiscount > 0)
+      ? Math.min(rawDiscount, found.maxDiscount)
+      : rawDiscount;
     res.json({
       success: true,
       discount: discountVal,
@@ -1873,27 +1883,48 @@ app.post("/api/gemini/advisor", async (req, res) => {
 // 10. VITE MIDDLEWARE & STATIC SERVING
 // ==========================================
 
-// Initialize database
-db.init().catch(err => console.warn("D1 background sync warning:", err));
-
 async function startServer() {
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
-  }
+  try {
+    // 1. Strict Production Environment & Credentials Validation
+    if (process.env.NODE_ENV === 'production') {
+      const missingVars: string[] = [];
+      if (!process.env.JWT_SECRET) missingVars.push('JWT_SECRET');
+      if (!process.env.CLOUDFLARE_DATABASE_ID) missingVars.push('CLOUDFLARE_DATABASE_ID');
+      if (!process.env.CLOUDFLARE_ACCOUNT_ID) missingVars.push('CLOUDFLARE_ACCOUNT_ID');
+      if (!process.env.CLOUDFLARE_API_TOKEN) missingVars.push('CLOUDFLARE_API_TOKEN');
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Black Gold Production Server running on http://0.0.0.0:${PORT}`);
-  });
+      if (missingVars.length > 0) {
+        console.error(`❌ CRITICAL PRODUCTION CONFIGURATION ERROR: Missing required environment variables: ${missingVars.join(', ')}`);
+        process.exit(1);
+      }
+    }
+
+    // 2. Strict Database Initialization (Halts entire boot sequence if D1 fails)
+    console.log('🔄 Initializing Cloudflare D1 Authoritative Database Layer...');
+    await db.init();
+    console.log('✅ Cloudflare D1 Database Layer Initialized and Authoritative.');
+
+    if (process.env.NODE_ENV !== "production") {
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: "spa",
+      });
+      app.use(vite.middlewares);
+    } else {
+      const distPath = path.join(process.cwd(), "dist");
+      app.use(express.static(distPath));
+      app.get("*", (req, res) => {
+        res.sendFile(path.join(distPath, "index.html"));
+      });
+    }
+
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Black Gold Production Server running on http://0.0.0.0:${PORT}`);
+    });
+  } catch (err: any) {
+    console.error('❌ CRITICAL SERVER BOOT FAILURE: D1 initialization or schema check failed:', err);
+    process.exit(1);
+  }
 }
 
 // In standard server environments (AI Studio dev server, Cloud Run, Docker):
