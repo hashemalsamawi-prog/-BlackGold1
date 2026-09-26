@@ -170,6 +170,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [driverForm, setDriverForm] = useState({
     name: '',
     phone: '',
+    pin: '',
     vehicleType: 'motorcycle' as 'motorcycle' | 'van' | 'car',
     districtZone: 'حدة والسبعين',
     vehiclePlate: 'صنعاء - 14920 د'
@@ -219,6 +220,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleSaveDriver = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!driverForm.name.trim() || !driverForm.phone.trim()) return;
+    const cleanPin = driverForm.pin.trim();
+    if (!cleanPin) {
+      alert('يرجى تحديد رمز PIN خاص بالمندوب (4 أرقام على الأقل)');
+      return;
+    }
     try {
       const token = authStorage.getToken();
       const res = await fetch('/api/delivery-agents', {
@@ -233,7 +239,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           vehicleType: driverForm.vehicleType,
           districtZone: driverForm.districtZone,
           vehiclePlate: driverForm.vehiclePlate,
-          pin: (driverForm as any).pin || '1234',
+          pin: cleanPin,
           isActive: true
         })
       });
@@ -244,6 +250,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         setDriverForm({
           name: '',
           phone: '',
+          pin: '',
           vehicleType: 'motorcycle',
           districtZone: 'حدة والسبعين',
           vehiclePlate: 'صنعاء - 14920 د'
@@ -2923,9 +2930,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <label className="text-slate-300 font-bold block mb-1">رمز PIN للدخول:</label>
                     <input
                       type="password"
+                      required
                       placeholder="مثال: 5566"
-                      value={(driverForm as any).pin || ''}
-                      onChange={(e) => setDriverForm({ ...driverForm, pin: e.target.value } as any)}
+                      value={driverForm.pin}
+                      onChange={(e) => setDriverForm({ ...driverForm, pin: e.target.value })}
                       className="w-full bg-slate-950 border border-slate-800 text-white p-2.5 rounded-xl text-xs font-mono"
                     />
                   </div>

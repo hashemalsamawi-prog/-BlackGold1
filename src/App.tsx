@@ -723,18 +723,24 @@ export default function App() {
   };
 
   const handleDeleteProduct = async (id: string) => {
-    setProducts((prev) => {
-      const updated = prev.filter((p) => p.id !== id);
-      safeSetLocalStorage('bg_saved_products', JSON.stringify(updated));
-      return updated;
-    });
-
+    const previousProducts = products;
     try {
-      await api.deleteProduct(id);
-    } catch {
-      // Offline fallback
+      const res = await api.deleteProduct(id);
+      if (res && res.success === false) {
+        throw new Error(res.message || 'فشل حذف المنتج من قاعدة البيانات');
+      }
+      setProducts((prev) => {
+        const updated = prev.filter((p) => p.id !== id);
+        safeSetLocalStorage('bg_saved_products', JSON.stringify(updated));
+        return updated;
+      });
+      setToastMessage("تم حذف المنتج وحفظ التغييرات بنجاح!");
+    } catch (err: any) {
+      console.error('Delete product failed:', err);
+      setProducts(previousProducts);
+      safeSetLocalStorage('bg_saved_products', JSON.stringify(previousProducts));
+      setToastMessage(err?.message || "تعذر حذف المنتج من قاعدة البيانات.");
     }
-    setToastMessage("تم حذف المنتج وحفظ التغييرات بنجاح!");
     setTimeout(() => setToastMessage(null), 4000);
   };
 

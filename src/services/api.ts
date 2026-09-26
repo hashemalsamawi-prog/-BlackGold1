@@ -4,13 +4,24 @@
 
 export const authStorage = {
   getToken(): string {
-    return localStorage.getItem('bg_auth_token') || '';
+    if (typeof localStorage === 'undefined') return '';
+    try {
+      return localStorage.getItem('bg_auth_token') || '';
+    } catch {
+      return '';
+    }
   },
   setToken(token: string): void {
-    localStorage.setItem('bg_auth_token', token);
+    if (typeof localStorage === 'undefined') return;
+    try {
+      localStorage.setItem('bg_auth_token', token);
+    } catch {}
   },
   removeToken(): void {
-    localStorage.removeItem('bg_auth_token');
+    if (typeof localStorage === 'undefined') return;
+    try {
+      localStorage.removeItem('bg_auth_token');
+    } catch {}
   },
 };
 
@@ -249,15 +260,41 @@ export const api = {
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
-        console.warn('Server upload returned non-ok, using safe fallback:', data);
+        const errorMsg = data?.message || `فشل رفع الصورة إلى الخادم (كود: ${res.status})`;
+        // In production, never return success: true with a temporary/local Data URL.
+        const isProd = typeof process !== 'undefined' && process.env?.NODE_ENV === 'production'
+          || (typeof import.meta !== 'undefined' && (import.meta as any).env?.PROD);
+
+        if (isProd) {
+          return {
+            success: false,
+            message: errorMsg,
+            status: res.status,
+            error: data?.error || errorMsg
+          };
+        }
+
+        // In non-production development/test only, return preview with explicit fallback indicator
+        console.warn('Development fallback: Server upload returned non-ok, using dev preview:', data);
         if (typeof input === 'string' && input.startsWith('data:')) {
           return { success: true, url: input, fallback: true };
         }
         return data;
       }
       return data;
-    } catch (networkErr) {
-      console.warn('Network error during upload, preserving image locally:', networkErr);
+    } catch (networkErr: any) {
+      const isProd = typeof process !== 'undefined' && process.env?.NODE_ENV === 'production'
+        || (typeof import.meta !== 'undefined' && (import.meta as any).env?.PROD);
+
+      if (isProd) {
+        return {
+          success: false,
+          message: networkErr?.message || 'خطأ في شبكة الاتصال أثناء رفع الصورة إلى الخادم',
+          error: networkErr?.message || 'Network error'
+        };
+      }
+
+      console.warn('Development fallback: Network error during upload, preserving preview locally:', networkErr);
       if (typeof input === 'string' && input.startsWith('data:')) {
         return { success: true, url: input, fallback: true };
       }

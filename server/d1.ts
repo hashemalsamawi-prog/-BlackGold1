@@ -1210,16 +1210,28 @@ class D1DatabaseAccessLayer {
 
   public async deleteProductAsync(id: string): Promise<boolean> {
     if (this.isD1Configured()) {
-      // Execute atomic compound batch deletion on Cloudflare D1
+      // 1. Verify product exists before attempting deletion
+      const existingProduct = await this.findProductByIdAsync(id);
+      if (!existingProduct) {
+        throw new Error(`المنتج المطلوب حذفه غير موجود: ${id}`);
+      }
+
+      // 2. Execute atomic compound batch deletion on Cloudflare D1
+      // Deletes related inventory, inventory_logs, and product record in one atomic transaction.
+      // If ANY part of the deletion fails, Cloudflare D1 rolls back everything.
       const batchResult = await this.executeCloudflareD1BatchRaw([
         { sql: "DELETE FROM inventory WHERE product_id = ?;", params: [id] },
         { sql: "DELETE FROM inventory_logs WHERE product_id = ?;", params: [id] },
         { sql: "DELETE FROM products WHERE id = ?;", params: [id] }
       ]);
+
       if (!batchResult || !batchResult.success) {
         const errMsg = (batchResult?.errors || []).map((e: any) => e.message).join('; ') || 'Batch deletion failed';
-        throw new Error(`فشل حذف المنتج وملحقاته من Cloudflare D1: ${errMsg}`);
+        console.error(`[D1 Error] Deletion failed for product ${id}: ${errMsg}`);
+        throw new Error(`فشل حذف المنتج وملحقاته (المخزون والسجلات) من Cloudflare D1: ${errMsg}`);
       }
+
+      // 3. ONLY modify in-memory cache and local storage after D1 operation succeeds
       this.tables.products = this.tables.products.filter(p => p.id !== id);
       this.tables.inventory.delete(id);
       this.tables.inventory_logs = this.tables.inventory_logs.filter(l => l.productId !== id);
@@ -1231,7 +1243,12 @@ class D1DatabaseAccessLayer {
       throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
     }
 
-    return this.deleteProduct(id);
+    const prevLen = this.tables.products.length;
+    this.tables.products = this.tables.products.filter(p => p.id !== id);
+    this.tables.inventory.delete(id);
+    this.tables.inventory_logs = this.tables.inventory_logs.filter(l => l.productId !== id);
+    this.saveLocal();
+    return this.tables.products.length < prevLen;
   }
 
   public getCategories() {

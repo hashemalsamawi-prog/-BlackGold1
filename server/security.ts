@@ -154,7 +154,10 @@ export function createRateLimiter(options: RateLimiterOptions) {
   if (timer.unref) timer.unref();
 
   return (req: Request, res: Response, next: NextFunction) => {
-    if (req.headers['x-audit-test'] === 'local-audit') {
+    // SECURITY: Disallow any client-supplied bypass header in production.
+    // The test bypass is ONLY honored if process.env.NODE_ENV === 'test' and explicitly non-production.
+    const isExplicitTestEnv = process.env.NODE_ENV === 'test';
+    if (isExplicitTestEnv && req.headers['x-audit-test'] === 'local-audit') {
       return next();
     }
     const forwarded = req.headers['x-forwarded-for'];

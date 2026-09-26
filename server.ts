@@ -379,55 +379,137 @@ app.get("/api/auth/me", (req: AuthenticatedRequest, res) => {
 
 // Cloudflare D1 Health & Database Status
 app.get("/api/d1/status", async (req, res) => {
-  const products = await db.getProductsAsync();
-  const orders = await db.getOrdersAsync();
-  const users = await db.getUsersAsync();
-  const customers = await db.getCustomersAsync();
-  const coupons = await db.getCouponsAsync();
-  const reviews = await db.getReviewsAsync();
-  const agents = await db.getDeliveryAgentsAsync();
-  const inventoryTransactions = await db.getInventoryTransactionsAsync();
-  const inventoryStatus = d1.getInventoryStatus();
-
-  let remoteVerified = false;
+  let isConnected = false;
   let remoteTablesCount = 0;
+  let errorMessage: string | null = null;
+
   try {
-    const remoteResult = await d1.executeCloudflareD1Query("SELECT count(*) as count FROM sqlite_master WHERE type='table';");
-    if (remoteResult && remoteResult.length > 0) {
-      remoteVerified = true;
-      remoteTablesCount = remoteResult[0].count;
+    if (!d1.isD1Configured()) {
+      if (process.env.NODE_ENV === 'production') {
+        return res.status(503).json({
+          success: false,
+          isConnected: false,
+          remoteCloudflareConnected: false,
+          error: "قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج"
+        });
+      }
     }
-  } catch (err) {
-    console.error("D1 remote check:", err);
+
+    // Direct live probe to Cloudflare D1
+    const probeRes = await d1.executeCloudflareD1Query("SELECT count(*) as count FROM sqlite_master WHERE type='table';");
+    if (probeRes && probeRes.length > 0) {
+      isConnected = true;
+      remoteTablesCount = probeRes[0].count;
+    } else if (d1.isD1Configured()) {
+      isConnected = false;
+      errorMessage = "لم يتم تلقي استجابة صحيحة من Cloudflare D1";
+    } else {
+      // In development mode without D1 credentials
+      isConnected = true;
+    }
+  } catch (err: any) {
+    console.error("D1 status probe check error:", err);
+    isConnected = false;
+    errorMessage = err?.message || "فشل الاتصال بقاعدة بيانات Cloudflare D1";
   }
 
-  res.json({
-    success: true,
-    engine: "Cloudflare D1 Serverless (SQLite Dialect)",
-    databaseId: CLOUDFLARE_CONFIG.databaseId,
-    accountId: CLOUDFLARE_CONFIG.accountId ? `${CLOUDFLARE_CONFIG.accountId.substring(0, 6)}...` : '',
-    isConnected: true,
-    remoteCloudflareConnected: remoteVerified,
-    remoteTablesCount,
-    tables: {
-      users: users.length,
-      customers: customers.length,
-      products: products.length,
-      categories: d1.getCategories().length,
-      orders: orders.length,
-      order_items: orders.reduce((sum, o) => sum + (o.items?.length || 0), 0),
-      inventory: inventoryStatus.length,
-      inventory_logs: inventoryTransactions.length,
-      delivery_agents: agents.length,
-      reviews: reviews.length,
-      coupons: coupons.length,
-      gallery_items: db.getGalleryItems().length,
-      store_settings: 1,
-      payments: orders.length,
-      notifications: d1.getNotifications().length
-    },
-    message: "قاعدة بيانات Cloudflare D1 تعمل بكفاءة عالية وباتصال مباشر ومؤكد."
-  });
+  // If D1 check failed, return a genuine failure state with 503 HTTP status in production or failure payload
+  if (!isConnected) {
+    return res.status(503).json({
+      success: false,
+      isConnected: false,
+      remoteCloudflareConnected: false,
+      engine: "Cloudflare D1 Serverless (SQLite Dialect)",
+      databaseId: CLOUDFLARE_CONFIG.databaseId,
+      error: errorMessage || "تعذر التحقق من الاتصال المباشر بقاعدة بيانات Cloudflare D1",
+      message: "فشل التحقق من الاتصال بقاعدة بيانات Cloudflare D1."
+    });
+  }
+
+  try {
+    // Query counts directly from D1 database
+    const [
+      users,
+      customers,
+      products,
+      categories,
+      orders,
+      agents,
+      reviews,
+      coupons,
+      galleryItems,
+      inventoryLogs
+    ] = await Promise.all([
+      db.getUsersAsync(),
+      db.getCustomersAsync(),
+      db.getProductsAsync(),
+      db.getCategoriesAsync(),
+      db.getOrdersAsync(),
+      db.getDeliveryAgentsAsync(),
+      db.getReviewsAsync(),
+      db.getCouponsAsync(),
+      db.getGalleryItemsAsync(),
+      db.getInventoryTransactionsAsync()
+    ]);
+
+    // Live query for store_settings count and inventory count from D1
+    let storeSettingsCount = 0;
+    let inventoryRowsCount = 0;
+    try {
+      const stRows = await d1.executeCloudflareD1Query("SELECT count(*) as count FROM store_settings;");
+      if (stRows && stRows.length > 0) {
+        storeSettingsCount = Number(stRows[0].count) || 1;
+      } else {
+        storeSettingsCount = 1;
+      }
+      const invRows = await d1.executeCloudflareD1Query("SELECT count(*) as count FROM inventory;");
+      if (invRows && invRows.length > 0) {
+        inventoryRowsCount = Number(invRows[0].count);
+      } else {
+        inventoryRowsCount = products.length;
+      }
+    } catch {
+      storeSettingsCount = 1;
+      inventoryRowsCount = products.length;
+    }
+
+    return res.json({
+      success: true,
+      engine: "Cloudflare D1 Serverless (SQLite Dialect)",
+      databaseId: CLOUDFLARE_CONFIG.databaseId,
+      accountId: CLOUDFLARE_CONFIG.accountId ? `${CLOUDFLARE_CONFIG.accountId.substring(0, 6)}...` : '',
+      isConnected: true,
+      remoteCloudflareConnected: true,
+      remoteTablesCount,
+      tables: {
+        users: users.length,
+        customers: customers.length,
+        products: products.length,
+        categories: categories.length,
+        orders: orders.length,
+        order_items: orders.reduce((sum, o) => sum + (o.items?.length || 0), 0),
+        inventory: inventoryRowsCount,
+        inventory_logs: inventoryLogs.length,
+        delivery_agents: agents.length,
+        reviews: reviews.length,
+        coupons: coupons.length,
+        gallery_items: galleryItems.length,
+        store_settings: storeSettingsCount,
+        payments: orders.length,
+        notifications: d1.getNotifications().length
+      },
+      message: "قاعدة بيانات Cloudflare D1 تعمل بكفاءة عالية وباتصال مباشر ومؤكد."
+    });
+  } catch (dataErr: any) {
+    console.error("D1 table count query error:", dataErr);
+    return res.status(500).json({
+      success: false,
+      isConnected: false,
+      remoteCloudflareConnected: false,
+      error: dataErr?.message || "فشل قراءة جداول قاعدة البيانات",
+      message: "حدث خطأ أثناء قراءة إحصائيات الجداول من Cloudflare D1"
+    });
+  }
 });
 
 app.get("/api/categories", async (req, res) => {
@@ -610,11 +692,19 @@ app.post("/api/upload", requireRoles(['owner', 'admin', 'employee']), async (req
       const publicUrl = `/uploads/${filename}`;
       return res.json({ success: true, url: publicUrl, filename, storage: 'local' });
     } catch (fsErr: any) {
-      console.warn("Could not write to disk uploads, falling back to data URI:", fsErr?.message);
+      if (process.env.NODE_ENV === 'production') {
+        console.error("CRITICAL: Failed to write upload to permanent disk storage in production:", fsErr?.message);
+        return res.status(500).json({
+          success: false,
+          message: "فشل حفظ الصورة على وحدة التخزين الدائمة بالسيرفر",
+          error: fsErr?.message
+        });
+      }
+      console.warn("Could not write to disk uploads in development, falling back to data URI preview:", fsErr?.message);
       const fallbackUrl = typeof image === 'string' && image.startsWith('data:')
         ? image
         : `data:${mimeType};base64,${buffer.toString('base64')}`;
-      return res.json({ success: true, url: fallbackUrl, filename, storage: 'data-url' });
+      return res.json({ success: true, url: fallbackUrl, filename, storage: 'data-url', fallback: true });
     }
   } catch (error: any) {
     console.error("Upload error:", error);
