@@ -33,6 +33,7 @@ import { QualityProtocolSection } from './components/QualityProtocolSection';
 import { CharcoalCalculatorModal } from './components/CharcoalCalculatorModal';
 import { InvoiceReceiptModal } from './components/InvoiceReceiptModal';
 import { ExpressHotlineBar } from './components/ExpressHotlineBar';
+import { Footer } from './components/Footer';
 import { ToastNotification } from './components/ToastNotification';
 import { EmptyState } from './components/EmptyState';
 import { playOrderAlertSound } from './utils/soundAlert';
@@ -246,10 +247,7 @@ export default function App() {
   const [calculatorOpen, setCalculatorOpen] = useState(false);
   const [invoiceOrder, setInvoiceOrder] = useState<Order | null>(null);
   const [trackingFocusOrderId, setTrackingFocusOrderId] = useState<string | null>(null);
-  const [welcomeOpen, setWelcomeOpen] = useState<boolean>(() => {
-    const seen = safeGetLocalStorage('bg_welcome_seen', '');
-    return !seen;
-  });
+  const [welcomeOpen, setWelcomeOpen] = useState<boolean>(false);
 
   const handleContinueAsGuest = () => {
     safeSetLocalStorage('bg_welcome_seen', 'true');
@@ -1251,51 +1249,17 @@ export default function App() {
 
         </main>
 
-        {/* Global Footer */}
-        <footer className="bg-[#08080B] border-t border-slate-900 py-6 sm:py-8 pb-24 sm:pb-8 text-center text-xs text-slate-500 space-y-4">
-          <div className="max-w-7xl mx-auto px-4 flex flex-col md:flex-row items-center justify-between gap-6">
-            <div className="flex flex-col sm:flex-row items-center gap-4">
-              <Logo variant="horizontal" size="md" />
-              <div className="text-right sm:border-r border-slate-800 sm:pr-4 text-slate-400">
-                <span className="font-bold block text-slate-300">شركة الذهب الأسود - للتوصيل والحلول المتكاملة</span>
-                <span className="text-[11px] text-slate-500">فحم فاخر درجة أولى • جميع الحقوق محفوظة © 2026</span>
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center justify-center gap-4 text-slate-400 font-bold">
-              <a 
-                href="https://wa.me/967775000150?text=%D9%85%D8%B1%D8%AD%D8%A8%D8%A7%D9%8B%D8%8C%20%D8%A3%D8%B1%D9%8A%D8%AF%20%D8%A7%D9%84%D8%A7%D8%B3%D8%AA%D9%81%D8%B3%D8%A7%D8%B1%20%D8%B9%D9%86%20%D9%85%D9%86%D8%AA%D8%AC%D8%A7%D8%AA%20%D9%81%D8%AD%D9%85%20%D8%A7%D9%84%D8%B0%D9%87%D8%A8%20%D8%A7%D9%84%D8%A3%D8%B3%D9%88%D8%AF" 
-                target="_blank" 
-                rel="noopener noreferrer" 
-                className="text-emerald-400 hover:text-emerald-300 flex items-center gap-1 font-black"
-              >
-                <MessageSquare className="w-4 h-4 text-emerald-400" />
-                <span>واتساب المبيعات: 775000150 💬</span>
-              </a>
-              <span>•</span>
-              <a 
-                href="mailto:blackgoled.ye@gmail.com" 
-                className="text-slate-300 hover:text-amber-400 transition-colors flex items-center gap-1.5"
-              >
-                <Mail className="w-3.5 h-3.5 text-amber-400" />
-                <span>blackgoled.ye@gmail.com</span>
-              </a>
-              <span>•</span>
-              <span>أمانة العاصمة - صنعاء</span>
-              <span>•</span>
-              <button onClick={() => setOrdersOpen(true)} className="text-slate-400 hover:text-amber-400 transition-colors cursor-pointer">
-                تتبع حالة الطلب
-              </button>
-              <span>•</span>
-              <button 
-                onClick={() => setAdminOpen(true)} 
-                className="text-amber-400/90 hover:text-amber-300 transition-colors cursor-pointer flex items-center gap-1 bg-amber-500/10 px-2.5 py-1 rounded-lg border border-amber-500/30"
-              >
-                <span>لوحة تحكم المالك 👑</span>
-              </button>
-            </div>
-          </div>
-        </footer>
+        {/* Global Rich Footer */}
+        <Footer
+          lang={lang}
+          onOpenTracker={() => setOrdersOpen(true)}
+          onOpenAdmin={() => setAdminOpen(true)}
+          onOpenCalculator={() => setCalculatorOpen(true)}
+          onScrollToQuality={() => {
+            const el = document.getElementById('products-grid-section');
+            if (el) el.scrollIntoView({ behavior: 'smooth' });
+          }}
+        />
 
         {/* Modals & Slide-overs */}
         <ProductDetailModal
@@ -1509,6 +1473,7 @@ export default function App() {
           onOpenMap={() => setMapOpen(true)}
           phoneNumber={storeSettings.supportPhone || '775000150'}
           whatsappNumber={storeSettings.whatsappNumber || '967775000150'}
+          hasCartItems={cart.length > 0}
         />
 
         {/* Sticky Quick-Checkout Floating Bar (Appears when cart has items and NO modal/drawer is open) */}

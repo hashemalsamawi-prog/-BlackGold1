@@ -460,6 +460,92 @@ class D1DatabaseAccessLayer {
     return !!(CLOUDFLARE_CONFIG.accountId && CLOUDFLARE_CONFIG.apiToken && CLOUDFLARE_CONFIG.databaseId);
   }
 
+  public isD1Initialized(): boolean {
+    return this.isInitialized;
+  }
+
+  /**
+   * Comprehensive live diagnostic check of Cloudflare D1
+   */
+  public async checkD1Health(): Promise<{
+    configured: boolean;
+    reachable: boolean;
+    initialized: boolean;
+    schemaValid: boolean;
+    isConnected: boolean;
+    remoteTablesCount: number;
+    error: string | null;
+  }> {
+    const configured = this.isD1Configured();
+    let reachable = false;
+    let schemaValid = false;
+    let remoteTablesCount = 0;
+    let error: string | null = null;
+
+    if (!configured) {
+      if (process.env.NODE_ENV === 'production') {
+        return {
+          configured: false,
+          reachable: false,
+          initialized: this.isInitialized,
+          schemaValid: false,
+          isConnected: false,
+          remoteTablesCount: 0,
+          error: "قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج"
+        };
+      }
+      // Non-production dev fallback
+      return {
+        configured: false,
+        reachable: true,
+        initialized: this.isInitialized,
+        schemaValid: true,
+        isConnected: true,
+        remoteTablesCount: 0,
+        error: null
+      };
+    }
+
+    try {
+      // 1. Direct reachable check: query sqlite_master
+      const probeRes = await this.executeCloudflareD1Query("SELECT count(*) as count FROM sqlite_master WHERE type='table';");
+      if (Array.isArray(probeRes) && probeRes.length > 0) {
+        reachable = true;
+        remoteTablesCount = Number(probeRes[0].count) || 0;
+
+        // 2. Validate schema: check presence of essential core tables
+        const tablesCheck = await this.executeCloudflareD1Query(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('products', 'orders', 'users', 'inventory', 'store_settings');"
+        );
+        if (Array.isArray(tablesCheck) && tablesCheck.length >= 4) {
+          schemaValid = true;
+        } else {
+          schemaValid = false;
+          error = "جداول المخطط الأساسية غير مكتملة في Cloudflare D1";
+        }
+      } else {
+        reachable = false;
+        error = "لم يتم تلقي استجابة صحيحة من Cloudflare D1";
+      }
+    } catch (err: any) {
+      reachable = false;
+      schemaValid = false;
+      error = err?.message || "فشل الاتصال بقاعدة بيانات Cloudflare D1";
+    }
+
+    const isConnected = configured && reachable && schemaValid;
+
+    return {
+      configured,
+      reachable,
+      initialized: this.isInitialized,
+      schemaValid,
+      isConnected,
+      remoteTablesCount,
+      error
+    };
+  }
+
   /**
    * Fetch primary authoritative data directly from remote Cloudflare D1
    */
@@ -736,7 +822,7 @@ class D1DatabaseAccessLayer {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(5000)
+        signal: AbortSignal.timeout(12000)
       });
 
       const json = await res.json();
@@ -770,7 +856,7 @@ class D1DatabaseAccessLayer {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(5000)
+        signal: AbortSignal.timeout(12000)
       });
 
       const json = await res.json();

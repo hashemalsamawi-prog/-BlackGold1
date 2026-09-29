@@ -12,6 +12,7 @@ interface ExpressHotlineBarProps {
   onOpenMap?: () => void;
   phoneNumber?: string;
   whatsappNumber?: string;
+  hasCartItems?: boolean;
 }
 
 export const ExpressHotlineBar: React.FC<ExpressHotlineBarProps> = ({
@@ -20,7 +21,8 @@ export const ExpressHotlineBar: React.FC<ExpressHotlineBarProps> = ({
   onOpenTracker,
   onOpenMap,
   phoneNumber = '775000150',
-  whatsappNumber = '967775000150'
+  whatsappNumber = '967775000150',
+  hasCartItems = false
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
 
@@ -28,7 +30,11 @@ export const ExpressHotlineBar: React.FC<ExpressHotlineBarProps> = ({
   const cleanWhatsapp = whatsappNumber.replace(/\D/g, '');
 
   return (
-    <div className="fixed bottom-[calc(4.75rem+env(safe-area-inset-bottom))] sm:bottom-6 left-4 z-40">
+    <div className={`fixed z-40 transition-all duration-300 ${
+      hasCartItems 
+        ? 'hidden sm:block sm:bottom-6 sm:left-4' 
+        : 'bottom-[calc(4.75rem+env(safe-area-inset-bottom))] sm:bottom-6 left-4'
+    }`}>
       {/* Expanded Menu */}
       {isExpanded && (
         <div className="mb-3 w-64 rounded-3xl bg-[#0F0F16]/95 border border-amber-500/30 backdrop-blur-xl shadow-2xl p-4 text-right space-y-2.5 animate-scale-in">

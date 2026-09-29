@@ -197,6 +197,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // CRM Customer List State
   const [customersList, setCustomersList] = useState<any[]>([]);
 
+  // Safe In-UI Confirmation Modal State (replaces window.confirm)
+  const [confirmDeleteModal, setConfirmDeleteModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => Promise<void> | void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => {}
+  });
+
   useEffect(() => {
     setEditableSettings(storeSettings);
   }, [storeSettings]);
@@ -222,7 +235,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (!driverForm.name.trim() || !driverForm.phone.trim()) return;
     const cleanPin = driverForm.pin.trim();
     if (!cleanPin) {
-      alert('يرجى تحديد رمز PIN خاص بالمندوب (4 أرقام على الأقل)');
+      showMediaToast('يرجى تحديد رمز PIN خاص بالمندوب (4 أرقام على الأقل)');
       return;
     }
     try {
@@ -262,17 +275,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const handleDeleteDriver = async (driverId: string) => {
-    if (!window.confirm('هل أنت متأكد من حذف هذا المندوب من الأسطول؟')) return;
-    try {
-      const token = authStorage.getToken();
-      await fetch(`/api/delivery-agents/${driverId}`, {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      onUpdateDeliveryAgents(deliveryAgents.filter(d => d.id !== driverId));
-    } catch (err) {
-      console.error('Error deleting driver:', err);
-    }
+    setConfirmDeleteModal({
+      isOpen: true,
+      title: 'حذف مندوب من الأسطول',
+      message: 'هل أنت متأكد من رغبتك في حذف هذا المندوب من أسطول التوصيل المعتمد؟ لن يتمكن من تسجيل الدخول أو استلام الطلبات.',
+      onConfirm: async () => {
+        try {
+          const token = authStorage.getToken();
+          await fetch(`/api/delivery-agents/${driverId}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+          onUpdateDeliveryAgents(deliveryAgents.filter(d => d.id !== driverId));
+          showMediaToast('تم حذف المندوب من الأسطول بنجاح');
+        } catch (err) {
+          console.error('Error deleting driver:', err);
+          showMediaToast('فشل حذف المندوب من السيرفر');
+        } finally {
+          setConfirmDeleteModal(prev => ({ ...prev, isOpen: false }));
+        }
+      }
+    });
   };
 
   const handleToggleDriverActive = async (driver: DeliveryAgent) => {
@@ -335,17 +358,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const handleDeleteCoupon = async (code: string) => {
-    if (!window.confirm(`هل أنت متأكد من حذف الكوبون ${code}؟`)) return;
-    try {
-      const token = authStorage.getToken();
-      await fetch(`/api/coupons/${encodeURIComponent(code)}`, {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      onUpdateCampaigns(campaigns.filter(c => c.code.toUpperCase() !== code.toUpperCase()));
-    } catch (err) {
-      console.error('Error deleting coupon:', err);
-    }
+    setConfirmDeleteModal({
+      isOpen: true,
+      title: 'حذف كوبون الخصم',
+      message: `هل أنت متأكد من رغبتك في حذف الكوبون (${code}) نهائياً من قاعدة البيانات؟`,
+      onConfirm: async () => {
+        try {
+          const token = authStorage.getToken();
+          await fetch(`/api/coupons/${encodeURIComponent(code)}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+          onUpdateCampaigns(campaigns.filter(c => c.code.toUpperCase() !== code.toUpperCase()));
+          showMediaToast(`تم حذف الكوبون ${code} بنجاح`);
+        } catch (err) {
+          console.error('Error deleting coupon:', err);
+          showMediaToast('فشل حذف الكوبون من السيرفر');
+        } finally {
+          setConfirmDeleteModal(prev => ({ ...prev, isOpen: false }));
+        }
+      }
+    });
   };
 
   const handleToggleCouponActive = async (cp: Coupon | MarketingCampaign) => {
@@ -371,7 +404,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // High-Resolution Image Processing from Gallery / Studio with canvas auto-compression
   const processImageFile = async (file: File) => {
     if (!file || !file.type.startsWith('image/')) {
-      alert('يرجى اختيار ملف صورة صالح (JPG, PNG, WEBP, SVG).');
+      showMediaToast('يرجى اختيار ملف صورة صالح (JPG, PNG, WEBP, SVG).');
       return;
     }
 
@@ -438,7 +471,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Universal image processor with auto-compression and server upload fallback
   const processUniversalImage = async (file: File, maxW = 1200, maxH = 1200): Promise<string> => {
     if (!file || !file.type.startsWith('image/')) {
-      alert('يرجى اختيار ملف صورة صالح (JPG, PNG, WEBP, SVG).');
+      showMediaToast('يرجى اختيار ملف صورة صالح (JPG, PNG, WEBP, SVG).');
       throw new Error('Invalid image file');
     }
     try {
@@ -557,7 +590,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Save gallery modal item
   const handleSaveGalleryModalItem = () => {
     if (!galleryForm.titleAr.trim()) {
-      alert('يرجى كتابة عنوان العنصر.');
+      showMediaToast('يرجى كتابة عنوان العنصر.');
       return;
     }
     let updated: GalleryItem[];
@@ -714,7 +747,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         setInventoryModalOpen(false);
       }
     } catch (err: any) {
-      alert(err.message || 'فشل تعديل المخزون');
+      showMediaToast(err.message || 'فشل تعديل المخزون');
     }
   };
 
@@ -3088,6 +3121,37 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           storeLogo={storeSettings.customLogoUrl || storeSettings.logo || safeGetLocalStorage('bg_custom_logo', '')}
           storeSettings={storeSettings}
         />
+
+        {/* Confirmation Modal (Iframe-safe alternative to window.confirm) */}
+        {confirmDeleteModal.isOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+            <div className="w-full max-w-md rounded-2xl bg-slate-900 border border-slate-700 shadow-2xl p-6 text-right space-y-4">
+              <div className="flex items-center gap-2 text-rose-400">
+                <Trash2 className="w-5 h-5" />
+                <h4 className="text-sm font-black text-white">{confirmDeleteModal.title}</h4>
+              </div>
+              <p className="text-xs text-slate-300 leading-relaxed">
+                {confirmDeleteModal.message}
+              </p>
+              <div className="pt-2 flex items-center justify-end gap-2 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setConfirmDeleteModal(prev => ({ ...prev, isOpen: false }))}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition-colors cursor-pointer"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="button"
+                  onClick={() => confirmDeleteModal.onConfirm()}
+                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-black transition-colors cursor-pointer shadow-lg shadow-rose-600/20"
+                >
+                  تأكيد الحذف
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
       </div>
     </div>

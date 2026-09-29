@@ -377,52 +377,45 @@ app.get("/api/auth/me", (req: AuthenticatedRequest, res) => {
 // 2. PRODUCTS, CATEGORIES & INVENTORY APIs
 // ==========================================
 
-// Cloudflare D1 Health & Database Status
-app.get("/api/d1/status", async (req, res) => {
-  let isConnected = false;
-  let remoteTablesCount = 0;
-  let errorMessage: string | null = null;
-
-  try {
-    if (!d1.isD1Configured()) {
-      if (process.env.NODE_ENV === 'production') {
-        return res.status(503).json({
-          success: false,
-          isConnected: false,
-          remoteCloudflareConnected: false,
-          error: "قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج"
-        });
-      }
-    }
-
-    // Direct live probe to Cloudflare D1
-    const probeRes = await d1.executeCloudflareD1Query("SELECT count(*) as count FROM sqlite_master WHERE type='table';");
-    if (probeRes && probeRes.length > 0) {
-      isConnected = true;
-      remoteTablesCount = probeRes[0].count;
-    } else if (d1.isD1Configured()) {
-      isConnected = false;
-      errorMessage = "لم يتم تلقي استجابة صحيحة من Cloudflare D1";
-    } else {
-      // In development mode without D1 credentials
-      isConnected = true;
-    }
-  } catch (err: any) {
-    console.error("D1 status probe check error:", err);
-    isConnected = false;
-    errorMessage = err?.message || "فشل الاتصال بقاعدة بيانات Cloudflare D1";
-  }
+// Cloudflare D1 Health & Database Status Handler
+export async function handleD1HealthAndStatus(req: Request, res: Response) {
+  const isHealthCheck = req.path === "/api/d1/health";
+  const health = await d1.checkD1Health();
 
   // If D1 check failed, return a genuine failure state with 503 HTTP status in production or failure payload
-  if (!isConnected) {
+  if (!health.isConnected) {
     return res.status(503).json({
       success: false,
       isConnected: false,
-      remoteCloudflareConnected: false,
+      configured: health.configured,
+      reachable: health.reachable,
+      initialized: health.initialized,
+      schemaValid: health.schemaValid,
+      remoteCloudflareConnected: health.reachable,
       engine: "Cloudflare D1 Serverless (SQLite Dialect)",
       databaseId: CLOUDFLARE_CONFIG.databaseId,
-      error: errorMessage || "تعذر التحقق من الاتصال المباشر بقاعدة بيانات Cloudflare D1",
+      error: health.error || "تعذر التحقق من الاتصال المباشر بقاعدة بيانات Cloudflare D1",
       message: "فشل التحقق من الاتصال بقاعدة بيانات Cloudflare D1."
+    });
+  }
+
+  // If lightweight health check requested, return early with real status
+  if (isHealthCheck && req.query?.full !== 'true') {
+    return res.json({
+      success: true,
+      status: "healthy",
+      isConnected: true,
+      configured: health.configured,
+      reachable: health.reachable,
+      initialized: health.initialized,
+      schemaValid: health.schemaValid,
+      remoteCloudflareConnected: true,
+      engine: "Cloudflare D1 Serverless (SQLite Dialect)",
+      databaseId: CLOUDFLARE_CONFIG.databaseId,
+      accountId: CLOUDFLARE_CONFIG.accountId ? `${CLOUDFLARE_CONFIG.accountId.substring(0, 6)}...` : '',
+      remoteTablesCount: health.remoteTablesCount,
+      timestamp: new Date().toISOString(),
+      message: "قاعدة بيانات Cloudflare D1 متصلة وتعمل بكفاءة عالية وبمخطط سليم."
     });
   }
 
@@ -475,12 +468,17 @@ app.get("/api/d1/status", async (req, res) => {
 
     return res.json({
       success: true,
+      status: "healthy",
       engine: "Cloudflare D1 Serverless (SQLite Dialect)",
       databaseId: CLOUDFLARE_CONFIG.databaseId,
       accountId: CLOUDFLARE_CONFIG.accountId ? `${CLOUDFLARE_CONFIG.accountId.substring(0, 6)}...` : '',
       isConnected: true,
+      configured: health.configured,
+      reachable: health.reachable,
+      initialized: health.initialized,
+      schemaValid: health.schemaValid,
       remoteCloudflareConnected: true,
-      remoteTablesCount,
+      remoteTablesCount: health.remoteTablesCount,
       tables: {
         users: users.length,
         customers: customers.length,
@@ -505,12 +503,18 @@ app.get("/api/d1/status", async (req, res) => {
     return res.status(500).json({
       success: false,
       isConnected: false,
+      configured: health.configured,
+      reachable: health.reachable,
+      initialized: health.initialized,
+      schemaValid: health.schemaValid,
       remoteCloudflareConnected: false,
       error: dataErr?.message || "فشل قراءة جداول قاعدة البيانات",
       message: "حدث خطأ أثناء قراءة إحصائيات الجداول من Cloudflare D1"
     });
   }
-});
+}
+
+app.get(["/api/d1/health", "/api/d1/status"], handleD1HealthAndStatus);
 
 app.get("/api/categories", async (req, res) => {
   try {
@@ -2018,7 +2022,14 @@ async function startServer() {
 }
 
 // In standard server environments (AI Studio dev server, Cloud Run, Docker):
-if (!process.env.VERCEL) {
+// Only start listening if executed directly as the main process, not when imported by test suites
+const isDirectRun = !process.env.VERCEL && (
+  typeof process !== 'undefined' && 
+  process.argv[1] && 
+  (process.argv[1].endsWith('server.ts') || process.argv[1].endsWith('server.js') || process.argv[1].endsWith('server.cjs'))
+);
+
+if (isDirectRun) {
   startServer();
 }
 

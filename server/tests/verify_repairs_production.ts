@@ -2,12 +2,13 @@ import assert from 'assert';
 import { createRateLimiter } from '../security';
 import { d1 } from '../d1';
 import { api } from '../../src/services/api';
+import { handleD1HealthAndStatus } from '../../server';
 
 /**
  * Dedicated Test Suite for the 4 specific mandatory repair points:
  * 1. Rate limiter bypass disallowed in production / allowed only in test environment.
  * 2. Production image upload failure handling (no success: true with temporary fallback).
- * 3. GET /api/d1/status failure simulation & dynamic table metrics.
+ * 3. GET /api/d1/status & /api/d1/health actual handler tests (configured, reachable, initialized, schemaValid, isConnected).
  * 4. Product deletion failure simulation & atomic consistency.
  */
 
@@ -182,9 +183,9 @@ async function runRepairVerificationTests() {
   });
 
   // ========================================================
-  // TEST 3: D1 Status Failure & Dynamic Queries
+  // TEST 3: D1 Status & Health Real Handler Verification
   // ========================================================
-  await test('D1 Status: Reflects real D1 probe failure instead of hardcoding isConnected: true', async () => {
+  await test('D1 Status & Health: Actual handleD1HealthAndStatus returns 503 with exact diagnostic flags when D1 is unreachable', async () => {
     const originalEnv = process.env.NODE_ENV;
     const originalExecute = d1.executeCloudflareD1Query.bind(d1);
 
@@ -196,11 +197,16 @@ async function runRepairVerificationTests() {
         throw new Error('Cloudflare D1 unreachable: 502 Bad Gateway');
       };
 
+      // Test 3.1: Actual /api/d1/status request via handleD1HealthAndStatus
       let statusReturned = 200;
       let payloadReturned: any = null;
 
-      const mockReq = {} as any;
-      const mockRes = {
+      const mockReqStatus = {
+        path: '/api/d1/status',
+        query: {}
+      } as any;
+
+      const mockResStatus = {
         status(code: number) {
           statusReturned = code;
           return this;
@@ -211,33 +217,109 @@ async function runRepairVerificationTests() {
         }
       } as any;
 
-      // Import server status handler logic
-      let probeError: string | null = null;
-      let isConnected = false;
-      try {
-        const probeRes = await d1.executeCloudflareD1Query("SELECT count(*) as count FROM sqlite_master WHERE type='table';");
-        if (probeRes && probeRes.length > 0) isConnected = true;
-      } catch (e: any) {
-        probeError = e.message;
-        isConnected = false;
-      }
+      await handleD1HealthAndStatus(mockReqStatus, mockResStatus);
 
-      if (!isConnected) {
-        mockRes.status(503).json({
-          success: false,
-          isConnected: false,
-          remoteCloudflareConnected: false,
-          error: probeError
-        });
-      }
-
-      assert.strictEqual(statusReturned, 503, 'Endpoint returns 503 on D1 failure in production');
+      assert.strictEqual(statusReturned, 503, 'handleD1HealthAndStatus must return HTTP 503 on D1 unreachable');
       assert.strictEqual(payloadReturned?.isConnected, false, 'isConnected must be false when D1 fails');
+      assert.strictEqual(payloadReturned?.reachable, false, 'reachable must be false when probe fails');
       assert.strictEqual(payloadReturned?.success, false, 'success must be false when D1 fails');
+      assert.strictEqual(payloadReturned?.schemaValid, false, 'schemaValid must be false on probe error');
+      assert.strictEqual(typeof payloadReturned?.configured, 'boolean', 'configured must be a boolean');
+      assert.ok(payloadReturned?.error?.includes('502 Bad Gateway'), 'Error message from D1 probe must be included');
+
+      // Test 3.2: Actual /api/d1/health request via handleD1HealthAndStatus
+      let healthStatusReturned = 200;
+      let healthPayloadReturned: any = null;
+
+      const mockReqHealth = {
+        path: '/api/d1/health',
+        query: {}
+      } as any;
+
+      const mockResHealth = {
+        status(code: number) {
+          healthStatusReturned = code;
+          return this;
+        },
+        json(data: any) {
+          healthPayloadReturned = data;
+          return this;
+        }
+      } as any;
+
+      await handleD1HealthAndStatus(mockReqHealth, mockResHealth);
+
+      assert.strictEqual(healthStatusReturned, 503, '/api/d1/health must return HTTP 503 when D1 fails');
+      assert.strictEqual(healthPayloadReturned?.isConnected, false, '/api/d1/health isConnected must be false');
+      assert.strictEqual(healthPayloadReturned?.reachable, false, '/api/d1/health reachable must be false');
+      assert.strictEqual(healthPayloadReturned?.schemaValid, false, '/api/d1/health schemaValid must be false');
     } finally {
       process.env.NODE_ENV = originalEnv;
       (d1 as any).executeCloudflareD1Query = originalExecute;
     }
+  });
+
+  await test('D1 Status & Health: Actual handleD1HealthAndStatus returns HTTP 200 with matching diagnostic fields when healthy', async () => {
+    // Test real /api/d1/health handler
+    let healthCode = 200;
+    let healthBody: any = null;
+
+    const mockReqHealth = {
+      path: '/api/d1/health',
+      query: {}
+    } as any;
+
+    const mockResHealth = {
+      status(code: number) {
+        healthCode = code;
+        return this;
+      },
+      json(data: any) {
+        healthBody = data;
+        return this;
+      }
+    } as any;
+
+    await handleD1HealthAndStatus(mockReqHealth, mockResHealth);
+
+    assert.strictEqual(healthCode, 200, '/api/d1/health returns HTTP 200 when database is healthy');
+    assert.strictEqual(healthBody?.success, true, 'healthBody success must be true');
+    assert.strictEqual(healthBody?.isConnected, true, 'healthBody isConnected must be true');
+    assert.strictEqual(healthBody?.reachable, true, 'healthBody reachable must be true');
+    assert.strictEqual(healthBody?.schemaValid, true, 'healthBody schemaValid must be true');
+    assert.strictEqual(typeof healthBody?.configured, 'boolean', 'healthBody configured is boolean');
+    assert.strictEqual(typeof healthBody?.remoteTablesCount, 'number', 'remoteTablesCount is a number');
+
+    // Test real /api/d1/status handler
+    let statusCode = 200;
+    let statusBody: any = null;
+
+    const mockReqStatus = {
+      path: '/api/d1/status',
+      query: {}
+    } as any;
+
+    const mockResStatus = {
+      status(code: number) {
+        statusCode = code;
+        return this;
+      },
+      json(data: any) {
+        statusBody = data;
+        return this;
+      }
+    } as any;
+
+    await handleD1HealthAndStatus(mockReqStatus, mockResStatus);
+
+    assert.strictEqual(statusCode, 200, '/api/d1/status returns HTTP 200 when database is healthy');
+    assert.strictEqual(statusBody?.success, true, 'statusBody success must be true');
+    assert.strictEqual(statusBody?.isConnected, true, 'statusBody isConnected must be true');
+    assert.strictEqual(statusBody?.reachable, true, 'statusBody reachable must be true');
+    assert.strictEqual(statusBody?.schemaValid, true, 'statusBody schemaValid must be true');
+    assert.ok(statusBody?.tables, 'statusBody contains detailed tables counts');
+    assert.strictEqual(typeof statusBody?.tables?.products, 'number', 'tables.products count is a number');
+    assert.strictEqual(typeof statusBody?.tables?.orders, 'number', 'tables.orders count is a number');
   });
 
   // ========================================================

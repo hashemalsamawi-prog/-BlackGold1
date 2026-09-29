@@ -4,7 +4,7 @@ import { SANAA_DISTRICTS } from '../data/mockData';
 import { 
   X, Check, ShieldCheck, MapPin, Truck, Phone, User, 
   CreditCard, Banknote, Clock, AlertCircle, ArrowLeft, Loader2,
-  Package, ChevronRight, CheckCircle2
+  Package, ChevronRight, CheckCircle2, Tag
 } from 'lucide-react';
 
 interface CheckoutModalProps {
@@ -54,6 +54,13 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const [notes, setNotes] = useState(customerNotes || '');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  
+  // Local coupon support within Checkout
+  const [localCouponCode, setLocalCouponCode] = useState(() => couponCode || appliedCoupon?.code || '');
+  const [localDiscount, setLocalDiscount] = useState(() => discount || 0);
+  const [isVerifyingCoupon, setIsVerifyingCoupon] = useState(false);
+  const [couponStatusMsg, setCouponStatusMsg] = useState<{ text: string; isError: boolean } | null>(null);
+
   const checkoutModalRef = useRef<HTMLDivElement>(null);
 
   // Synchronize state when opened & auto-scroll to top
@@ -64,7 +71,14 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       }
       if (selectedDistrictName) setDistrict(selectedDistrictName);
       if (customerNotes) setNotes(customerNotes);
+      if (couponCode || appliedCoupon?.code) {
+        setLocalCouponCode(couponCode || appliedCoupon?.code || '');
+      }
+      if (discount !== undefined && discount !== null) {
+        setLocalDiscount(discount);
+      }
       setErrorMsg('');
+      setCouponStatusMsg(null);
       const selectedAddr = addresses.find(a => a.id === selectedAddressId) || (addresses.length > 0 ? addresses[0] : null);
       if (selectedAddr) {
         if (selectedAddr.district) setDistrict(selectedAddr.district);
@@ -72,7 +86,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
         if (selectedAddr.phone && !customerPhone) setCustomerPhone(selectedAddr.phone);
       }
     }
-  }, [isOpen, selectedDistrictName, customerNotes, selectedAddressId, addresses]);
+  }, [isOpen, selectedDistrictName, customerNotes, selectedAddressId, addresses, couponCode, appliedCoupon, discount]);
 
   // Handle ESC key to close modal
   useEffect(() => {
@@ -91,7 +105,35 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const selectedDistrictObj = SANAA_DISTRICTS.find((d) => d.nameAr === district);
   const currentShippingFee = selectedDistrictObj ? selectedDistrictObj.fee : (shippingFee || 1000);
   const subtotal = cart.reduce((sum, it) => sum + ((it.unitPrice || it.product.price) * it.quantity), 0);
-  const totalAmount = Math.max(0, subtotal + currentShippingFee - discount);
+  const effectiveDiscount = localDiscount > 0 ? localDiscount : (discount || 0);
+  const totalAmount = Math.max(0, subtotal + currentShippingFee - effectiveDiscount);
+
+  const handleApplyCoupon = async () => {
+    const code = localCouponCode.trim();
+    if (!code) return;
+    setIsVerifyingCoupon(true);
+    setCouponStatusMsg(null);
+    try {
+      const res = await fetch('/api/validate-coupon', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, amount: subtotal })
+      });
+      const data = await res.json();
+      if (data.success && typeof data.discount === 'number') {
+        setLocalDiscount(data.discount);
+        setCouponStatusMsg({ text: `تم تطبيق الكوبون بنجاح! خصم ${data.discount.toLocaleString()} ر.ي`, isError: false });
+      } else {
+        setLocalDiscount(0);
+        setCouponStatusMsg({ text: data.message || 'الكوبون المدخل غير صالح أو منتهي الصلاحية', isError: true });
+      }
+    } catch {
+      setLocalDiscount(0);
+      setCouponStatusMsg({ text: 'تعذر التحقق من الكوبون حالياً. تأكد من اتصال الإنترنت', isError: true });
+    } finally {
+      setIsVerifyingCoupon(false);
+    }
+  };
 
   const getCarrierBadge = (phoneStr: string) => {
     const clean = phoneStr.replace(/\D/g, '');
@@ -153,7 +195,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       })),
       subtotal,
       shippingFee: currentShippingFee,
-      discount,
+      discount: effectiveDiscount,
       total: totalAmount,
       district,
       address: {
@@ -163,7 +205,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       },
       paymentMethod,
       notes: notes.trim(),
-      couponCode: couponCode || appliedCoupon?.code || undefined,
+      couponCode: localCouponCode.trim() || couponCode || appliedCoupon?.code || undefined,
       idempotencyKey: clientRequestId
     };
 
@@ -415,6 +457,56 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
             </div>
           </div>
 
+          {/* Coupon Code Section */}
+          <div className="p-4 rounded-2xl bg-[#14141E] border border-[#20202E] space-y-2.5">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-amber-400 flex items-center gap-1.5">
+                <Tag className="w-3.5 h-3.5 text-amber-400" />
+                <span>كوبون الخصم أو كود التخفيض الملكي</span>
+              </label>
+              {localDiscount > 0 && (
+                <span className="text-[11px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full">
+                  خصم مفعّل: {localDiscount.toLocaleString()} ر.ي
+                </span>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={localCouponCode}
+                onChange={(e) => {
+                  setLocalCouponCode(e.target.value.toUpperCase());
+                  setCouponStatusMsg(null);
+                }}
+                placeholder="أدخل كود الكوبون (مثال: ROYAL10)..."
+                className="flex-1 bg-[#181824] border border-[#28283C] rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 uppercase tracking-wider font-mono focus:outline-none focus:border-amber-400 transition-colors"
+              />
+              <button
+                type="button"
+                onClick={handleApplyCoupon}
+                disabled={isVerifyingCoupon || !localCouponCode.trim()}
+                className="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed shrink-0 flex items-center gap-1.5"
+              >
+                {isVerifyingCoupon ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>فحص...</span>
+                  </>
+                ) : (
+                  <span>تطبيق</span>
+                )}
+              </button>
+            </div>
+
+            {couponStatusMsg && (
+              <p className={`text-[11px] font-medium flex items-center gap-1 mt-1 ${couponStatusMsg.isError ? 'text-rose-400' : 'text-emerald-400'}`}>
+                {couponStatusMsg.isError ? <AlertCircle className="w-3 h-3 shrink-0" /> : <Check className="w-3 h-3 shrink-0" />}
+                <span>{couponStatusMsg.text}</span>
+              </p>
+            )}
+          </div>
+
           {/* Order Financial Summary Box */}
           <div className="p-4 rounded-2xl bg-[#14141E] border border-[#20202E] space-y-2 text-xs">
             <div className="flex items-center justify-between text-slate-400">
@@ -427,10 +519,10 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
               <span className="font-mono text-slate-200">{currentShippingFee.toLocaleString()} ر.ي</span>
             </div>
 
-            {discount > 0 && (
+            {effectiveDiscount > 0 && (
               <div className="flex items-center justify-between text-emerald-400 font-semibold">
                 <span>الخصم المطبق:</span>
-                <span className="font-mono">-{discount.toLocaleString()} ر.ي</span>
+                <span className="font-mono">-{effectiveDiscount.toLocaleString()} ر.ي</span>
               </div>
             )}
 

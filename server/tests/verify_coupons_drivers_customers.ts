@@ -17,9 +17,12 @@ function assert(condition: boolean, msg: string) {
 }
 
 async function req(url: string, options: any = {}) {
-  const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+  const headers = { 'Content-Type': 'application/json', 'x-audit-test': 'local-audit', ...(options.headers || {}) };
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
   try {
-    const res = await fetch(`${BASE_URL}${url}`, { ...options, headers });
+    const res = await fetch(`${BASE_URL}${url}`, { ...options, headers, signal: controller.signal });
+    clearTimeout(timeoutId);
     const text = await res.text();
     try {
       return { status: res.status, ok: res.ok, json: JSON.parse(text) };
@@ -27,6 +30,7 @@ async function req(url: string, options: any = {}) {
       return { status: res.status, ok: res.ok, text };
     }
   } catch (err: any) {
+    clearTimeout(timeoutId);
     return { status: 500, ok: false, json: { success: false, message: err.message } };
   }
 }
