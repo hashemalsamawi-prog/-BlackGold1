@@ -184,9 +184,11 @@ class D1DatabaseAccessLayer {
     this.initPromise = (async () => {
       try {
         const dataDir = path.dirname(this.localDbPath);
-        if (!fs.existsSync(dataDir)) {
-          fs.mkdirSync(dataDir, { recursive: true });
-        }
+        try {
+          if (!fs.existsSync(dataDir)) {
+            fs.mkdirSync(dataDir, { recursive: true });
+          }
+        } catch {}
 
       const hasD1Credentials = Boolean(
         CLOUDFLARE_CONFIG.accountId && 

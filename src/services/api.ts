@@ -38,6 +38,23 @@ export const getAuthHeaders = (includeJson = true): Record<string, string> => {
   return headers;
 };
 
+// Helper to safely parse JSON responses or throw clean Arabic errors on 500/HTML responses
+async function parseJsonResponse(res: Response, defaultErrorMsg: string): Promise<any> {
+  const text = await res.text();
+  let data: any;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(
+      `تعذر استلام استجابة صحيحة من الخادم (${res.status}). يرجى التحقق من متغيرات النظام وبيئة التشغيل.`
+    );
+  }
+  if (!res.ok || (data && data.success === false)) {
+    throw new Error(data?.message || defaultErrorMsg);
+  }
+  return data;
+}
+
 export const api = {
   async quickCustomerLogin(phone: string, name?: string) {
     const res = await fetch('/api/auth/quick-customer', {
@@ -45,11 +62,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ phone, name }),
     });
-    const data = await res.json();
-    if (!res.ok || !data.success) {
-      throw new Error(data.message || 'فشل تسجيل الدخول');
-    }
-    return data;
+    return parseJsonResponse(res, 'فشل تسجيل الدخول');
   },
 
   async adminLogin(credentials: { pin?: string; password?: string }) {
@@ -58,11 +71,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(credentials),
     });
-    const data = await res.json();
-    if (!res.ok || !data.success) {
-      throw new Error(data.message || 'رمز الدخول غير صحيح');
-    }
-    return data;
+    return parseJsonResponse(res, 'رمز الدخول غير صحيح');
   },
 
   async driverLogin(credentials: { phone: string; pin?: string; password?: string }) {
@@ -71,11 +80,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(credentials),
     });
-    const data = await res.json();
-    if (!res.ok || !data.success) {
-      throw new Error(data.message || 'بيانات دخول المندوب غير صحيحة');
-    }
-    return data;
+    return parseJsonResponse(res, 'بيانات دخول المندوب غير صحيحة');
   },
 
   async verifySession() {

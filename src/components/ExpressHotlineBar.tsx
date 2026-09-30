@@ -32,8 +32,8 @@ export const ExpressHotlineBar: React.FC<ExpressHotlineBarProps> = ({
   return (
     <div className={`fixed z-40 transition-all duration-300 ${
       hasCartItems 
-        ? 'hidden sm:block sm:bottom-6 sm:left-4' 
-        : 'bottom-[calc(4.75rem+env(safe-area-inset-bottom))] sm:bottom-6 left-4'
+        ? 'hidden sm:block sm:bottom-6 sm:start-6' 
+        : 'bottom-[calc(4.75rem+env(safe-area-inset-bottom))] sm:bottom-6 start-4 sm:start-6'
     }`}>
       {/* Expanded Menu */}
       {isExpanded && (

@@ -2,7 +2,6 @@ import express, { Request, Response, NextFunction } from "express";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
-import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import { 
   db, 
@@ -39,6 +38,28 @@ app.use("/src/assets/images", express.static(path.join(process.cwd(), "src", "as
 
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+
+// Normalize URL for serverless / Vercel where /api prefix might be stripped in rewrites
+app.use((req, res, next) => {
+  if (!req.url.startsWith('/api') && (
+    req.url.startsWith('/auth') || 
+    req.url.startsWith('/products') || 
+    req.url.startsWith('/orders') || 
+    req.url.startsWith('/coupons') || 
+    req.url.startsWith('/delivery-agents') || 
+    req.url.startsWith('/reviews') || 
+    req.url.startsWith('/settings') || 
+    req.url.startsWith('/d1') || 
+    req.url.startsWith('/inventory') || 
+    req.url.startsWith('/crm') || 
+    req.url.startsWith('/gallery') || 
+    req.url.startsWith('/gemini') ||
+    req.url.startsWith('/health')
+  )) {
+    req.url = `/api${req.url}`;
+  }
+  next();
+});
 
 // Health Check Endpoint
 app.get("/api/health", (req, res) => {
@@ -137,224 +158,260 @@ const couponRateLimiter = createRateLimiter({
 
 // Quick Customer Login / Register (Phone + Name)
 app.post("/api/auth/quick-customer", authRateLimiter, async (req, res) => {
-  const { phone, name } = req.body;
-  const rawPhone = normalizeDigits(phone || '');
-  const phoneValidation = validateYemeniPhone(rawPhone);
-  if (!phoneValidation.isValid) {
-    return res.status(400).json({ success: false, message: "يرجى إدخال رقم هاتف يمني صحيح (مثال: 77XXXXXXX أو 73XXXXXXX)" });
-  }
-
-  const cleanPhone = phoneValidation.normalized;
-  const safeName = sanitizeInputString(name || '', 80) || `عميل الذهب الأسود (${cleanPhone.slice(-4)})`;
-  let user = await db.findUserByPhoneAsync(cleanPhone);
-
-  if (!user) {
-    user = {
-      id: "usr-" + Date.now(),
-      name: safeName,
-      phone: cleanPhone,
-      role: 'customer',
-      createdAt: new Date().toISOString(),
-      lastLogin: new Date().toISOString()
-    };
-    await db.addUserAsync(user);
-  } else {
-    user = (await db.updateUserAsync(user.id, {
-      name: safeName,
-      lastLogin: new Date().toISOString()
-    })) || user;
-  }
-
-  const token = generateToken({
-    userId: user.id,
-    role: user.role,
-    phone: user.phone,
-    name: user.name
-  });
-
-  res.json({
-    success: true,
-    token,
-    user: {
-      id: user.id,
-      name: user.name,
-      phone: user.phone,
-      role: user.role
+  try {
+    const { phone, name } = req.body;
+    const rawPhone = normalizeDigits(phone || '');
+    const phoneValidation = validateYemeniPhone(rawPhone);
+    if (!phoneValidation.isValid) {
+      return res.status(400).json({ success: false, message: "يرجى إدخال رقم هاتف يمني صحيح (مثال: 77XXXXXXX أو 73XXXXXXX)" });
     }
-  });
+
+    const cleanPhone = phoneValidation.normalized;
+    const safeName = sanitizeInputString(name || '', 80) || `عميل الذهب الأسود (${cleanPhone.slice(-4)})`;
+    let user = await db.findUserByPhoneAsync(cleanPhone);
+
+    if (!user) {
+      user = {
+        id: "usr-" + Date.now(),
+        name: safeName,
+        phone: cleanPhone,
+        role: 'customer',
+        createdAt: new Date().toISOString(),
+        lastLogin: new Date().toISOString()
+      };
+      await db.addUserAsync(user);
+    } else {
+      user = (await db.updateUserAsync(user.id, {
+        name: safeName,
+        lastLogin: new Date().toISOString()
+      })) || user;
+    }
+
+    const token = generateToken({
+      userId: user.id,
+      role: user.role,
+      phone: user.phone,
+      name: user.name
+    });
+
+    res.json({
+      success: true,
+      token,
+      user: {
+        id: user.id,
+        name: user.name,
+        phone: user.phone,
+        role: user.role
+      }
+    });
+  } catch (err: any) {
+    console.error("Quick customer login error:", err);
+    res.status(500).json({ 
+      success: false, 
+      message: err.message || "حدث خطأ أثناء تسجيل الدخول السريع" 
+    });
+  }
 });
 
 // Admin / Owner / Employee Login with Secure PIN or Password
 app.post("/api/auth/admin-login", authRateLimiter, async (req, res) => {
-  const { phone, pin, password } = req.body;
-  
-  if (!pin && !password) {
-    return res.status(400).json({ success: false, message: "يرجى إدخال رمز PIN أو كلمة المرور للدخول" });
-  }
-
-  const rawSecret = normalizeDigits(pin || password || '').trim();
-  if (!rawSecret) {
-    return res.status(400).json({ success: false, message: "رمز الدخول لا يمكن أن يكون فارغاً" });
-  }
-
-  const cleanPhone = phone ? normalizeDigits(phone).replace(/\D/g, '') : '';
-  const hashedInput = hashSecret(rawSecret);
-
-  // Find owner/admin/employee accounts from D1
-  const allUsers = await db.getUsersAsync();
-  const users = allUsers.filter(u => ['owner', 'admin', 'employee'].includes(u.role));
-  
-  let matchedUser = users.find(u => {
-    if (cleanPhone && u.phone.replace(/\D/g, '') !== cleanPhone) {
-      return false;
+  try {
+    const { phone, pin, password } = req.body;
+    
+    if (!pin && !password) {
+      return res.status(400).json({ success: false, message: "يرجى إدخال رمز PIN أو كلمة المرور للدخول" });
     }
-    const pinOk = u.pinHash ? timingSafeEqual(u.pinHash, hashedInput) : false;
-    const passOk = u.passwordHash ? timingSafeEqual(u.passwordHash, hashedInput) : false;
-    return pinOk || passOk;
-  });
 
-  // Verify against dedicated ADMIN_PIN or ADMIN_PASSWORD environment secrets
-  // STRICT AUDIT: Zero hardcoded fallback PINs (no 1234, no 7777) allowed
-  if (!matchedUser && (process.env.ADMIN_PIN || process.env.ADMIN_PASSWORD)) {
-    const secureSecrets = [process.env.ADMIN_PIN, process.env.ADMIN_PASSWORD]
-      .filter(Boolean)
-      .map(p => normalizeDigits(p as string).trim());
-    const isPinMatch = secureSecrets.some(sec => timingSafeEqual(hashSecret(sec), hashedInput));
-    if (isPinMatch) {
-      let owner = users.find(u => u.role === 'owner');
-      if (!owner) {
-        const adminPhone = cleanPhone || (process.env.ADMIN_PHONE ? normalizeDigits(process.env.ADMIN_PHONE.trim()) : '');
-        if (!adminPhone) {
-          return res.status(401).json({ success: false, message: "لم يتم تكوين رقم هاتف الإدارة في متغيرات النظام (ADMIN_PHONE)" });
-        }
-        const adminName = process.env.ADMIN_NAME ? process.env.ADMIN_NAME.trim() : 'مالك المتجر';
-        owner = {
-          id: `usr-owner-${adminPhone}`,
-          name: adminName,
-          phone: adminPhone,
-          role: 'owner',
-          pinHash: hashedInput,
-          createdAt: new Date().toISOString()
-        };
-        await db.addUserAsync(owner);
-      } else {
-        owner.pinHash = hashedInput;
-        await db.updateUserAsync(owner.id, { pinHash: hashedInput });
+    const rawSecret = normalizeDigits(pin || password || '').trim();
+    if (!rawSecret) {
+      return res.status(400).json({ success: false, message: "رمز الدخول لا يمكن أن يكون فارغاً" });
+    }
+
+    const cleanPhone = phone ? normalizeDigits(phone).replace(/\D/g, '') : '';
+    const hashedInput = hashSecret(rawSecret);
+
+    // Find owner/admin/employee accounts from D1
+    const allUsers = await db.getUsersAsync();
+    const users = allUsers.filter(u => ['owner', 'admin', 'employee'].includes(u.role));
+    
+    let matchedUser = users.find(u => {
+      if (cleanPhone && u.phone.replace(/\D/g, '') !== cleanPhone) {
+        return false;
       }
-      matchedUser = owner;
+      const pinOk = u.pinHash 
+        ? (timingSafeEqual(u.pinHash, hashedInput) || timingSafeEqual(u.pinHash, rawSecret) || u.pinHash === rawSecret) 
+        : false;
+      const passOk = u.passwordHash 
+        ? (timingSafeEqual(u.passwordHash, hashedInput) || timingSafeEqual(u.passwordHash, rawSecret) || u.passwordHash === rawSecret) 
+        : false;
+      return pinOk || passOk;
+    });
+
+    // If matched via legacy plaintext PIN, auto-upgrade to secure cryptographic hash in D1
+    if (matchedUser && matchedUser.pinHash && (matchedUser.pinHash === rawSecret || timingSafeEqual(matchedUser.pinHash, rawSecret))) {
+      matchedUser.pinHash = hashedInput;
+      db.updateUserAsync(matchedUser.id, { pinHash: hashedInput }).catch(() => {});
     }
-  }
 
-  if (!matchedUser) {
-    return res.status(401).json({ success: false, message: "رمز الدخول أو كلمة المرور غير صحيحة" });
-  }
+    // Verify against dedicated ADMIN_PIN or ADMIN_PASSWORD environment secrets
+    // STRICT AUDIT: Zero hardcoded fallback PINs allowed
+    if (!matchedUser && (process.env.ADMIN_PIN || process.env.ADMIN_PASSWORD)) {
+      const secureSecrets = [process.env.ADMIN_PIN, process.env.ADMIN_PASSWORD]
+        .filter(Boolean)
+        .map(p => normalizeDigits(p as string).trim());
+      const isPinMatch = secureSecrets.some(sec => 
+        timingSafeEqual(hashSecret(sec), hashedInput) || timingSafeEqual(sec, rawSecret) || sec === rawSecret
+      );
+      if (isPinMatch) {
+        let owner = users.find(u => u.role === 'owner');
+        if (!owner) {
+          const adminPhone = cleanPhone || (process.env.ADMIN_PHONE ? normalizeDigits(process.env.ADMIN_PHONE.trim()) : '');
+          if (!adminPhone) {
+            return res.status(401).json({ success: false, message: "لم يتم تكوين رقم هاتف الإدارة في متغيرات النظام (ADMIN_PHONE)" });
+          }
+          const adminName = process.env.ADMIN_NAME ? process.env.ADMIN_NAME.trim() : 'مالك المتجر';
+          owner = {
+            id: `usr-owner-${adminPhone}`,
+            name: adminName,
+            phone: adminPhone,
+            role: 'owner',
+            pinHash: hashedInput,
+            createdAt: new Date().toISOString()
+          };
+          await db.addUserAsync(owner);
+        } else {
+          owner.pinHash = hashedInput;
+          await db.updateUserAsync(owner.id, { pinHash: hashedInput });
+        }
+        matchedUser = owner;
+      }
+    }
 
-  const token = generateToken({
-    userId: matchedUser.id,
-    role: matchedUser.role,
-    phone: matchedUser.phone,
-    name: matchedUser.name
-  });
+    if (!matchedUser) {
+      return res.status(401).json({ success: false, message: "رمز الدخول أو كلمة المرور غير صحيحة" });
+    }
 
-  res.json({
-    success: true,
-    token,
-    user: {
-      id: matchedUser.id,
-      name: matchedUser.name,
+    const token = generateToken({
+      userId: matchedUser.id,
+      role: matchedUser.role,
       phone: matchedUser.phone,
-      role: matchedUser.role
-    }
-  });
+      name: matchedUser.name
+    });
+
+    res.json({
+      success: true,
+      token,
+      user: {
+        id: matchedUser.id,
+        name: matchedUser.name,
+        phone: matchedUser.phone,
+        role: matchedUser.role
+      }
+    });
+  } catch (err: any) {
+    console.error("Admin login error:", err);
+    res.status(500).json({ 
+      success: false, 
+      message: err.message || "حدث خطأ أثناء معالجة تسجيل دخول الإدارة" 
+    });
+  }
 });
 
 // Delivery Driver Login (Strict Authentication via Phone + PIN)
 app.post("/api/auth/driver-login", authRateLimiter, async (req, res) => {
-  const { phone, pin, password } = req.body;
+  try {
+    const { phone, pin, password } = req.body;
 
-  if (!phone || (!pin && !password)) {
-    return res.status(400).json({ success: false, message: "يرجى إدخال رقم هاتف المندوب ورمز الدخول السري (PIN)" });
-  }
+    if (!phone || (!pin && !password)) {
+      return res.status(400).json({ success: false, message: "يرجى إدخال رقم هاتف المندوب ورمز الدخول السري (PIN)" });
+    }
 
-  const cleanPhone = normalizeDigits(phone).replace(/\D/g, '');
-  const secret = normalizeDigits(pin || password || '').trim();
-  if (!secret) {
-    return res.status(400).json({ success: false, message: "رمز الدخول لا يمكن أن يكون فارغاً" });
-  }
+    const cleanPhone = normalizeDigits(phone).replace(/\D/g, '');
+    const secret = normalizeDigits(pin || password || '').trim();
+    if (!secret) {
+      return res.status(400).json({ success: false, message: "رمز الدخول لا يمكن أن يكون فارغاً" });
+    }
 
-  const hashedSecret = hashSecret(secret);
+    const hashedSecret = hashSecret(secret);
 
-  // 1. Check in registered users list from D1
-  const allUsers = await db.getUsersAsync();
-  const drivers = allUsers.filter(u => u.role === 'delivery' || u.role === 'mandoub');
-  let matchedDriver = drivers.find(d => {
-    if (d.phone.replace(/\D/g, '') !== cleanPhone) return false;
-    const pinMatch = d.pinHash ? timingSafeEqual(d.pinHash, hashedSecret) : false;
-    const passMatch = d.passwordHash ? timingSafeEqual(d.passwordHash, hashedSecret) : false;
-    return pinMatch || passMatch;
-  });
+    // 1. Check in registered users list from D1
+    const allUsers = await db.getUsersAsync();
+    const drivers = allUsers.filter(u => u.role === 'delivery' || u.role === 'mandoub');
+    let matchedDriver = drivers.find(d => {
+      if (d.phone.replace(/\D/g, '') !== cleanPhone) return false;
+      const pinMatch = d.pinHash ? timingSafeEqual(d.pinHash, hashedSecret) : false;
+      const passMatch = d.passwordHash ? timingSafeEqual(d.passwordHash, hashedSecret) : false;
+      return pinMatch || passMatch;
+    });
 
-  // 2. Also check in authorized delivery agents roster
-  if (!matchedDriver) {
-    const agents = await db.getDeliveryAgentsAsync();
-    const matchedAgent = agents.find(a => a.phone.replace(/\D/g, '') === cleanPhone);
+    // 2. Also check in authorized delivery agents roster
+    if (!matchedDriver) {
+      const agents = await db.getDeliveryAgentsAsync();
+      const matchedAgent = agents.find(a => a.phone.replace(/\D/g, '') === cleanPhone);
 
-    if (matchedAgent) {
-      // Validate secret strictly against stored agent secret or dedicated environment secrets (no hardcoded fallback)
-      const envDriverPin = process.env.DRIVER_PIN ? normalizeDigits(process.env.DRIVER_PIN.trim()) : '';
-      const envAdminPin = process.env.ADMIN_PIN ? normalizeDigits(process.env.ADMIN_PIN.trim()) : '';
-      
-      const isAgentSecretValid = (matchedAgent as any).pinHash 
-        ? timingSafeEqual((matchedAgent as any).pinHash, hashedSecret) 
-        : ((matchedAgent as any).pin ? timingSafeEqual(hashSecret(normalizeDigits(String((matchedAgent as any).pin).trim())), hashedSecret) : false);
+      if (matchedAgent) {
+        // Validate secret strictly against stored agent secret or dedicated environment secrets (no hardcoded fallback)
+        const envDriverPin = process.env.DRIVER_PIN ? normalizeDigits(process.env.DRIVER_PIN.trim()) : '';
+        const envAdminPin = process.env.ADMIN_PIN ? normalizeDigits(process.env.ADMIN_PIN.trim()) : '';
+        
+        const isAgentSecretValid = (matchedAgent as any).pinHash 
+          ? timingSafeEqual((matchedAgent as any).pinHash, hashedSecret) 
+          : ((matchedAgent as any).pin ? timingSafeEqual(hashSecret(normalizeDigits(String((matchedAgent as any).pin).trim())), hashedSecret) : false);
 
-      const isEnvSecretValid = [envDriverPin, envAdminPin].filter(Boolean).some(p => timingSafeEqual(hashSecret(p), hashedSecret));
-      const isPinValid = isAgentSecretValid || isEnvSecretValid;
+        const isEnvSecretValid = [envDriverPin, envAdminPin].filter(Boolean).some(p => timingSafeEqual(hashSecret(p), hashedSecret));
+        const isPinValid = isAgentSecretValid || isEnvSecretValid;
 
-      if (isPinValid) {
-        // Upsert driver user account into users table for persistent auth
-        const existingUser = allUsers.find(u => u.phone.replace(/\D/g, '') === cleanPhone);
-        if (existingUser) {
-          existingUser.role = 'delivery';
-          existingUser.pinHash = hashedSecret;
-          matchedDriver = existingUser;
-          await db.updateUserAsync(existingUser.id, { role: 'delivery', pinHash: hashedSecret });
-        } else {
-          matchedDriver = {
-            id: matchedAgent.id || `dr-${cleanPhone}`,
-            name: matchedAgent.name,
-            phone: matchedAgent.phone,
-            role: 'delivery',
-            pinHash: hashedSecret,
-            createdAt: new Date().toISOString()
-          };
-          await db.addUserAsync(matchedDriver);
+        if (isPinValid) {
+          // Upsert driver user account into users table for persistent auth
+          const existingUser = allUsers.find(u => u.phone.replace(/\D/g, '') === cleanPhone);
+          if (existingUser) {
+            existingUser.role = 'delivery';
+            existingUser.pinHash = hashedSecret;
+            matchedDriver = existingUser;
+            await db.updateUserAsync(existingUser.id, { role: 'delivery', pinHash: hashedSecret });
+          } else {
+            matchedDriver = {
+              id: matchedAgent.id || `dr-${cleanPhone}`,
+              name: matchedAgent.name,
+              phone: matchedAgent.phone,
+              role: 'delivery',
+              pinHash: hashedSecret,
+              createdAt: new Date().toISOString()
+            };
+            await db.addUserAsync(matchedDriver);
+          }
         }
       }
     }
-  }
 
-  if (!matchedDriver) {
-    return res.status(401).json({ success: false, message: "رقم هاتف المندوب أو رمز PIN غير صحيح" });
-  }
-
-  const token = generateToken({
-    userId: matchedDriver.id,
-    role: 'delivery',
-    phone: matchedDriver.phone,
-    name: matchedDriver.name
-  });
-
-  res.json({
-    success: true,
-    token,
-    user: {
-      id: matchedDriver.id,
-      name: matchedDriver.name,
-      phone: matchedDriver.phone,
-      role: 'delivery'
+    if (!matchedDriver) {
+      return res.status(401).json({ success: false, message: "رقم هاتف المندوب أو رمز PIN غير صحيح" });
     }
-  });
+
+    const token = generateToken({
+      userId: matchedDriver.id,
+      role: 'delivery',
+      phone: matchedDriver.phone,
+      name: matchedDriver.name
+    });
+
+    res.json({
+      success: true,
+      token,
+      user: {
+        id: matchedDriver.id,
+        name: matchedDriver.name,
+        phone: matchedDriver.phone,
+        role: 'delivery'
+      }
+    });
+  } catch (err: any) {
+    console.error("Driver login error:", err);
+    res.status(500).json({ 
+      success: false, 
+      message: err.message || "حدث خطأ أثناء معالجة تسجيل دخول المندوب" 
+    });
+  }
 });
 
 // Get Current Authenticated User Info
@@ -1977,6 +2034,17 @@ app.post("/api/gemini/advisor", async (req, res) => {
 // 10. VITE MIDDLEWARE & STATIC SERVING
 // ==========================================
 
+// Global Error Handler Middleware (ensures all uncaught errors return clean JSON)
+app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+  console.error("Unhandled Server Error:", err);
+  if (!res.headersSent) {
+    res.status(err.status || 500).json({
+      success: false,
+      message: err.message || "حدث خطأ غير متوقع في الخادم"
+    });
+  }
+});
+
 async function startServer() {
   try {
     // 1. Strict Production Environment & Credentials Validation
@@ -1999,6 +2067,7 @@ async function startServer() {
     console.log('✅ Cloudflare D1 Database Layer Initialized and Authoritative.');
 
     if (process.env.NODE_ENV !== "production") {
+      const { createServer: createViteServer } = await import("vite");
       const vite = await createViteServer({
         server: { middlewareMode: true },
         appType: "spa",

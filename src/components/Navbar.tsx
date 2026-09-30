@@ -114,8 +114,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     <header className="sticky top-0 z-40 w-full border-b border-[#222232] bg-[#09090D]/95 backdrop-blur-xl transition-all">
       {/* Top Luxury Announcement Bar */}
       {storeSettings.announcementAr && (
-        <div className="bg-gradient-to-r from-[#1A1A24] via-[#242018] to-[#1A1A24] border-b border-amber-500/20 px-4 py-1.5 text-center text-xs font-semibold text-amber-200/90 flex items-center justify-center gap-2">
-          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+        <div className="bg-gradient-to-r from-[#1A1A24] via-[#242018] to-[#1A1A24] border-b border-amber-500/20 px-4 py-1.5 text-center text-xs font-semibold text-amber-200/90 flex items-center justify-center">
           <span>{storeSettings.announcementAr}</span>
         </div>
       )}
