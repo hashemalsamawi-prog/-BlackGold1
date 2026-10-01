@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Product, Language } from '../types';
-import { resolveAsset } from '../assets/images';
+import { resolveAsset, ASSETS } from '../assets/images';
 import { Flame, Plus, Minus, Star, Check, ShoppingCart } from 'lucide-react';
 
 interface ProductCardProps {
@@ -94,7 +94,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
             }`}
             referrerPolicy="no-referrer"
             onError={(e) => {
-              (e.target as HTMLImageElement).src = '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg';
+              (e.target as HTMLImageElement).src = ASSETS.pouchPair;
               setImageLoaded(true);
             }}
           />

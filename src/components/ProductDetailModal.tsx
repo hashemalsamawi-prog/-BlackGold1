@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { Product, Language, Review } from '../types';
-import { resolveAsset } from '../assets/images';
+import { resolveAsset, ASSETS } from '../assets/images';
 import { 
   X, Flame, ShieldCheck, Star, ShoppingCart, 
   Minus, Plus, Clock, Wind, Check, Zap
@@ -131,7 +131,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                 }`}
                 referrerPolicy="no-referrer"
                 onError={(e) => {
-                  (e.target as HTMLImageElement).src = '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg';
+                  (e.target as HTMLImageElement).src = ASSETS.pouchPair;
                   setModalImageLoaded(true);
                 }}
               />

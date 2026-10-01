@@ -573,7 +573,7 @@ class D1DatabaseAccessLayer {
       const productsResult = await this.executeCloudflareD1Query("SELECT * FROM products;");
       this.tables.products = Array.isArray(productsResult) ? productsResult.map((r: any) => {
         const parsedImages = typeof r.images === 'string' ? JSON.parse(r.images || '[]') : (r.images || []);
-        const primaryImg = parsedImages[0] || r.image || '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg';
+        const primaryImg = parsedImages[0] || r.image || '/images/black_gold_pouch_pair_1786125935649.jpg';
         return {
           id: r.id,
           nameAr: r.name_ar,
@@ -925,7 +925,7 @@ class D1DatabaseAccessLayer {
 
   public mapD1ProductToProduct(r: any): Product {
     const images = typeof r.images === 'string' ? (JSON.parse(r.images || '[]') || []) : (r.images || []);
-    const primaryImg = images[0] || r.image || '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg';
+    const primaryImg = images[0] || r.image || '/images/black_gold_pouch_pair_1786125935649.jpg';
     const specs = typeof r.specs === 'string' ? (JSON.parse(r.specs || '[]') || []) : (r.specs || []);
     const weightOptions = typeof r.weight_options === 'string' ? (JSON.parse(r.weight_options || '[]') || []) : (r.weight_options || []);
 
@@ -1071,7 +1071,7 @@ class D1DatabaseAccessLayer {
 
   public getProducts(): Product[] {
     return this.tables.products.map(p => {
-      const primaryImg = p.image || p.images?.[0] || '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg';
+      const primaryImg = p.image || p.images?.[0] || '/images/black_gold_pouch_pair_1786125935649.jpg';
       return {
         ...p,
         image: primaryImg,
@@ -1106,7 +1106,7 @@ class D1DatabaseAccessLayer {
   public findProductById(id: string): Product | undefined {
     const p = this.tables.products.find(p => p.id === id);
     if (!p) return undefined;
-    const primaryImg = p.image || p.images?.[0] || '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg';
+    const primaryImg = p.image || p.images?.[0] || '/images/black_gold_pouch_pair_1786125935649.jpg';
     return {
       ...p,
       image: primaryImg,
@@ -1138,7 +1138,7 @@ class D1DatabaseAccessLayer {
   }
 
   public addProduct(product: Product): Product {
-    const primaryImg = product.image || product.images?.[0] || '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg';
+    const primaryImg = product.image || product.images?.[0] || '/images/black_gold_pouch_pair_1786125935649.jpg';
     product.image = primaryImg;
     product.images = (product.images && product.images.length > 0) ? product.images : [primaryImg];
 
@@ -1148,7 +1148,7 @@ class D1DatabaseAccessLayer {
   }
 
   public async addProductAsync(product: Product): Promise<Product> {
-    const primaryImg = product.image || product.images?.[0] || '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg';
+    const primaryImg = product.image || product.images?.[0] || '/images/black_gold_pouch_pair_1786125935649.jpg';
     product.image = primaryImg;
     product.images = (product.images && product.images.length > 0) ? product.images : [primaryImg];
 
@@ -1206,7 +1206,7 @@ class D1DatabaseAccessLayer {
     if (idx === -1) return null;
 
     const current = this.tables.products[idx];
-    const finalImage = updates.image || updates.images?.[0] || current.image || current.images?.[0] || '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg';
+    const finalImage = updates.image || updates.images?.[0] || current.image || current.images?.[0] || '/images/black_gold_pouch_pair_1786125935649.jpg';
     const finalImages = (updates.images && updates.images.length > 0) ? updates.images : (current.images && current.images.length > 0 ? current.images : [finalImage]);
 
     const updated: Product = {

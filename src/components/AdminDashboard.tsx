@@ -152,7 +152,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     burnDurationHours: '6+ ساعات',
     ashPercentage: '< 1.5%',
     stock: 250,
-    imageUrl: '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg'
+    imageUrl: ASSETS.pouchPair
   });
 
   // Inventory Adjustment Modal
@@ -649,7 +649,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       burnDurationHours: String(prod.burnDurationHours || '6+ ساعات'),
       ashPercentage: String(prod.ashPercentage || '< 1.5%'),
       stock: prod.stock || 100,
-      imageUrl: prod.images?.[0] || '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg'
+      imageUrl: prod.images?.[0] || ASSETS.pouchPair
     });
     setUploadStats(null);
     setProductModalOpen(true);
@@ -668,7 +668,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       burnDurationHours: '6+ ساعات',
       ashPercentage: '< 1.5%',
       stock: 300,
-      imageUrl: '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg'
+      imageUrl: ASSETS.pouchPair
     });
     setUploadStats(null);
     setProductModalOpen(true);

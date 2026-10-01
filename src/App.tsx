@@ -6,6 +6,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Product, CartItem, Order, DeliveryAddress, Review, Language, DeliveryAgent, MarketingCampaign, StoreSettings, ThemeMode, ProductSortOption } from './types';
 import { INITIAL_PRODUCTS, MOCK_ADDRESSES, INITIAL_DELIVERY_AGENTS, INITIAL_CAMPAIGNS, INITIAL_STORE_SETTINGS, INITIAL_GALLERY_ITEMS } from './data/mockData';
+import { ASSETS } from './assets/images';
 import { GalleryItem } from './types';
 
 // Components
@@ -94,8 +95,8 @@ export default function App() {
         if (Array.isArray(parsed) && parsed.length > 0) {
           return parsed.map((p: any) => ({
             ...p,
-            image: p.image || p.images?.[0] || '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg',
-            images: (p.images && p.images.length > 0) ? p.images : [p.image || '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg']
+            image: p.image || p.images?.[0] || ASSETS.pouchPair,
+            images: (p.images && p.images.length > 0) ? p.images : [p.image || ASSETS.pouchPair]
           }));
         }
       } catch (e) {
@@ -280,8 +281,8 @@ export default function App() {
         if (data.success && Array.isArray(data.data) && data.data.length > 0) {
           const normalized = data.data.map((p: any) => ({
             ...p,
-            image: p.image || p.images?.[0] || '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg',
-            images: (p.images && p.images.length > 0) ? p.images : [p.image || '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg']
+            image: p.image || p.images?.[0] || ASSETS.pouchPair,
+            images: (p.images && p.images.length > 0) ? p.images : [p.image || ASSETS.pouchPair]
           }));
           setProducts(normalized);
           safeSetLocalStorage('bg_saved_products', JSON.stringify(normalized));
@@ -694,7 +695,7 @@ export default function App() {
   };
 
   const handleUpdateProduct = async (id: string, updatedPayload: any) => {
-    const finalImage = updatedPayload.image || updatedPayload.images?.[0] || '/src/assets/images/black_gold_pouch_pair_1786125935649.jpg';
+    const finalImage = updatedPayload.image || updatedPayload.images?.[0] || ASSETS.pouchPair;
     const finalImages = (updatedPayload.images && updatedPayload.images.length > 0) ? updatedPayload.images : [finalImage];
     const normalizedPayload = {
       ...updatedPayload,

@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Language } from '../types';
 import { ASSETS, resolveAsset } from '../assets/images';
-import { Flame, ShieldCheck, Truck, ArrowLeft, Store, Clock } from 'lucide-react';
+import { Flame, ShieldCheck, Truck, ArrowLeft, Store, Clock, Crown, Sparkles } from 'lucide-react';
 
 interface HeroBannerProps {
   lang: Language;
@@ -26,6 +26,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({
   bannerPrice = 600,
   bannerOldPrice = 700,
 }) => {
+  const [imgError, setImgError] = useState(false);
   const activeImage = bannerImage || ASSETS.pouchPair || ASSETS.heroBanner;
 
   return (
@@ -116,19 +117,30 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({
           <div className="lg:col-span-5 relative">
             <div className="relative rounded-3xl overflow-hidden bg-[#111118] border border-[#262638] shadow-2xl p-3 sm:p-4">
               <div className="relative aspect-[4/3] sm:aspect-square w-full rounded-2xl overflow-hidden bg-[#0A0A0F]">
-                <img
-                  src={resolveAsset(activeImage)}
-                  alt="فحم الذهب الأسود الملكي"
-                  className="w-full h-full object-cover"
-                  referrerPolicy="no-referrer"
-                  onError={(e) => {
-                    const target = e.target as HTMLImageElement;
-                    if (target.src !== ASSETS.pouchPair && target.src !== ASSETS.heroBanner) {
-                      target.src = ASSETS.pouchPair;
-                    }
-                  }}
-                />
-                <div className="absolute inset-0 bg-gradient-to-t from-[#09090D] via-transparent to-transparent opacity-80" />
+                {!imgError ? (
+                  <>
+                    <img
+                      src={resolveAsset(activeImage)}
+                      alt="فحم الذهب الأسود الملكي"
+                      className="w-full h-full object-cover"
+                      referrerPolicy="no-referrer"
+                      onError={() => setImgError(true)}
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-t from-[#09090D] via-transparent to-transparent opacity-80" />
+                  </>
+                ) : (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center bg-gradient-to-br from-[#1C1810] via-[#12121A] to-[#0A0A0F] border border-amber-500/20">
+                    <div className="w-16 h-16 rounded-full bg-gradient-to-br from-amber-500/25 to-amber-600/10 border border-amber-500/40 flex items-center justify-center mb-3 shadow-lg shadow-amber-500/10">
+                      <Crown className="w-8 h-8 text-amber-400 drop-shadow-[0_2px_8px_rgba(245,158,11,0.5)]" />
+                    </div>
+                    <span className="text-amber-400 font-black text-xl tracking-tight">فحم الذهب الأسود الملكي</span>
+                    <span className="text-slate-300 text-xs mt-1.5 font-medium">العبوة الفاخرة المبتكرة بنظام Zipper Lock</span>
+                    <div className="mt-4 flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-300 text-[11px] font-bold">
+                      <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                      <span>حرارة متجانسة لأكثر من 3 ساعات</span>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Bottom Editorial Badge Bar */}

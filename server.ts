@@ -2061,11 +2061,6 @@ async function startServer() {
       }
     }
 
-    // 2. Strict Database Initialization (Halts entire boot sequence if D1 fails)
-    console.log('🔄 Initializing Cloudflare D1 Authoritative Database Layer...');
-    await db.init();
-    console.log('✅ Cloudflare D1 Database Layer Initialized and Authoritative.');
-
     if (process.env.NODE_ENV !== "production") {
       const { createServer: createViteServer } = await import("vite");
       const vite = await createViteServer({
@@ -2082,7 +2077,15 @@ async function startServer() {
     }
 
     app.listen(PORT, "0.0.0.0", () => {
-      console.log(`Black Gold Production Server running on http://0.0.0.0:${PORT}`);
+      console.log(`Black Gold Server running on http://0.0.0.0:${PORT}`);
+    });
+
+    // 2. Initialize Cloudflare D1 Authoritative Database Layer asynchronously
+    console.log('🔄 Initializing Cloudflare D1 Authoritative Database Layer...');
+    db.init().then(() => {
+      console.log('✅ Cloudflare D1 Database Layer Initialized and Authoritative.');
+    }).catch((err) => {
+      console.error('⚠️ Cloudflare D1 sync warning during boot:', err);
     });
   } catch (err: any) {
     console.error('❌ CRITICAL SERVER BOOT FAILURE: D1 initialization or schema check failed:', err);
