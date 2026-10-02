@@ -345,10 +345,10 @@ export const Navbar: React.FC<NavbarProps> = ({
               )}
             </div>
 
-            {/* Orders Tracker Pill */}
+            {/* Orders Tracker Pill (Shown on sm+, available on mobile bottom nav) */}
             <button
               onClick={onOpenOrders}
-              className="relative flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#14141E] border border-[#242434] text-slate-300 hover:text-white hover:border-slate-700 text-xs font-medium transition-all cursor-pointer"
+              className="relative hidden sm:flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#14141E] border border-[#242434] text-slate-300 hover:text-white hover:border-slate-700 text-xs font-medium transition-all cursor-pointer"
               title={lang === 'ar' ? "تتبع الطلبات" : "Track Orders"}
             >
               <Package className="w-4 h-4 text-amber-400" />
@@ -360,10 +360,10 @@ export const Navbar: React.FC<NavbarProps> = ({
               )}
             </button>
 
-            {/* Account / Login Pill */}
+            {/* Account / Login Pill (Shown on sm+, available on mobile bottom nav) */}
             <button
               onClick={onOpenAuth}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#14141E] border border-[#242434] text-slate-300 hover:text-white hover:border-slate-700 text-xs font-medium transition-all cursor-pointer"
+              className="hidden sm:flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#14141E] border border-[#242434] text-slate-300 hover:text-white hover:border-slate-700 text-xs font-medium transition-all cursor-pointer"
             >
               <User className="w-4 h-4 text-slate-400" />
               <span className="hidden md:inline max-w-[100px] truncate">

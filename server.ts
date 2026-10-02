@@ -1031,7 +1031,7 @@ app.post("/api/orders", orderRateLimiter, async (req: AuthenticatedRequest, res)
     total: calculatedTotal,
     paymentMethod: paymentMethod || "cod",
     notes: sanitizeInputString(notes || '', 200),
-    couponCode: couponCode ? String(couponCode).trim() : undefined,
+    couponCode: (calculatedDiscount > 0 && couponCode) ? String(couponCode).trim() : undefined,
     idempotencyKey: idempotencyKey || undefined,
     assignedDriver,
     timeline: [
@@ -2059,34 +2059,42 @@ async function startServer() {
         console.error(`❌ CRITICAL PRODUCTION CONFIGURATION ERROR: Missing required environment variables: ${missingVars.join(', ')}`);
         process.exit(1);
       }
-    }
 
-    if (process.env.NODE_ENV !== "production") {
+      // In Production: Strict synchronous D1 initialization MUST complete before server opens
+      console.log('🔄 [PRODUCTION] Initializing Cloudflare D1 Authoritative Database Layer...');
+      await db.init();
+      console.log('✅ [PRODUCTION] Cloudflare D1 Database Layer Initialized and Authoritative.');
+
+      const distPath = path.join(process.cwd(), "dist");
+      app.use(express.static(distPath));
+      app.get("*", (req, res) => {
+        res.sendFile(path.join(distPath, "index.html"));
+      });
+
+      app.listen(PORT, "0.0.0.0", () => {
+        console.log(`Black Gold Production Server running on http://0.0.0.0:${PORT}`);
+      });
+    } else {
+      // In Development: Mount Vite SPA middleware and bind port immediately for fast developer feedback
       const { createServer: createViteServer } = await import("vite");
       const vite = await createViteServer({
         server: { middlewareMode: true },
         appType: "spa",
       });
       app.use(vite.middlewares);
-    } else {
-      const distPath = path.join(process.cwd(), "dist");
-      app.use(express.static(distPath));
-      app.get("*", (req, res) => {
-        res.sendFile(path.join(distPath, "index.html"));
+
+      app.listen(PORT, "0.0.0.0", () => {
+        console.log(`Black Gold Dev Server running on http://0.0.0.0:${PORT}`);
+      });
+
+      // Initialize D1 asynchronously in development
+      console.log('🔄 [DEV] Initializing Cloudflare D1 Database Layer...');
+      db.init().then(() => {
+        console.log('✅ [DEV] Cloudflare D1 Database Layer Initialized and Ready.');
+      }).catch((err) => {
+        console.warn('⚠️ [DEV] Cloudflare D1 initialization note:', err.message);
       });
     }
-
-    app.listen(PORT, "0.0.0.0", () => {
-      console.log(`Black Gold Server running on http://0.0.0.0:${PORT}`);
-    });
-
-    // 2. Initialize Cloudflare D1 Authoritative Database Layer asynchronously
-    console.log('🔄 Initializing Cloudflare D1 Authoritative Database Layer...');
-    db.init().then(() => {
-      console.log('✅ Cloudflare D1 Database Layer Initialized and Authoritative.');
-    }).catch((err) => {
-      console.error('⚠️ Cloudflare D1 sync warning during boot:', err);
-    });
   } catch (err: any) {
     console.error('❌ CRITICAL SERVER BOOT FAILURE: D1 initialization or schema check failed:', err);
     process.exit(1);

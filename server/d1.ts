@@ -824,7 +824,7 @@ class D1DatabaseAccessLayer {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(12000)
+        signal: AbortSignal.timeout(30000)
       });
 
       const json = await res.json();
@@ -858,7 +858,7 @@ class D1DatabaseAccessLayer {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(12000)
+        signal: AbortSignal.timeout(30000)
       });
 
       const json = await res.json();

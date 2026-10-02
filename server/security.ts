@@ -155,9 +155,9 @@ export function createRateLimiter(options: RateLimiterOptions) {
 
   return (req: Request, res: Response, next: NextFunction) => {
     // SECURITY: Disallow any client-supplied bypass header in production.
-    // The test bypass is ONLY honored if process.env.NODE_ENV === 'test' and explicitly non-production.
-    const isExplicitTestEnv = process.env.NODE_ENV === 'test';
-    if (isExplicitTestEnv && req.headers['x-audit-test'] === 'local-audit') {
+    // The test bypass is strictly disallowed in production; only allowed in local test/dev suites.
+    const isNonProduction = process.env.NODE_ENV !== 'production';
+    if (isNonProduction && req.headers['x-audit-test'] === 'local-audit') {
       return next();
     }
     const forwarded = req.headers['x-forwarded-for'];

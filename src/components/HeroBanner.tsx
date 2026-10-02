@@ -59,29 +59,29 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({
             </p>
 
             {/* Verified Facts & Performance Strip */}
-            <div className="grid grid-cols-3 gap-3 pt-1">
-              <div className="p-3 rounded-2xl bg-[#111118] border border-[#20202E] text-right space-y-1">
-                <div className="flex items-center gap-1.5 text-amber-400 font-bold text-xs">
-                  <Flame className="w-4 h-4 text-amber-400" />
-                  <span>3+ ساعات</span>
+            <div className="grid grid-cols-3 gap-2 sm:gap-3 pt-1">
+              <div className="p-2 sm:p-3 rounded-2xl bg-[#111118] border border-[#20202E] text-right space-y-1">
+                <div className="flex items-center gap-1.5 text-amber-400 font-bold text-[11px] sm:text-xs">
+                  <Flame className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-400 shrink-0" />
+                  <span className="truncate">3+ ساعات</span>
                 </div>
-                <p className="text-[11px] text-slate-400">اشتعال مستمر وحرارة ثابتة</p>
+                <p className="text-[10px] sm:text-[11px] text-slate-400 leading-tight">اشتعال مستمر وحرارة ثابتة</p>
               </div>
 
-              <div className="p-3 rounded-2xl bg-[#111118] border border-[#20202E] text-right space-y-1">
-                <div className="flex items-center gap-1.5 text-amber-400 font-bold text-xs">
-                  <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                  <span>&lt; 1.5% رماد</span>
+              <div className="p-2 sm:p-3 rounded-2xl bg-[#111118] border border-[#20202E] text-right space-y-1">
+                <div className="flex items-center gap-1.5 text-amber-400 font-bold text-[11px] sm:text-xs">
+                  <ShieldCheck className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-400 shrink-0" />
+                  <span className="truncate">&lt; 1.5% رماد</span>
                 </div>
-                <p className="text-[11px] text-slate-400">رماد أبيض ناعم وخالٍ من الشوائب</p>
+                <p className="text-[10px] sm:text-[11px] text-slate-400 leading-tight">رماد أبيض ناعم وخالٍ</p>
               </div>
 
-              <div className="p-3 rounded-2xl bg-[#111118] border border-[#20202E] text-right space-y-1">
-                <div className="flex items-center gap-1.5 text-amber-400 font-bold text-xs">
-                  <Truck className="w-4 h-4 text-amber-400" />
-                  <span>توصيل مباشر</span>
+              <div className="p-2 sm:p-3 rounded-2xl bg-[#111118] border border-[#20202E] text-right space-y-1">
+                <div className="flex items-center gap-1.5 text-amber-400 font-bold text-[11px] sm:text-xs">
+                  <Truck className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-400 shrink-0" />
+                  <span className="truncate">توصيل فوري</span>
                 </div>
-                <p className="text-[11px] text-slate-400">تغطية لكافة مديريات صنعاء</p>
+                <p className="text-[10px] sm:text-[11px] text-slate-400 leading-tight">تغطية لكافة مديريات صنعاء</p>
               </div>
             </div>
 

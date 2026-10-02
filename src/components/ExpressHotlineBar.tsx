@@ -121,7 +121,8 @@ export const ExpressHotlineBar: React.FC<ExpressHotlineBarProps> = ({
         type="button"
         id="express-hotline-toggle-btn"
         onClick={() => setIsExpanded(!isExpanded)}
-        className="group flex items-center gap-2.5 px-3.5 py-2.5 rounded-full gold-gradient-bg text-[#09090D] font-black text-xs shadow-xl shadow-amber-500/20 hover:brightness-105 active:scale-95 transition-all duration-300 cursor-pointer border border-amber-400/40"
+        className="group flex items-center gap-2 p-2.5 sm:px-3.5 sm:py-2.5 rounded-full gold-gradient-bg text-[#09090D] font-black text-xs shadow-xl shadow-amber-500/20 hover:brightness-105 active:scale-95 transition-all duration-300 cursor-pointer border border-amber-400/40"
+        title="طلب سريع أو اتصال"
       >
         <div className="relative">
           <Phone className="w-4 h-4 text-zinc-950" />
@@ -129,8 +130,7 @@ export const ExpressHotlineBar: React.FC<ExpressHotlineBarProps> = ({
           <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-emerald-600" />
         </div>
         <span className="hidden sm:inline">طلب فوري أو اتصال بصنعاء ⚡</span>
-        <span className="sm:hidden">طلب سريع ⚡</span>
-        <ChevronUp className={`w-3.5 h-3.5 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
+        <ChevronUp className={`w-3.5 h-3.5 transition-transform duration-200 hidden sm:inline ${isExpanded ? 'rotate-180' : ''}`} />
       </button>
     </div>
   );

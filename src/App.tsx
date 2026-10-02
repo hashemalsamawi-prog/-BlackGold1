@@ -255,6 +255,40 @@ export default function App() {
     setWelcomeOpen(false);
   };
 
+  // Handle direct staff routes: /admin/login, /admin, /delivery/login, /delivery, #admin, #delivery
+  useEffect(() => {
+    const handleUrlRouting = () => {
+      if (typeof window === 'undefined') return;
+      const path = window.location.pathname.toLowerCase();
+      const hash = window.location.hash.toLowerCase();
+
+      if (path === '/admin/login' || path === '/admin' || hash.includes('admin') || hash.includes('owner')) {
+        const savedRole = safeGetLocalStorage('bg_user_role', 'customer');
+        if (savedRole === 'owner') {
+          setAdminOpen(true);
+        } else {
+          setAuthOpen(true);
+        }
+      } else if (path === '/delivery/login' || path === '/delivery' || path === '/mandoub/login' || path === '/mandoub' || hash.includes('delivery') || hash.includes('mandoub') || hash.includes('driver')) {
+        const savedRole = safeGetLocalStorage('bg_user_role', 'customer');
+        if (savedRole === 'mandoub') {
+          setIsOwnerDriverPreview(false);
+          setMandoubOpen(true);
+        } else {
+          setAuthOpen(true);
+        }
+      }
+    };
+
+    handleUrlRouting();
+    window.addEventListener('popstate', handleUrlRouting);
+    window.addEventListener('hashchange', handleUrlRouting);
+    return () => {
+      window.removeEventListener('popstate', handleUrlRouting);
+      window.removeEventListener('hashchange', handleUrlRouting);
+    };
+  }, []);
+
   // Checkout Params
   const [checkoutShippingFee, setCheckoutShippingFee] = useState(1000);
   const [checkoutDiscount, setCheckoutDiscount] = useState(0);
@@ -967,7 +1001,7 @@ export default function App() {
 
   return (
     <AndroidSimulatorWrapper deviceMode={deviceMode} onToggleDeviceMode={() => setDeviceMode(deviceMode === 'web' ? 'android' : 'web')}>
-      <div className={`min-h-screen ${theme === 'light' ? 'light bg-[#F8F9FC] text-slate-900' : 'bg-[#0A0A0C] text-slate-100'} flex flex-col selection:bg-amber-500 selection:text-black transition-colors duration-300`}>
+      <div className={`min-h-screen ${theme === 'light' ? 'light bg-[#F8F9FC] text-slate-900' : 'bg-[#0A0A0C] text-slate-100'} flex flex-col selection:bg-amber-500 selection:text-black transition-colors duration-300 pb-20 sm:pb-0 overflow-x-hidden w-full`}>
         
         {/* Push Notification Toast */}
         <ToastNotification 

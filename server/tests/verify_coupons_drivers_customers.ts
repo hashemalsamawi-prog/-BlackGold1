@@ -175,7 +175,7 @@ async function runCouponsDriversCustomersAudit() {
       customerName: 'مشتري الكوبون التجريبي',
       customerPhone: '772233445',
       address: { district: 'حدة', street: 'شارع بيروت' },
-      items: [{ productId: 'bg-ignition-cubes', quantity: 1, weight: '1 علبة' }],
+      items: [{ productId: 'bg-ignition-cubes', quantity: 6, weight: '1 علبة' }],
       couponCode: testCode
     })
   });
