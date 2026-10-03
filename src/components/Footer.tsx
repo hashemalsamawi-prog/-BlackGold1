@@ -10,6 +10,7 @@ interface FooterProps {
   lang: Language;
   onOpenTracker: () => void;
   onOpenAdmin: () => void;
+  onOpenMandoub?: () => void;
   onOpenCalculator?: () => void;
   onScrollToQuality?: () => void;
 }
@@ -18,6 +19,7 @@ export const Footer: React.FC<FooterProps> = ({
   lang,
   onOpenTracker,
   onOpenAdmin,
+  onOpenMandoub,
   onOpenCalculator,
   onScrollToQuality,
 }) => {
@@ -132,9 +134,21 @@ export const Footer: React.FC<FooterProps> = ({
                   className="text-amber-400/90 hover:text-amber-300 transition-colors cursor-pointer inline-flex items-center gap-1.5 mt-1"
                 >
                   <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-                  <span>بوابة المالك وإدارة العمليات</span>
+                  <span>بوابة المالك وإدارة العمليات 👑</span>
                 </button>
               </li>
+              {onOpenMandoub && (
+                <li>
+                  <button
+                    type="button"
+                    onClick={onOpenMandoub}
+                    className="text-emerald-400/90 hover:text-emerald-300 transition-colors cursor-pointer inline-flex items-center gap-1.5"
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                    <span>بوابة كباتن التوصيل والمناديب 🛵</span>
+                  </button>
+                </li>
+              )}
             </ul>
           </div>
 

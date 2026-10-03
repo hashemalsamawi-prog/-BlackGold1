@@ -1288,7 +1288,25 @@ export default function App() {
         <Footer
           lang={lang}
           onOpenTracker={() => setOrdersOpen(true)}
-          onOpenAdmin={() => setAdminOpen(true)}
+          onOpenAdmin={() => {
+            const savedRole = safeGetLocalStorage('bg_user_role', 'customer');
+            if (savedRole === 'owner') {
+              setAdminOpen(true);
+            } else {
+              window.location.hash = '#admin';
+              setAuthOpen(true);
+            }
+          }}
+          onOpenMandoub={() => {
+            const savedRole = safeGetLocalStorage('bg_user_role', 'customer');
+            if (savedRole === 'mandoub') {
+              setIsOwnerDriverPreview(false);
+              setMandoubOpen(true);
+            } else {
+              window.location.hash = '#driver';
+              setAuthOpen(true);
+            }
+          }}
           onOpenCalculator={() => setCalculatorOpen(true)}
           onScrollToQuality={() => {
             const el = document.getElementById('products-grid-section');
