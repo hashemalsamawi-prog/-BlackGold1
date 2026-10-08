@@ -385,77 +385,85 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           /* NOT LOGGED IN - 3 CLEAR OPTIONS */
           <div className="space-y-4">
             
-            {/* Tab Selection: Customer Mode (Guest & Phone) vs Staff Mode (Driver & Owner) */}
-            {!showStaffTabs ? (
-              <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-950/80 rounded-2xl border border-slate-800 text-xs font-bold">
+            {/* 3 Top-Level Clear Portals: Customer, Owner, Driver */}
+            <div className="grid grid-cols-3 gap-1 p-1 bg-slate-950/90 rounded-2xl border border-slate-800 text-[11px] sm:text-xs font-bold">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowStaffTabs(false);
+                  if (authTab !== 'guest' && authTab !== 'quick_phone') {
+                    setAuthTab('quick_phone');
+                  }
+                }}
+                className={`py-2 px-1 sm:px-2 rounded-xl transition-all flex items-center justify-center gap-1 cursor-pointer ${
+                  !showStaffTabs && (authTab === 'quick_phone' || authTab === 'guest')
+                    ? 'bg-amber-500 text-slate-950 font-black shadow-md'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <User className="w-3.5 h-3.5" />
+                <span>العميل 👤</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowStaffTabs(true);
+                  setAuthTab('owner_pin');
+                }}
+                className={`py-2 px-1 sm:px-2 rounded-xl transition-all flex items-center justify-center gap-1 cursor-pointer ${
+                  showStaffTabs && authTab === 'owner_pin'
+                    ? 'bg-amber-500 text-slate-950 font-black shadow-md'
+                    : 'text-slate-400 hover:text-amber-300'
+                }`}
+              >
+                <Lock className="w-3.5 h-3.5" />
+                <span>المالك 👑</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowStaffTabs(true);
+                  setAuthTab('driver_pin');
+                }}
+                className={`py-2 px-1 sm:px-2 rounded-xl transition-all flex items-center justify-center gap-1 cursor-pointer ${
+                  showStaffTabs && authTab === 'driver_pin'
+                    ? 'bg-emerald-500 text-slate-950 font-black shadow-md'
+                    : 'text-slate-400 hover:text-emerald-300'
+                }`}
+              >
+                <Truck className="w-3.5 h-3.5" />
+                <span>المندوب 🛵</span>
+              </button>
+            </div>
+
+            {/* Sub-selector for Customer Mode: Quick Phone vs Guest */}
+            {!showStaffTabs && (
+              <div className="flex items-center justify-center gap-2 p-1 bg-slate-900/60 rounded-xl text-xs font-semibold">
                 <button
                   type="button"
                   onClick={() => setAuthTab('quick_phone')}
-                  className={`py-2 px-3 rounded-xl transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                  className={`px-3 py-1 rounded-lg transition-all cursor-pointer ${
                     authTab === 'quick_phone'
-                      ? 'bg-amber-500 text-slate-950 font-black shadow-md'
-                      : 'text-slate-400 hover:text-slate-200'
+                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold'
+                      : 'text-slate-400 hover:text-white'
                   }`}
                 >
-                  <Phone className="w-3.5 h-3.5" />
-                  <span>دخول برقم الهاتف ⚡</span>
+                  الدخول برقم الهاتف ⚡
                 </button>
-
+                <span className="text-slate-600">•</span>
                 <button
                   type="button"
                   onClick={() => setAuthTab('guest')}
-                  className={`py-2 px-3 rounded-xl transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                  className={`px-3 py-1 rounded-lg transition-all cursor-pointer ${
                     authTab === 'guest'
-                      ? 'bg-amber-500 text-slate-950 font-black shadow-md'
-                      : 'text-slate-400 hover:text-slate-200'
+                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold'
+                      : 'text-slate-400 hover:text-white'
                   }`}
                 >
-                  <ShoppingBag className="w-3.5 h-3.5" />
-                  <span>متابعة كزائر 🛍️</span>
+                  التسوق كزائر 🛍️
                 </button>
-              </div>
-            ) : (
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between text-[11px] text-slate-400 px-1">
-                  <span className="font-bold text-amber-400">بوابة طاقم العمل والمناديب 🔒</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowStaffTabs(false);
-                      setAuthTab('quick_phone');
-                    }}
-                    className="text-amber-400 hover:underline font-bold cursor-pointer"
-                  >
-                    العودة لدخول العملاء ←
-                  </button>
-                </div>
-                <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-950/80 rounded-2xl border border-amber-500/30 text-xs font-bold">
-                  <button
-                    type="button"
-                    onClick={() => setAuthTab('driver_pin')}
-                    className={`py-2 px-3 rounded-xl transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
-                      authTab === 'driver_pin'
-                        ? 'bg-emerald-500 text-slate-950 font-black shadow-md'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    <Truck className="w-3.5 h-3.5" />
-                    <span>المندوب 🛵</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setAuthTab('owner_pin')}
-                    className={`py-2 px-3 rounded-xl transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
-                      authTab === 'owner_pin'
-                        ? 'bg-amber-500 text-slate-950 font-black shadow-md'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    <Lock className="w-3.5 h-3.5" />
-                    <span>المالك والإدارة 👑</span>
-                  </button>
-                </div>
               </div>
             )}
 

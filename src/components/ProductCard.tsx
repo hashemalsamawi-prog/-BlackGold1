@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { Product, Language } from '../types';
 import { resolveAsset, ASSETS } from '../assets/images';
 import { Flame, Plus, Minus, Star, Check, ShoppingCart } from 'lucide-react';
+import { WeightBonusBadge } from './WeightBonusBadge';
 
 interface ProductCardProps {
   product: Product;
@@ -73,7 +74,10 @@ export const ProductCard: React.FC<ProductCardProps> = ({
         )}
         {product.bonusGrams && product.bonusGrams > 0 && (
           <span className="px-2.5 py-1 rounded-lg bg-[#1F1D2B] border border-amber-500/40 text-amber-300 text-[11px] font-bold shadow-sm">
-            +{product.bonusGrams}g إضافية
+            <WeightBonusBadge
+              weight={selectedWeight || (product.weightGrams ? `${product.weightGrams}جم` : product.weight || '250جم')}
+              bonusGrams={product.bonusGrams}
+            />
           </span>
         )}
       </div>
@@ -106,7 +110,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
               <Flame className="w-3.5 h-3.5 fill-amber-400" />
               <span>{product.burnTimeMinutes || 180} دقيقة</span>
             </span>
-            <span>{selectedWeight}</span>
+            <WeightBonusBadge weight={selectedWeight} bonusGrams={product.bonusGrams} />
           </div>
         </div>
 
@@ -152,7 +156,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
                       : 'bg-[#181824] text-slate-300 border border-[#28283A] hover:border-slate-600'
                   }`}
                 >
-                  {opt.weight}
+                  <WeightBonusBadge weight={opt.weight} bonusGrams={product.bonusGrams} />
                 </button>
               ))}
             </div>

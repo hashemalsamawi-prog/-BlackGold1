@@ -7,6 +7,7 @@ import {
 import { resolveAsset } from '../assets/images';
 import { SANAA_DISTRICTS } from '../data/mockData';
 import { EmptyState } from './EmptyState';
+import { WeightBonusBadge } from './WeightBonusBadge';
 
 interface CartDrawerProps {
   isOpen: boolean;
@@ -175,7 +176,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                         </h4>
                         <div className="flex items-center gap-2 text-[11px] text-slate-400">
                           <span className="bg-[#1C1C28] px-2 py-0.5 rounded-md text-amber-300 font-medium">
-                            {weightDisplay}
+                            <WeightBonusBadge weight={weightDisplay} bonusGrams={item.product.bonusGrams} />
                           </span>
                           <span>{unitPrice.toLocaleString()} ر.ي للعبوة</span>
                         </div>

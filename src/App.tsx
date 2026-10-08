@@ -1206,8 +1206,8 @@ export default function App() {
             </div>
           )}
 
-          {/* B2B Profit Calculator is shown ONLY to authorized store owners and admins in the Wholesale section */}
-          {(userRole === 'owner' || (userRole as string) === 'admin') && activeCategory === 'wholesale' && (
+          {/* B2B Profit Calculator for wholesale merchants, restaurants, and grocery owners */}
+          {activeCategory === 'wholesale' && (
             <div ref={calculatorRef} className="space-y-6">
               <B2BProfitCalculator
                 lang={lang}

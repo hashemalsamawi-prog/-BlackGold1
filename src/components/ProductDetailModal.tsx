@@ -5,6 +5,7 @@ import {
   X, Flame, ShieldCheck, Star, ShoppingCart, 
   Minus, Plus, Clock, Wind, Check, Zap
 } from 'lucide-react';
+import { WeightBonusBadge } from './WeightBonusBadge';
 
 interface ProductDetailModalProps {
   product: Product | null;
@@ -135,9 +136,12 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                   setModalImageLoaded(true);
                 }}
               />
-              {product.bonusGrams && (
+              {product.bonusGrams && product.bonusGrams > 0 && (
                 <div className="absolute top-3 right-3 bg-[#1E1D2B] border border-amber-500/40 text-amber-300 font-bold text-xs px-3 py-1.5 rounded-xl shadow-md">
-                  +{product.bonusGrams}g مجاناً مدمج
+                  <WeightBonusBadge
+                    weight={selectedWeight || (product.weightGrams ? `${product.weightGrams}جم` : product.weight || '250جم')}
+                    bonusGrams={product.bonusGrams}
+                  />
                 </div>
               )}
             </div>
@@ -236,7 +240,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                           : 'bg-[#14141E] text-slate-300 border border-[#242436] hover:border-slate-600'
                       }`}
                     >
-                      <span>{opt.weight}</span>
+                      <WeightBonusBadge weight={opt.weight} bonusGrams={product.bonusGrams} />
                       <span className="mr-1.5 text-[11px] opacity-80 font-mono">({opt.price.toLocaleString()} ر.ي)</span>
                     </button>
                   ))}

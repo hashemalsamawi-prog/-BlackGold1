@@ -8,6 +8,7 @@ import QRCode from 'qrcode';
 import { Order, Language, StoreSettings } from '../types';
 import { resolveAsset, ASSETS } from '../assets/images';
 import { safeGetLocalStorage } from '../utils/storage';
+import { WeightBonusBadge, formatWeightBonusText } from './WeightBonusBadge';
 
 interface InvoiceReceiptModalProps {
   isOpen: boolean;
@@ -81,7 +82,130 @@ export const InvoiceReceiptModal: React.FC<InvoiceReceiptModalProps> = ({
   }, [orderUrl, orderNum]);
 
   const handlePrint = () => {
-    window.print();
+    try {
+      const card = document.getElementById('printable-invoice-card');
+      if (!card) {
+        window.print();
+        return;
+      }
+
+      let printFrame = document.getElementById('invoice-print-iframe') as HTMLIFrameElement;
+      if (!printFrame) {
+        printFrame = document.createElement('iframe');
+        printFrame.id = 'invoice-print-iframe';
+        printFrame.style.position = 'fixed';
+        printFrame.style.right = '0';
+        printFrame.style.bottom = '0';
+        printFrame.style.width = '0';
+        printFrame.style.height = '0';
+        printFrame.style.border = '0';
+        printFrame.style.opacity = '0';
+        printFrame.style.pointerEvents = 'none';
+        document.body.appendChild(printFrame);
+      }
+
+      const frameDoc = printFrame.contentWindow?.document || printFrame.contentDocument;
+      if (!frameDoc) {
+        window.print();
+        return;
+      }
+
+      const cardHtml = card.outerHTML;
+
+      frameDoc.open();
+      frameDoc.write(`
+        <!DOCTYPE html>
+        <html lang="ar" dir="rtl">
+        <head>
+          <meta charset="UTF-8">
+          <title>فاتورة مبيعات #${orderNum} - ${storeNameAr}</title>
+          <link rel="preconnect" href="https://fonts.googleapis.com">
+          <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+          <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet">
+          <style>
+            @page {
+              size: ${viewMode === 'thermal' ? '80mm auto' : 'A4 portrait'};
+              margin: ${viewMode === 'thermal' ? '2mm 3mm' : '8mm 10mm'};
+            }
+            * {
+              box-sizing: border-box;
+              -webkit-print-color-adjust: exact !important;
+              print-color-adjust: exact !important;
+            }
+            html, body {
+              margin: 0;
+              padding: 0;
+              background: #ffffff !important;
+              background-color: #ffffff !important;
+              color: #000000 !important;
+              font-family: 'Cairo', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+              direction: rtl;
+              text-align: right;
+            }
+            #printable-invoice-card {
+              width: 100% !important;
+              max-width: ${viewMode === 'thermal' ? '76mm' : '100%'} !important;
+              margin: 0 auto !important;
+              padding: ${viewMode === 'thermal' ? '4mm 4mm' : '8mm 10mm'} !important;
+              background: #ffffff !important;
+              background-color: #ffffff !important;
+              color: #000000 !important;
+              border: ${viewMode === 'thermal' ? '1px dashed #000000' : '2px solid #b45309'} !important;
+              border-radius: ${viewMode === 'thermal' ? '0' : '14px'} !important;
+              box-shadow: none !important;
+            }
+            .invoice-total-box, .bg-zinc-950 {
+              background-color: #f1f5f9 !important;
+              color: #000000 !important;
+              border: 2px solid #000000 !important;
+            }
+            .invoice-total-box *, .bg-zinc-950 * {
+              color: #000000 !important;
+            }
+            .text-white {
+              color: #000000 !important;
+            }
+            .text-amber-300, .text-amber-400 {
+              color: #92400e !important;
+              font-weight: 900 !important;
+            }
+            .border-amber-400, .border-amber-500 {
+              border-color: #b45309 !important;
+            }
+            .no-print {
+              display: none !important;
+            }
+            table {
+              width: 100%;
+              border-collapse: collapse;
+            }
+            th, td {
+              border-bottom: 1px solid #cbd5e1;
+              padding: 6px 8px;
+            }
+            th {
+              background-color: #f1f5f9 !important;
+              color: #0f172a !important;
+              font-weight: 800;
+            }
+          </style>
+        </head>
+        <body>
+          ${cardHtml}
+        </body>
+        </html>
+      `);
+      frameDoc.close();
+
+      setTimeout(() => {
+        printFrame.contentWindow?.focus();
+        printFrame.contentWindow?.print();
+      }, 300);
+
+    } catch (e) {
+      console.warn('Iframe print error, falling back to window.print():', e);
+      window.print();
+    }
   };
 
   const handleCopyLink = () => {
@@ -120,9 +244,13 @@ export const InvoiceReceiptModal: React.FC<InvoiceReceiptModalProps> = ({
       ? order.items.map((i: any) => {
           const name = i.product?.nameAr || i.productNameAr || i.nameAr || 'فحم الذهب الأسود';
           const weight = i.weight || i.selectedWeight || i.weightOption || '';
+          const bonus = i.product?.bonusGrams;
+          const formattedSpec = bonus && bonus > 0 
+            ? formatWeightBonusText(weight, bonus) 
+            : weight;
           const qty = i.quantity || 1;
           const price = i.unitPrice || i.product?.price || i.price || 0;
-          return `• ${name}${weight ? ` (${weight})` : ''} × ${qty} = ${(price * qty).toLocaleString()} ريال`;
+          return `• ${name}${formattedSpec ? ` (${formattedSpec})` : ''} × ${qty} = ${(price * qty).toLocaleString()} ريال`;
         }).join('\n')
       : (order.itemsSummary || 'فحم الذهب الأسود الملكي');
 
@@ -157,32 +285,87 @@ ${storeNameAr} - جودة معتمدة وضمان ملكي 👑`;
       <style>{`
         @media print {
           @page {
-            size: auto;
-            margin: ${viewMode === 'thermal' ? '3mm 4mm' : '8mm 10mm'};
+            size: ${viewMode === 'thermal' ? '80mm auto' : 'A4 portrait'};
+            margin: ${viewMode === 'thermal' ? '2mm 3mm' : '8mm 10mm'};
           }
-          body * {
-            visibility: hidden !important;
+          html, body {
+            background: #ffffff !important;
+            background-color: #ffffff !important;
+            color: #000000 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            height: auto !important;
+            min-height: auto !important;
+            overflow: visible !important;
+            font-family: 'Cairo', system-ui, -apple-system, sans-serif !important;
           }
-          #printable-invoice-card, #printable-invoice-card * {
-            visibility: visible !important;
+          body > *:not(#invoice-receipt-modal) {
+            display: none !important;
           }
-          #printable-invoice-card {
+          #invoice-receipt-modal {
             position: absolute !important;
             left: 0 !important;
             top: 0 !important;
+            width: 100% !important;
+            height: auto !important;
+            min-height: auto !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            background: #ffffff !important;
+            background-color: #ffffff !important;
+            overflow: visible !important;
+            z-index: 999999 !important;
+            display: block !important;
+          }
+          #invoice-receipt-modal > div {
+            background: transparent !important;
+            background-color: transparent !important;
+            border: none !important;
+            box-shadow: none !important;
+            padding: 0 !important;
+            margin: 0 auto !important;
+            max-width: ${viewMode === 'thermal' ? '76mm' : '100%'} !important;
+            overflow: visible !important;
+          }
+          #printable-invoice-card {
+            position: relative !important;
+            left: 0 !important;
+            top: 0 !important;
+            display: block !important;
             width: ${viewMode === 'thermal' ? '76mm' : '100%'} !important;
             max-width: ${viewMode === 'thermal' ? '76mm' : '100%'} !important;
             background: #ffffff !important;
+            background-color: #ffffff !important;
             color: #000000 !important;
-            padding: ${viewMode === 'thermal' ? '6px 8px' : '12px 18px'} !important;
-            margin: 0 !important;
+            padding: ${viewMode === 'thermal' ? '4mm 5mm' : '8mm 10mm'} !important;
+            margin: 0 auto !important;
             box-shadow: none !important;
-            border: ${viewMode === 'thermal' ? '1px solid #000000' : '2px solid #b45309'} !important;
+            border: ${viewMode === 'thermal' ? '1px dashed #000000' : '2px solid #b45309'} !important;
+            border-radius: ${viewMode === 'thermal' ? '0' : '14px'} !important;
             -webkit-print-color-adjust: exact !important;
             print-color-adjust: exact !important;
+            page-break-inside: avoid !important;
+            break-inside: avoid !important;
+          }
+          .invoice-total-box, .bg-zinc-950 {
+            background-color: #f1f5f9 !important;
+            color: #000000 !important;
+            border: 2px solid #000000 !important;
+          }
+          .invoice-total-box *, .bg-zinc-950 * {
+            color: #000000 !important;
+          }
+          .text-white {
+            color: #000000 !important;
+          }
+          .text-amber-300, .text-amber-400 {
+            color: #92400e !important;
           }
           .no-print {
             display: none !important;
+            visibility: hidden !important;
+            height: 0 !important;
+            overflow: hidden !important;
           }
         }
       `}</style>
@@ -405,9 +588,10 @@ ${storeNameAr} - جودة معتمدة وضمان ملكي 👑`;
                         <td className="p-2">
                           <strong className="text-zinc-950 block text-[11px] font-bold">{name}</strong>
                           {weight ? (
-                            <span className="text-[10px] text-zinc-600 block">
-                              العبوة / المواصفة: {weight}
-                            </span>
+                            <div className="text-[10px] text-zinc-600 inline-flex items-center gap-1 mt-0.5" dir="rtl">
+                              <span className="text-zinc-500 font-medium">العبوة:</span>
+                              <WeightBonusBadge weight={weight} bonusGrams={item.product?.bonusGrams} />
+                            </div>
                           ) : null}
                         </td>
                         <td className="p-2 text-center font-mono font-bold text-zinc-900">{qty}</td>
@@ -449,7 +633,7 @@ ${storeNameAr} - جودة معتمدة وضمان ملكي 👑`;
             )}
 
             {/* Total Highlight Box */}
-            <div className="flex justify-between items-center p-3 rounded-xl bg-zinc-950 text-white font-black text-sm sm:text-base border-2 border-amber-400 shadow-md">
+            <div className="invoice-total-box flex justify-between items-center p-3 rounded-xl bg-zinc-950 text-white font-black text-sm sm:text-base border-2 border-amber-400 shadow-md">
               <div className="space-y-0.5">
                 <span className="text-amber-300 block text-xs font-extrabold">المبلغ الإجمالي المستحق:</span>
                 <span className="text-[11px] text-zinc-400 font-normal">شامل الرسوم والتوصيل</span>
