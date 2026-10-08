@@ -46,7 +46,7 @@ async function parseJsonResponse(res: Response, defaultErrorMsg: string): Promis
     data = JSON.parse(text);
   } catch {
     throw new Error(
-      `تعذر استلام استجابة صحيحة من الخادم (${res.status}). يرجى التحقق من متغيرات النظام وبيئة التشغيل.`
+      `تعذر الاتصال بالخادم (${res.status}). يرجى التأكد من إضافة متغيرات Cloudflare D1 و JWT_SECRET و ADMIN_PIN في إعدادات مشروع Vercel (Environment Variables).`
     );
   }
   if (!res.ok || (data && data.success === false)) {

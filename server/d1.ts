@@ -171,7 +171,9 @@ class D1DatabaseAccessLayer {
   private initPromise: Promise<void> | null = null;
 
   constructor() {
-    this.init();
+    this.init().catch(err => {
+      console.warn('⚠️ [D1] Initial background sync deferred/error:', err?.message || err);
+    });
   }
 
   /**
@@ -367,9 +369,9 @@ class D1DatabaseAccessLayer {
       this.isInitialized = true;
       this.saveLocal();
       console.log('✅ Cloudflare D1 Database Access Layer Initialized Successfully. Database ID:', CLOUDFLARE_CONFIG.databaseId);
-    } catch (e) {
-      console.error('Error during D1 DAL initialization:', e);
-      if (process.env.NODE_ENV === 'production') {
+    } catch (e: any) {
+      console.error('Error during D1 DAL initialization:', e?.message || e);
+      if (process.env.NODE_ENV === 'production' && !process.env.VERCEL) {
         throw e;
       }
       this.isInitialized = true;

@@ -61,8 +61,17 @@ app.use((req, res, next) => {
   next();
 });
 
-// Health Check Endpoint
-app.get("/api/health", (req, res) => {
+// Gateway & Health Check Endpoints
+app.get(["/api", "/api/index"], (req, res) => {
+  res.json({
+    success: true,
+    message: "Black Gold Charcoal Store API Gateway is Running Successfully",
+    database: "Cloudflare D1 (Authoritative)",
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.get(["/api/health", "/health"], (req, res) => {
   res.json({
     success: true,
     status: "ok",
@@ -231,7 +240,12 @@ app.post("/api/auth/admin-login", authRateLimiter, async (req, res) => {
     const hashedInput = hashSecret(rawSecret);
 
     // Find owner/admin/employee accounts from D1
-    const allUsers = await db.getUsersAsync();
+    let allUsers: UserAccount[] = [];
+    try {
+      allUsers = await db.getUsersAsync();
+    } catch (e: any) {
+      console.warn("Could not fetch users directly from D1:", e?.message);
+    }
     const users = allUsers.filter(u => ['owner', 'admin', 'employee'].includes(u.role));
     
     let matchedUser = users.find(u => {
@@ -288,6 +302,12 @@ app.post("/api/auth/admin-login", authRateLimiter, async (req, res) => {
     }
 
     if (!matchedUser) {
+      if (!d1.isD1Configured() && !process.env.ADMIN_PIN) {
+        return res.status(401).json({
+          success: false,
+          message: "متغيرات قاعدة بيانات Cloudflare D1 ورمز الإدارة غير مكتملة في بيئة Vercel. يرجى إضافتها في Vercel Project Settings."
+        });
+      }
       return res.status(401).json({ success: false, message: "رمز الدخول أو كلمة المرور غير صحيحة" });
     }
 
@@ -753,6 +773,18 @@ app.post("/api/upload", requireRoles(['owner', 'admin', 'employee']), async (req
       const publicUrl = `/uploads/${filename}`;
       return res.json({ success: true, url: publicUrl, filename, storage: 'local' });
     } catch (fsErr: any) {
+      if (process.env.VERCEL || fsErr?.code === 'EROFS') {
+        // On Vercel serverless read-only filesystem, provide optimized Data URI for permanent D1 database storage
+        const dataUri = typeof image === 'string' && image.startsWith('data:')
+          ? image
+          : `data:${mimeType};base64,${buffer.toString('base64')}`;
+        return res.json({ 
+          success: true, 
+          url: dataUri, 
+          filename, 
+          storage: 'd1_inline'
+        });
+      }
       if (process.env.NODE_ENV === 'production') {
         console.error("CRITICAL: Failed to write upload to permanent disk storage in production:", fsErr?.message);
         return res.status(500).json({
