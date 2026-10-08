@@ -159,8 +159,20 @@ export function createRateLimiter(options: RateLimiterOptions) {
     if (isNonProduction && req.headers['x-audit-test'] === 'local-audit') {
       return next();
     }
-    const forwarded = req.headers['x-forwarded-for'];
-    const ip = req.ip || (typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : req.socket?.remoteAddress) || '127.0.0.1';
+    let ip = '127.0.0.1';
+    try {
+      const forwarded = req.headers['x-forwarded-for'];
+      const realIp = req.headers['x-real-ip'];
+      if (typeof forwarded === 'string' && forwarded.length > 0) {
+        ip = forwarded.split(',')[0].trim();
+      } else if (typeof realIp === 'string' && realIp.length > 0) {
+        ip = realIp.trim();
+      } else if (req.socket && req.socket.remoteAddress) {
+        ip = req.socket.remoteAddress;
+      }
+    } catch {
+      ip = '127.0.0.1';
+    }
     const now = Date.now();
     const record = ipRequests.get(ip);
 
