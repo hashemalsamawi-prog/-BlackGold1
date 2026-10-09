@@ -6,15 +6,17 @@ let devEphemeralSecret: string | null = null;
 /**
  * Retrieve the active JWT Secret strictly adhering to environment configuration.
  * In production mode, absence of JWT_SECRET triggers an immediate error to prevent insecure boots.
+ * ZERO derived fallback secrets are permitted in production.
  */
 export function getJwtSecret(): string {
   const envSecret = process.env.JWT_SECRET;
   if (!envSecret) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('CRITICAL SECURITY ERROR: JWT_SECRET environment variable is missing in production. Application boot aborted.');
+    }
     if (!devEphemeralSecret) {
-      // Derive a deterministic fallback secret so serverless functions never crash with raw 500
-      const seed = process.env.CLOUDFLARE_DATABASE_ID || process.env.VERCEL_GIT_COMMIT_SHA || 'bg-royal-charcoal-jwt-secret-seed-2026';
-      devEphemeralSecret = crypto.createHash('sha256').update(seed).digest('hex');
-      console.warn('⚠️ [Security Warning] JWT_SECRET is not set in environment variables. Using derived session key.');
+      devEphemeralSecret = crypto.randomBytes(32).toString('hex');
+      console.warn('⚠️ [Development Security] JWT_SECRET is not set in environment variables. Generated ephemeral key for local dev/test only.');
     }
     return devEphemeralSecret;
   }

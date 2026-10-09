@@ -304,8 +304,8 @@ export const Navbar: React.FC<NavbarProps> = ({
                     </button>
                   </div>
 
-                  {/* Staff Portals Section */}
-                  {userRole === 'owner' || userRole === 'mandoub' ? (
+                  {/* Staff Portals Section - only shown when logged in as staff */}
+                  {(userRole === 'owner' || userRole === 'mandoub') && (
                     <div className="pt-1.5 space-y-1">
                       {userRole === 'owner' && (
                         <button
@@ -339,29 +339,6 @@ export const Navbar: React.FC<NavbarProps> = ({
                           <span>{lang === 'ar' ? 'بوابة المندوب والتوصيل' : 'Driver Portal'}</span>
                         </button>
                       )}
-                    </div>
-                  ) : (
-                    <div className="pt-1.5 space-y-1 border-t border-slate-800/80">
-                      <button
-                        onClick={() => {
-                          setToolsDropdownOpen(false);
-                          onOpenAdmin();
-                        }}
-                        className="w-full p-2 rounded-xl text-slate-300 hover:text-amber-300 hover:bg-amber-500/10 text-xs font-bold flex items-center gap-2 transition-colors cursor-pointer"
-                      >
-                        <ShieldAlert className="w-4 h-4 text-amber-400" />
-                        <span>{lang === 'ar' ? 'بوابة المالك والإدارة 👑' : 'Owner / Admin Portal'}</span>
-                      </button>
-                      <button
-                        onClick={() => {
-                          setToolsDropdownOpen(false);
-                          onOpenMandoub();
-                        }}
-                        className="w-full p-2 rounded-xl text-slate-300 hover:text-emerald-300 hover:bg-emerald-500/10 text-xs font-bold flex items-center gap-2 transition-colors cursor-pointer"
-                      >
-                        <Truck className="w-4 h-4 text-emerald-400" />
-                        <span>{lang === 'ar' ? 'بوابة كباتن التوصيل 🛵' : 'Driver Portal'}</span>
-                      </button>
                     </div>
                   )}
                 </div>

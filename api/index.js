@@ -322,10 +322,12 @@ var devEphemeralSecret = null;
 function getJwtSecret() {
   const envSecret = process.env.JWT_SECRET;
   if (!envSecret) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("CRITICAL SECURITY ERROR: JWT_SECRET environment variable is missing in production. Application boot aborted.");
+    }
     if (!devEphemeralSecret) {
-      const seed = process.env.CLOUDFLARE_DATABASE_ID || process.env.VERCEL_GIT_COMMIT_SHA || "bg-royal-charcoal-jwt-secret-seed-2026";
-      devEphemeralSecret = crypto.createHash("sha256").update(seed).digest("hex");
-      console.warn("\u26A0\uFE0F [Security Warning] JWT_SECRET is not set in environment variables. Using derived session key.");
+      devEphemeralSecret = crypto.randomBytes(32).toString("hex");
+      console.warn("\u26A0\uFE0F [Development Security] JWT_SECRET is not set in environment variables. Generated ephemeral key for local dev/test only.");
     }
     return devEphemeralSecret;
   }
