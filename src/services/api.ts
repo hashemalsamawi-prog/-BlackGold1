@@ -210,8 +210,18 @@ export const api = {
   },
 
   async getCustomersCRM() {
-    const res = await fetch('/api/crm/customers');
-    return res.json();
+    try {
+      const headers = getAuthHeaders(false);
+      const res = await fetch('/api/crm/customers', { headers });
+      if (!res.ok) {
+        const res2 = await fetch('/api/customers', { headers });
+        if (res2.ok) return await res2.json();
+      }
+      return await res.json();
+    } catch (e) {
+      console.warn('Failed to fetch CRM customers:', e);
+      return { success: false, data: [] };
+    }
   },
 
   async adjustInventory(arg1: any, quantity?: number, type?: string, reason?: string) {

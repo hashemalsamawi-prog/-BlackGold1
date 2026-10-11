@@ -83,128 +83,9 @@ export const InvoiceReceiptModal: React.FC<InvoiceReceiptModalProps> = ({
 
   const handlePrint = () => {
     try {
-      const card = document.getElementById('printable-invoice-card');
-      if (!card) {
-        window.print();
-        return;
-      }
-
-      let printFrame = document.getElementById('invoice-print-iframe') as HTMLIFrameElement;
-      if (!printFrame) {
-        printFrame = document.createElement('iframe');
-        printFrame.id = 'invoice-print-iframe';
-        printFrame.style.position = 'fixed';
-        printFrame.style.right = '0';
-        printFrame.style.bottom = '0';
-        printFrame.style.width = '0';
-        printFrame.style.height = '0';
-        printFrame.style.border = '0';
-        printFrame.style.opacity = '0';
-        printFrame.style.pointerEvents = 'none';
-        document.body.appendChild(printFrame);
-      }
-
-      const frameDoc = printFrame.contentWindow?.document || printFrame.contentDocument;
-      if (!frameDoc) {
-        window.print();
-        return;
-      }
-
-      const cardHtml = card.outerHTML;
-
-      frameDoc.open();
-      frameDoc.write(`
-        <!DOCTYPE html>
-        <html lang="ar" dir="rtl">
-        <head>
-          <meta charset="UTF-8">
-          <title>فاتورة مبيعات #${orderNum} - ${storeNameAr}</title>
-          <link rel="preconnect" href="https://fonts.googleapis.com">
-          <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-          <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet">
-          <style>
-            @page {
-              size: ${viewMode === 'thermal' ? '80mm auto' : 'A4 portrait'};
-              margin: ${viewMode === 'thermal' ? '2mm 3mm' : '8mm 10mm'};
-            }
-            * {
-              box-sizing: border-box;
-              -webkit-print-color-adjust: exact !important;
-              print-color-adjust: exact !important;
-            }
-            html, body {
-              margin: 0;
-              padding: 0;
-              background: #ffffff !important;
-              background-color: #ffffff !important;
-              color: #000000 !important;
-              font-family: 'Cairo', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-              direction: rtl;
-              text-align: right;
-            }
-            #printable-invoice-card {
-              width: 100% !important;
-              max-width: ${viewMode === 'thermal' ? '76mm' : '100%'} !important;
-              margin: 0 auto !important;
-              padding: ${viewMode === 'thermal' ? '4mm 4mm' : '8mm 10mm'} !important;
-              background: #ffffff !important;
-              background-color: #ffffff !important;
-              color: #000000 !important;
-              border: ${viewMode === 'thermal' ? '1px dashed #000000' : '2px solid #b45309'} !important;
-              border-radius: ${viewMode === 'thermal' ? '0' : '14px'} !important;
-              box-shadow: none !important;
-            }
-            .invoice-total-box, .bg-zinc-950 {
-              background-color: #f1f5f9 !important;
-              color: #000000 !important;
-              border: 2px solid #000000 !important;
-            }
-            .invoice-total-box *, .bg-zinc-950 * {
-              color: #000000 !important;
-            }
-            .text-white {
-              color: #000000 !important;
-            }
-            .text-amber-300, .text-amber-400 {
-              color: #92400e !important;
-              font-weight: 900 !important;
-            }
-            .border-amber-400, .border-amber-500 {
-              border-color: #b45309 !important;
-            }
-            .no-print {
-              display: none !important;
-            }
-            table {
-              width: 100%;
-              border-collapse: collapse;
-            }
-            th, td {
-              border-bottom: 1px solid #cbd5e1;
-              padding: 6px 8px;
-            }
-            th {
-              background-color: #f1f5f9 !important;
-              color: #0f172a !important;
-              font-weight: 800;
-            }
-          </style>
-        </head>
-        <body>
-          ${cardHtml}
-        </body>
-        </html>
-      `);
-      frameDoc.close();
-
-      setTimeout(() => {
-        printFrame.contentWindow?.focus();
-        printFrame.contentWindow?.print();
-      }, 300);
-
-    } catch (e) {
-      console.warn('Iframe print error, falling back to window.print():', e);
       window.print();
+    } catch (e) {
+      console.warn('Print error:', e);
     }
   };
 
@@ -286,7 +167,11 @@ ${storeNameAr} - جودة معتمدة وضمان ملكي 👑`;
         @media print {
           @page {
             size: ${viewMode === 'thermal' ? '80mm auto' : 'A4 portrait'};
-            margin: ${viewMode === 'thermal' ? '2mm 3mm' : '8mm 10mm'};
+            margin: ${viewMode === 'thermal' ? '1mm 2mm' : '6mm 8mm'};
+          }
+          *, *::before, *::after {
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
           }
           html, body {
             background: #ffffff !important;
@@ -295,12 +180,18 @@ ${storeNameAr} - جودة معتمدة وضمان ملكي 👑`;
             margin: 0 !important;
             padding: 0 !important;
             height: auto !important;
-            min-height: auto !important;
+            min-height: 100% !important;
             overflow: visible !important;
             font-family: 'Cairo', system-ui, -apple-system, sans-serif !important;
           }
-          body > *:not(#invoice-receipt-modal) {
-            display: none !important;
+          /* Hide main site/dashboard content during printing */
+          body * {
+            visibility: hidden !important;
+          }
+          /* Reveal only the printable invoice card and all its contents */
+          #printable-invoice-card,
+          #printable-invoice-card * {
+            visibility: visible !important;
           }
           #invoice-receipt-modal {
             position: absolute !important;
@@ -313,53 +204,62 @@ ${storeNameAr} - جودة معتمدة وضمان ملكي 👑`;
             margin: 0 !important;
             background: #ffffff !important;
             background-color: #ffffff !important;
+            backdrop-filter: none !important;
             overflow: visible !important;
             z-index: 999999 !important;
             display: block !important;
+            visibility: visible !important;
           }
           #invoice-receipt-modal > div {
-            background: transparent !important;
-            background-color: transparent !important;
+            background: #ffffff !important;
+            background-color: #ffffff !important;
             border: none !important;
             box-shadow: none !important;
             padding: 0 !important;
             margin: 0 auto !important;
             max-width: ${viewMode === 'thermal' ? '76mm' : '100%'} !important;
+            width: 100% !important;
             overflow: visible !important;
+            visibility: visible !important;
           }
           #printable-invoice-card {
             position: relative !important;
             left: 0 !important;
             top: 0 !important;
             display: block !important;
-            width: ${viewMode === 'thermal' ? '76mm' : '100%'} !important;
+            width: 100% !important;
             max-width: ${viewMode === 'thermal' ? '76mm' : '100%'} !important;
             background: #ffffff !important;
             background-color: #ffffff !important;
             color: #000000 !important;
-            padding: ${viewMode === 'thermal' ? '4mm 5mm' : '8mm 10mm'} !important;
+            padding: ${viewMode === 'thermal' ? '3mm 4mm' : '6mm 8mm'} !important;
             margin: 0 auto !important;
             box-shadow: none !important;
-            border: ${viewMode === 'thermal' ? '1px dashed #000000' : '2px solid #b45309'} !important;
-            border-radius: ${viewMode === 'thermal' ? '0' : '14px'} !important;
-            -webkit-print-color-adjust: exact !important;
-            print-color-adjust: exact !important;
+            border: ${viewMode === 'thermal' ? '1px dashed #475569' : '1px solid #cbd5e1'} !important;
+            border-radius: ${viewMode === 'thermal' ? '0' : '12px'} !important;
             page-break-inside: avoid !important;
             break-inside: avoid !important;
+            visibility: visible !important;
           }
-          .invoice-total-box, .bg-zinc-950 {
-            background-color: #f1f5f9 !important;
+          #printable-invoice-card .bg-zinc-950,
+          #printable-invoice-card .bg-black,
+          #printable-invoice-card .invoice-total-box {
+            background-color: #f8fafc !important;
             color: #000000 !important;
-            border: 2px solid #000000 !important;
+            border: 1px solid #cbd5e1 !important;
           }
-          .invoice-total-box *, .bg-zinc-950 * {
+          #printable-invoice-card .bg-zinc-950 *,
+          #printable-invoice-card .bg-black *,
+          #printable-invoice-card .invoice-total-box * {
             color: #000000 !important;
           }
-          .text-white {
+          #printable-invoice-card .text-white {
             color: #000000 !important;
           }
-          .text-amber-300, .text-amber-400 {
+          #printable-invoice-card .text-amber-300,
+          #printable-invoice-card .text-amber-400 {
             color: #92400e !important;
+            font-weight: 900 !important;
           }
           .no-print {
             display: none !important;
@@ -373,7 +273,7 @@ ${storeNameAr} - جودة معتمدة وضمان ملكي 👑`;
       <div className="relative w-full max-w-2xl rounded-3xl bg-[#0B0B10] border border-amber-500/40 shadow-2xl p-3 sm:p-5 my-2 sm:my-3 text-right overflow-hidden">
         
         {/* Top Decorative Royal Gold Accent Line */}
-        <div className="absolute top-0 right-0 left-0 h-1 bg-gradient-to-r from-amber-600 via-amber-300 to-amber-600" />
+        <div className="absolute top-0 right-0 left-0 h-1 bg-gradient-to-r from-amber-600 via-amber-300 to-amber-600 no-print" />
 
         {/* Action Header Bar (No-Print) */}
         <div className="flex flex-wrap items-center justify-between pb-3 mb-3 border-b border-zinc-800 gap-2 no-print">

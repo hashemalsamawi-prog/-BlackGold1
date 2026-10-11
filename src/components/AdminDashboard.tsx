@@ -218,16 +218,104 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   useEffect(() => {
     api.getInventoryTransactions()
       .then(res => {
-        if (res.success && res.data) setInventoryTransactions(res.data);
+        if (res && res.success && Array.isArray(res.data)) setInventoryTransactions(res.data);
       })
       .catch(() => {});
 
     api.getCustomersCRM()
       .then(res => {
-        if (res.success && res.data) setCustomersList(res.data);
+        if (res && res.success && Array.isArray(res.data)) setCustomersList(res.data);
       })
       .catch(() => {});
   }, [activeTab]);
+
+  // Aggregated Customers from CRM + fallback to Live Orders to ensure every customer who made an order is ALWAYS visible
+  const displayedCustomers = React.useMemo(() => {
+    const map: Record<string, any> = {};
+
+    // 1. From CRM customers list loaded from API
+    if (Array.isArray(customersList) && customersList.length > 0) {
+      customersList.forEach(c => {
+        const key = c.phone ? c.phone.replace(/\D/g, '') : (c.name || c.id);
+        if (key) {
+          map[key] = {
+            name: c.name || 'عميل',
+            phone: c.phone || '—',
+            address: c.address || 'صنعاء',
+            ordersCount: c.ordersCount || 0,
+            totalSpent: c.totalSpent || 0,
+            lastOrderDate: c.lastOrderDate || '—'
+          };
+        }
+      });
+    }
+
+    // 2. Always merge with orders so any newly placed order is immediately reflected!
+    (orders || []).forEach(o => {
+      const cleanPhone = o.customerPhone ? o.customerPhone.replace(/\D/g, '') : '';
+      const key = cleanPhone || (o.customerName ? o.customerName.trim() : o.id);
+      if (!key) return;
+
+      const districtName = (o.address && typeof o.address === 'object' && o.address.district)
+        ? o.address.district
+        : (typeof o.address === 'string' ? o.address : 'صنعاء');
+
+      if (!map[key]) {
+        map[key] = {
+          name: o.customerName || 'عميل',
+          phone: o.customerPhone || '—',
+          address: districtName,
+          ordersCount: 1,
+          totalSpent: o.status !== 'cancelled' ? (Number(o.total) || 0) : 0,
+          lastOrderDate: o.date || '—'
+        };
+      } else {
+        if (o.customerName && (map[key].name === 'عميل' || !map[key].name)) {
+          map[key].name = o.customerName;
+        }
+        if (districtName && districtName !== 'صنعاء') {
+          map[key].address = districtName;
+        }
+        // If map didn't have data from API, accumulate
+        if (!customersList || customersList.length === 0) {
+          map[key].ordersCount += 1;
+          if (o.status !== 'cancelled') {
+            map[key].totalSpent += (Number(o.total) || 0);
+          }
+          if (o.date) map[key].lastOrderDate = o.date;
+        }
+      }
+    });
+
+    return Object.values(map);
+  }, [customersList, orders]);
+
+  // Handle browser Back button inside sub-modals so user is not kicked out of dashboard or website!
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const anySubModalOpen = productModalOpen || inventoryModalOpen || driverModalOpen || 
+      couponModalOpen || galleryModalOpen || Boolean(selectedOrderForInvoice) || confirmDeleteModal.isOpen;
+
+    if (anySubModalOpen) {
+      window.history.pushState({ adminSubModal: true }, '');
+
+      const handlePop = () => {
+        if (productModalOpen) setProductModalOpen(false);
+        if (inventoryModalOpen) setInventoryModalOpen(false);
+        if (driverModalOpen) setDriverModalOpen(false);
+        if (couponModalOpen) setCouponModalOpen(false);
+        if (galleryModalOpen) setGalleryModalOpen(false);
+        if (selectedOrderForInvoice) setSelectedOrderForInvoice(null);
+        if (confirmDeleteModal.isOpen) setConfirmDeleteModal({ isOpen: false, title: '', message: '', onConfirm: () => {} });
+      };
+
+      window.addEventListener('popstate', handlePop, { once: true });
+      return () => {
+        window.removeEventListener('popstate', handlePop);
+      };
+    }
+  }, [isOpen, productModalOpen, inventoryModalOpen, driverModalOpen, couponModalOpen, galleryModalOpen, selectedOrderForInvoice, confirmDeleteModal.isOpen]);
 
   // Driver CRUD Handlers
   const handleSaveDriver = async (e: React.FormEvent) => {
@@ -815,42 +903,43 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       }}
     >
       <div 
-        className="bg-[#0E0E15] border-2 border-amber-500/60 rounded-3xl max-w-7xl w-full p-4 sm:p-6 text-slate-100 relative shadow-2xl space-y-4 my-4 text-right max-h-[95vh] flex flex-col"
+        className="bg-[#0E0E15] border-2 border-amber-500/60 rounded-3xl max-w-7xl w-full p-3 sm:p-5 md:p-6 text-slate-100 relative shadow-2xl space-y-3 sm:space-y-4 my-2 sm:my-4 text-right max-h-[96vh] flex flex-col overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         
         {/* Top Header Bar */}
-        <div className="flex flex-wrap items-center justify-between border-b border-slate-800 pb-3 gap-3">
-          <div className="flex items-center gap-3">
+        <div className="shrink-0 flex flex-wrap items-center justify-between border-b border-slate-800 pb-3 gap-2 sm:gap-3">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
             <button
               type="button"
               onClick={onClose}
-              className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-amber-300 border border-slate-700 hover:border-amber-500/40 text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer active:scale-95 shadow-sm"
+              className="shrink-0 px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-amber-300 border border-slate-700 hover:border-amber-500/40 text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer active:scale-95 shadow-sm"
               title="الرجوع لمتجر الذهب الأسود"
             >
               <ChevronRight className="w-4 h-4 text-amber-400" />
               <span>رجوع للمتجر</span>
             </button>
 
-            <div className="p-2.5 rounded-2xl bg-amber-500 text-slate-950 shadow-md shadow-amber-500/30 hidden sm:block">
-              <ShieldCheck className="w-6 h-6" />
+            <div className="p-2.5 rounded-2xl bg-amber-500 text-slate-950 shadow-md shadow-amber-500/30 hidden md:flex shrink-0">
+              <ShieldCheck className="w-5 h-5" />
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-base sm:text-lg font-black text-white">
-                  لوحة تحكم وإدارة المالك (Black Gold Master Control)
+
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-sm sm:text-base md:text-lg font-black text-white leading-normal truncate sm:whitespace-normal">
+                  لوحة تحكم وإدارة المالك
                 </h2>
-                <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 text-[10px] font-black hidden md:inline-block">
+                <span className="shrink-0 px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 text-[10px] font-black">
                   👑 المالك: هاشم السماوي
                 </span>
               </div>
-              <p className="text-[11px] text-slate-400 mt-0.5">
+              <p className="text-[10px] sm:text-[11px] text-slate-400 mt-0.5 truncate sm:whitespace-normal hidden xs:block">
                 نظام إدارة العمليات، المخزون الحي، الطلبات، والأسطول الميداني بصنعاء
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="shrink-0 flex items-center gap-1.5 sm:gap-2">
             {/* Theme Toggle Button */}
             {onToggleTheme && (
               <button
@@ -875,7 +964,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             {/* Quick Mandoub Screen Access */}
             <button
               onClick={() => onOpenDriverScreen(activeAgents[0]?.name || '')}
-              className="px-3 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer active:scale-95 shadow-sm"
+              className="px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer active:scale-95 shadow-sm"
               title="الدخول الفوري لشاشة المندوب الميداني"
             >
               <Truck className="w-4 h-4 text-amber-400" />
@@ -883,26 +972,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </button>
 
             {/* Close */}
-            <button onClick={onClose} className="p-2 rounded-xl bg-slate-900 text-slate-400 hover:text-white">
+            <button onClick={onClose} className="p-2 rounded-xl bg-slate-900 text-slate-400 hover:text-white transition-colors cursor-pointer" title="إغلاق">
               <X className="w-5 h-5" />
             </button>
           </div>
         </div>
 
-        {/* 11 Main Navigation Tabs */}
-        <div className="flex items-center justify-start overflow-x-auto no-scrollbar gap-1.5 border-b border-slate-800 pb-2 text-xs font-bold">
+        {/* 11 Main Navigation Tabs - Fully Padded & Non-Clipping */}
+        <div className="shrink-0 flex items-center gap-1.5 overflow-x-auto pb-2.5 pt-1.5 px-0.5 border-b border-slate-800 text-xs font-bold scroll-smooth select-none">
           {[
-            { id: 'dashboard', label: '📊 المؤشرات العامة', icon: BarChart3 },
-            { id: 'orders', label: `🛍️ الطلبات (${orders.length}) ${newOrdersCount > 0 ? `🚨 (${newOrdersCount} جديد)` : ''}`, icon: ShoppingCart },
-            { id: 'products', label: `📦 المنتجات (${products.length})`, icon: Package },
-            { id: 'inventory', label: `📋 المخزون والجرد (${lowStockProducts.length > 0 ? `⚠️ ${lowStockProducts.length}` : 'سليم'})`, icon: Layers },
-            { id: 'customers', label: `👥 العملاء (${customersList.length || orders.length})`, icon: Users },
-            { id: 'fleet', label: `🚚 المناديب (${deliveryAgents.length})`, icon: Truck },
-            { id: 'coupons', label: `🏷️ الكوبونات (${campaigns.length})`, icon: Tag },
-            { id: 'reviews', label: `⭐ التقييمات (${reviews.length})`, icon: MessageSquare },
-            { id: 'marketing', label: '🎨 الصور والشعار والتحريك والمعرض', icon: Sparkles },
-            { id: 'reports', label: '📈 التقارير المالية', icon: TrendingUp },
-            { id: 'settings', label: '⚙️ إعدادات المتجر', icon: Settings }
+            { id: 'dashboard', label: 'المؤشرات العامة', icon: BarChart3 },
+            { id: 'orders', label: `الطلبات (${orders.length}) ${newOrdersCount > 0 ? `🚨 (${newOrdersCount} جديد)` : ''}`, icon: ShoppingCart },
+            { id: 'products', label: `المنتجات (${products.length})`, icon: Package },
+            { id: 'inventory', label: `المخزون والجرد (${lowStockProducts.length > 0 ? `⚠️ ${lowStockProducts.length}` : 'سليم'})`, icon: Layers },
+            { id: 'customers', label: `العملاء (${displayedCustomers.length})`, icon: Users },
+            { id: 'fleet', label: `المناديب (${deliveryAgents.length})`, icon: Truck },
+            { id: 'coupons', label: `الكوبونات (${campaigns.length})`, icon: Tag },
+            { id: 'reviews', label: `التقييمات (${reviews.length})`, icon: MessageSquare },
+            { id: 'marketing', label: 'الصور والهوية والمعرض', icon: Sparkles },
+            { id: 'reports', label: 'التقارير المالية', icon: TrendingUp },
+            { id: 'settings', label: 'إعدادات المتجر', icon: Settings }
           ].map((t) => {
             const Icon = t.icon;
             const isActive = activeTab === t.id;
@@ -910,14 +999,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <button
                 key={t.id}
                 onClick={() => setActiveTab(t.id as any)}
-                className={`whitespace-nowrap px-3.5 py-2 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer text-xs ${
+                className={`shrink-0 whitespace-nowrap px-3 py-2 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer text-xs leading-normal ${
                   isActive
                     ? 'bg-amber-500 text-slate-950 font-black shadow-md shadow-amber-500/20'
                     : 'bg-slate-900/80 hover:bg-slate-800 text-slate-300 border border-slate-800'
                 }`}
               >
-                <Icon className="w-3.5 h-3.5" />
-                <span>{t.label}</span>
+                <Icon className="w-3.5 h-3.5 shrink-0" />
+                <span className="leading-tight">{t.label}</span>
               </button>
             );
           })}
@@ -1642,29 +1731,37 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <div className="flex items-center justify-between border-b border-slate-800 pb-2">
                 <h4 className="font-bold text-white text-xs flex items-center gap-1.5">
                   <Users className="w-4 h-4 text-amber-400" />
-                  <span>دليل العملاء المسجلين وسجل المشتريات بصنعاء ({customersList.length}):</span>
+                  <span>دليل العملاء المسجلين وسجل المشتريات بصنعاء ({displayedCustomers.length}):</span>
                 </h4>
               </div>
 
-              <div className="space-y-2">
-                {customersList.map((cust, idx) => (
-                  <div key={idx} className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between text-xs">
-                    <div className="space-y-0.5">
-                      <div className="font-bold text-white flex items-center gap-2">
-                        <span>{cust.name}</span>
-                        <span className="text-[10px] px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 font-mono font-bold">
-                          {cust.ordersCount} طلبات
-                        </span>
+              {displayedCustomers.length === 0 ? (
+                <div className="p-8 text-center rounded-xl bg-slate-950/60 border border-dashed border-slate-800 space-y-2">
+                  <Users className="w-8 h-8 text-slate-600 mx-auto" />
+                  <p className="text-xs text-slate-300 font-bold">لم يتم تسجيل طلبات بعد</p>
+                  <p className="text-[11px] text-slate-500">عند قيام أي عميل بطلب، سيظهر اسمه ورقمه وإجمالي مشترياته هنا فوراً</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {displayedCustomers.map((cust, idx) => (
+                    <div key={idx} className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between text-xs hover:border-amber-500/30 transition-all">
+                      <div className="space-y-0.5">
+                        <div className="font-bold text-white flex items-center gap-2">
+                          <span>{cust.name}</span>
+                          <span className="text-[10px] px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 font-mono font-bold">
+                            {cust.ordersCount} {cust.ordersCount === 1 ? 'طلب' : 'طلبات'}
+                          </span>
+                        </div>
+                        <div className="font-mono text-amber-300 text-[11px]">{cust.phone}</div>
+                        <div className="text-slate-400 text-[10px]">{cust.address} • آخر طلب: {cust.lastOrderDate}</div>
                       </div>
-                      <div className="font-mono text-amber-300 text-[11px]">{cust.phone}</div>
-                      <div className="text-slate-400 text-[10px]">{cust.address} • آخر طلب: {cust.lastOrderDate}</div>
+                      <div className="text-left font-mono font-black text-amber-400 text-sm">
+                        {(Number(cust.totalSpent) || 0).toLocaleString()} YER
+                      </div>
                     </div>
-                    <div className="text-left font-mono font-black text-amber-400 text-sm">
-                      {cust.totalSpent.toLocaleString()} YER
-                    </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )}

@@ -255,6 +255,105 @@ export default function App() {
     setWelcomeOpen(false);
   };
 
+  // Safe Close Handlers with Browser History Sync to prevent ejecting users from the website
+  const handleCloseAdmin = () => {
+    if (typeof window !== 'undefined' && window.history.state?.modal === 'admin') {
+      window.history.back();
+    } else {
+      setAdminOpen(false);
+    }
+  };
+
+  const handleCloseMandoub = () => {
+    if (typeof window !== 'undefined' && window.history.state?.modal === 'mandoub') {
+      window.history.back();
+    } else {
+      setMandoubOpen(false);
+    }
+  };
+
+  const handleCloseInvoice = () => {
+    if (typeof window !== 'undefined' && window.history.state?.modal === 'invoice') {
+      window.history.back();
+    } else {
+      setInvoiceOrder(null);
+    }
+  };
+
+  // Modal Back Navigation & History Stack Synchronization
+  // Ensures that whenever the user clicks the browser/phone back button or gesture,
+  // it safely closes the open modal or dashboard instead of ejecting them from the website!
+  const anyModalOpen = adminOpen || mandoubOpen || cartOpen || checkoutOpen || 
+    ordersOpen || mapOpen || aiAdvisorOpen || authOpen || Boolean(selectedProductDetails) || Boolean(invoiceOrder);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    if (anyModalOpen) {
+      const modalTag = adminOpen ? 'admin' :
+        mandoubOpen ? 'mandoub' :
+        checkoutOpen ? 'checkout' :
+        cartOpen ? 'cart' :
+        ordersOpen ? 'orders' :
+        invoiceOrder ? 'invoice' :
+        selectedProductDetails ? 'product' : 'modal';
+
+      window.history.pushState({ modal: modalTag }, '');
+
+      const handlePopState = () => {
+        if (invoiceOrder) {
+          setInvoiceOrder(null);
+          return;
+        }
+        if (selectedProductDetails) {
+          setSelectedProductDetails(null);
+          return;
+        }
+        if (checkoutOpen) {
+          setCheckoutOpen(false);
+          return;
+        }
+        if (cartOpen) {
+          setCartOpen(false);
+          return;
+        }
+        if (ordersOpen) {
+          setOrdersOpen(false);
+          return;
+        }
+        if (mapOpen) {
+          setMapOpen(false);
+          return;
+        }
+        if (aiAdvisorOpen) {
+          setAiAdvisorOpen(false);
+          return;
+        }
+        if (authOpen) {
+          setAuthOpen(false);
+          return;
+        }
+        if (mandoubOpen) {
+          setMandoubOpen(false);
+          return;
+        }
+        if (adminOpen) {
+          setAdminOpen(false);
+          return;
+        }
+      };
+
+      window.addEventListener('popstate', handlePopState, { once: true });
+      return () => {
+        window.removeEventListener('popstate', handlePopState);
+      };
+    }
+  }, [
+    adminOpen, mandoubOpen, cartOpen, checkoutOpen, 
+    ordersOpen, mapOpen, aiAdvisorOpen, authOpen, 
+    Boolean(selectedProductDetails), Boolean(invoiceOrder)
+  ]);
+
   // Handle direct staff routes: /admin/login, /admin, /delivery/login, /delivery, #admin, #delivery
   useEffect(() => {
     const handleUrlRouting = () => {
@@ -1408,7 +1507,7 @@ export default function App() {
 
         <MandoubPortal
           isOpen={mandoubOpen}
-          onClose={() => setMandoubOpen(false)}
+          onClose={handleCloseMandoub}
           orders={orders}
           onUpdateOrderStatus={handleUpdateOrderStatus}
           lang={lang}
@@ -1426,7 +1525,7 @@ export default function App() {
         <ErrorBoundary fallbackTitle="لوحة تحكم إدارة المتجر والمناديب" onReset={() => setAdminOpen(false)}>
           <AdminDashboard
             isOpen={adminOpen}
-            onClose={() => setAdminOpen(false)}
+            onClose={handleCloseAdmin}
             products={products}
             orders={orders}
             reviews={reviews}
@@ -1510,7 +1609,7 @@ export default function App() {
         {/* Official Printable Invoice & Receipt Modal */}
         <InvoiceReceiptModal
           isOpen={!!invoiceOrder}
-          onClose={() => setInvoiceOrder(null)}
+          onClose={handleCloseInvoice}
           order={invoiceOrder}
           lang={lang}
           whatsappNumber={storeSettings.whatsappNumber || '967775000150'}

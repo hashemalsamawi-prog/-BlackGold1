@@ -1887,26 +1887,70 @@ app.get("/api/admin/reports", requireRoles(['owner', 'admin']), async (req, res)
   }
 });
 
-app.get(["/api/customers", "/api/admin/customers"], requireRoles(['owner', 'admin', 'employee']), async (req, res) => {
+app.get(["/api/customers", "/api/admin/customers", "/api/crm/customers"], requireRoles(['owner', 'admin', 'employee']), async (req, res) => {
   try {
     const orders = await db.getOrdersAsync();
     const customerMap: Record<string, any> = {};
 
+    let registeredCustomers: any[] = [];
+    try {
+      if (typeof (db as any).getCustomersAsync === 'function') {
+        registeredCustomers = await (db as any).getCustomersAsync();
+      }
+    } catch (e) {
+      // ignore
+    }
+
+    if (Array.isArray(registeredCustomers)) {
+      registeredCustomers.forEach(c => {
+        const key = c.phone ? c.phone.replace(/\D/g, '') : (c.id || c.name);
+        if (key) {
+          customerMap[key] = {
+            id: c.id,
+            name: c.name || 'عميل',
+            phone: c.phone || '—',
+            address: c.district || 'صنعاء',
+            ordersCount: c.totalOrders || 0,
+            totalSpent: c.totalSpent || 0,
+            lastOrderDate: c.updatedAt ? new Date(c.updatedAt).toLocaleDateString('ar-YE') : '—'
+          };
+        }
+      });
+    }
+
     orders.forEach(o => {
-      const key = o.customerPhone?.replace(/\D/g, '') || o.customerName;
+      const cleanPhone = o.customerPhone ? o.customerPhone.replace(/\D/g, '') : '';
+      const key = cleanPhone || (o.customerName ? o.customerName.trim() : o.id);
+      if (!key) return;
+
+      const districtName = (o.address && typeof o.address === 'object' && o.address.district)
+        ? o.address.district
+        : (typeof o.address === 'string' ? o.address : 'صنعاء');
+
       if (!customerMap[key]) {
         customerMap[key] = {
-          name: o.customerName,
-          phone: o.customerPhone,
-          address: o.address?.district || 'صنعاء',
+          name: o.customerName || 'عميل',
+          phone: o.customerPhone || '—',
+          address: districtName,
           ordersCount: 0,
           totalSpent: 0,
-          lastOrderDate: o.date
+          lastOrderDate: o.date || new Date().toLocaleDateString('ar-YE')
         };
+      } else {
+        if (o.customerName && (customerMap[key].name === 'عميل' || !customerMap[key].name)) {
+          customerMap[key].name = o.customerName;
+        }
+        if (districtName && districtName !== 'صنعاء') {
+          customerMap[key].address = districtName;
+        }
       }
+
       customerMap[key].ordersCount += 1;
       if (o.status !== 'cancelled') {
-        customerMap[key].totalSpent += o.total;
+        customerMap[key].totalSpent += (Number(o.total) || 0);
+      }
+      if (o.date) {
+        customerMap[key].lastOrderDate = o.date;
       }
     });
 
