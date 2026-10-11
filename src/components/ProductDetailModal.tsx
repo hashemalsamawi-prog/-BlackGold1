@@ -20,12 +20,10 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   product,
   onClose,
   onAddToCart,
-  reviews,
+  reviews = [],
   onAddReview,
   lang,
 }) => {
-  if (!product) return null;
-
   const [quantity, setQuantity] = useState(1);
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
   const [modalImageLoaded, setModalImageLoaded] = useState(false);
@@ -41,10 +39,10 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   }, [product?.id]);
 
   const [selectedWeight, setSelectedWeight] = useState<string>(() => {
-    if (product.weightOptions && product.weightOptions.length > 0) {
+    if (product?.weightOptions && product.weightOptions.length > 0) {
       return product.weightOptions[0].weight;
     }
-    return product.weightGrams ? `${product.weightGrams}g` : '250g';
+    return product?.weightGrams ? `${product.weightGrams}g` : '250g';
   });
 
   const [isAdded, setIsAdded] = useState(false);
@@ -53,10 +51,14 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   const [newRating, setNewRating] = useState(5);
   const [reviewSubmitted, setReviewSubmitted] = useState(false);
 
-  const productReviews = reviews.filter((r) => r.productId === product.id);
+  const productReviews = useMemo(() => {
+    if (!product) return [];
+    return reviews.filter((r) => r.productId === product.id);
+  }, [reviews, product]);
 
   // Compute active unit price based on selected weight option
   const activeUnitPrice = useMemo(() => {
+    if (!product) return 0;
     if (product.weightOptions && product.weightOptions.length > 0) {
       const match = product.weightOptions.find((w) => w.weight === selectedWeight);
       if (match) return match.price;
@@ -65,6 +67,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   }, [product, selectedWeight]);
 
   const activeOriginalPrice = useMemo(() => {
+    if (!product) return undefined;
     if (product.weightOptions && product.weightOptions.length > 0) {
       const match = product.weightOptions.find((w) => w.weight === selectedWeight);
       if (match && match.originalPrice) return match.originalPrice;
@@ -73,9 +76,12 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   }, [product, selectedWeight]);
 
   const productImages = useMemo(() => {
+    if (!product) return [];
     if (product.images && product.images.length > 0) return product.images;
     return [product.image];
   }, [product]);
+
+  if (!product) return null;
 
   const handleReviewSubmit = (e: React.FormEvent) => {
     e.preventDefault();

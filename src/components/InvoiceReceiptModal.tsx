@@ -34,9 +34,35 @@ export const InvoiceReceiptModal: React.FC<InvoiceReceiptModalProps> = ({
   const [imgError, setImgError] = useState(false);
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string>('');
 
+  const orderNum = order ? (order.orderNumber || order.id || '') : '';
+
+  // Safe tracking URL without any sensitive customer PII
+  const orderUrl = typeof window !== 'undefined' 
+    ? `${window.location.origin}/?track=${encodeURIComponent(orderNum)}`
+    : `https://blackgold-charcoal.ye/?track=${encodeURIComponent(orderNum)}`;
+
+  // Generate QR code 100% client-side without external third-party services
+  useEffect(() => {
+    if (!isOpen || !order || !orderNum) return;
+    let isMounted = true;
+    QRCode.toDataURL(orderUrl, {
+      width: 160,
+      margin: 1,
+      color: {
+        dark: '#0a0a0f',
+        light: '#ffffff'
+      },
+      errorCorrectionLevel: 'M'
+    }).then(url => {
+      if (isMounted) setQrCodeDataUrl(url);
+    }).catch(err => {
+      console.warn('Local QR generation error:', err);
+    });
+    return () => { isMounted = false; };
+  }, [isOpen, order, orderUrl, orderNum]);
+
   if (!isOpen || !order) return null;
 
-  const orderNum = order.orderNumber || order.id || '';
   const totalVal = order.totalAmount ?? order.total ?? 0;
   const shippingVal = order.shippingFee ?? 0;
   const discountVal = order.discount ?? order.discountAmount ?? 0;
@@ -55,31 +81,6 @@ export const InvoiceReceiptModal: React.FC<InvoiceReceiptModalProps> = ({
 
   // Primary brand logo source: Custom uploaded logo -> Raster Luxury Emblem -> Vector Logo
   const resolvedLogo = storeLogo || storeSettings?.customLogoUrl || storeSettings?.logo || safeGetLocalStorage('bg_custom_logo', '') || ASSETS.logoRaster || ASSETS.logo;
-
-  // Safe tracking URL without any sensitive customer PII
-  const orderUrl = typeof window !== 'undefined' 
-    ? `${window.location.origin}/?track=${encodeURIComponent(orderNum)}`
-    : `https://blackgold-charcoal.ye/?track=${encodeURIComponent(orderNum)}`;
-
-  // Generate QR code 100% client-side without external third-party services
-  useEffect(() => {
-    if (!orderNum) return;
-    let isMounted = true;
-    QRCode.toDataURL(orderUrl, {
-      width: 160,
-      margin: 1,
-      color: {
-        dark: '#0a0a0f',
-        light: '#ffffff'
-      },
-      errorCorrectionLevel: 'M'
-    }).then(url => {
-      if (isMounted) setQrCodeDataUrl(url);
-    }).catch(err => {
-      console.warn('Local QR generation error:', err);
-    });
-    return () => { isMounted = false; };
-  }, [orderUrl, orderNum]);
 
   const handlePrint = () => {
     try {

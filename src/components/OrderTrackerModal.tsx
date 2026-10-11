@@ -50,8 +50,6 @@ export const OrderTrackerModal: React.FC<OrderTrackerModalProps> = ({
   onCleanOldOrders,
   onOpenInvoice,
 }) => {
-  if (!isOpen) return null;
-
   const [activeTab, setActiveTab] = useState<'my-orders' | 'live-search'>(
     orders.length > 0 ? 'my-orders' : 'live-search'
   );
@@ -143,6 +141,8 @@ export const OrderTrackerModal: React.FC<OrderTrackerModalProps> = ({
       return true;
     });
   }, [orders, searchQuery]);
+
+  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md overflow-y-auto">

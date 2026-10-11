@@ -26,6 +26,8 @@ export const OrderConfirmationModal: React.FC<OrderConfirmationModalProps> = ({
   onOpenInvoice,
   whatsappNumber = '967775000150',
 }) => {
+  const [hasCopied, setHasCopied] = useState(false);
+
   if (!isOpen || !order) return null;
 
   const orderNum = order.orderNumber || order.id?.slice(-6) || 'BG-NEW';
@@ -35,8 +37,6 @@ export const OrderConfirmationModal: React.FC<OrderConfirmationModalProps> = ({
   const districtName = order.district || order.address?.district || 'صنعاء';
   const customerName = order.customerName || 'عميل فحم الذهب الأسود';
   const customerPhone = order.customerPhone || '';
-
-  const [hasCopied, setHasCopied] = useState(false);
 
   const handleCopyOrderNum = () => {
     navigator.clipboard.writeText(orderNum);

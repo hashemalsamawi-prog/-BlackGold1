@@ -39,10 +39,10 @@ export const MandoubPortal: React.FC<MandoubPortalProps> = ({
   onBackToAdmin,
   onOpenInvoice,
 }) => {
-  if (!isOpen) return null;
-
   const [activeTab, setActiveTab] = useState<'active' | 'pending' | 'completed'>('active');
   const [confirmedCashOrderId, setConfirmedCashOrderId] = useState<string | null>(null);
+
+  if (!isOpen) return null;
 
   const currentDriverObj = availableDrivers.find(d => d.name === driverName) || availableDrivers[0];
   const isAssignedToThisDriver = (o: Order) => {
