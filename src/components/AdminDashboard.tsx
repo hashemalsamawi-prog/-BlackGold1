@@ -11,7 +11,7 @@ import {
   Bell, BellRing, Volume2, VolumeX, Sparkles, Radio, Truck, Lock, Unlock, Eye, 
   Globe, Phone, Image, Award, CheckCircle2, ChevronRight, Search, Download, ExternalLink,
   Upload, Camera, Sun, Moon, Maximize2, RefreshCw, Layers, DollarSign, ArrowUpRight,
-  TrendingUp, Clock, MapPin, UserCheck, ShieldCheck, Filter
+  TrendingUp, Clock, MapPin, UserCheck, ShieldCheck, Filter, AlertCircle
 } from 'lucide-react';
 import { Logo } from './Logo';
 import { playOrderAlertSound } from '../utils/soundAlert';
@@ -214,7 +214,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setEditableSettings(storeSettings);
   }, [storeSettings]);
 
-  // Load Inventory Transactions & CRM Customers on Mount
+  const [isLoadingCustomers, setIsLoadingCustomers] = useState(false);
+  const [customerLoadError, setCustomerLoadError] = useState<string | null>(null);
+
+  const loadCustomersList = React.useCallback(async () => {
+    setIsLoadingCustomers(true);
+    setCustomerLoadError(null);
+    try {
+      const res = await api.getCustomersCRM();
+      if (res && res.success && Array.isArray(res.data)) {
+        setCustomersList(res.data);
+      } else {
+        const msg = res?.message || 'تعذر تحميل قائمة العملاء من الخادم';
+        setCustomerLoadError(msg);
+      }
+    } catch (err: any) {
+      setCustomerLoadError(err?.message || 'فشل الاتصال بالخادم لجلب بيانات العملاء');
+    } finally {
+      setIsLoadingCustomers(false);
+    }
+  }, []);
+
+  // Load Inventory Transactions & CRM Customers on Mount or tab change
   useEffect(() => {
     api.getInventoryTransactions()
       .then(res => {
@@ -222,35 +243,40 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       })
       .catch(() => {});
 
-    api.getCustomersCRM()
-      .then(res => {
-        if (res && res.success && Array.isArray(res.data)) setCustomersList(res.data);
-      })
-      .catch(() => {});
-  }, [activeTab]);
+    loadCustomersList();
+  }, [activeTab, loadCustomersList]);
 
-  // Aggregated Customers from CRM + fallback to Live Orders to ensure every customer who made an order is ALWAYS visible
+  // Aggregated Customers from CRM + fallback to Live Orders
+  // Guarantees real customer names are preserved and ordersCount / totalSpent are never duplicated
   const displayedCustomers = React.useMemo(() => {
+    const isRealName = (name?: string) => {
+      if (!name || typeof name !== 'string') return false;
+      const t = name.trim();
+      return t.length >= 2 && !['عميل', 'عميل المتجر', 'عميل الذهب الأسود', 'عميل جديد', 'عميل زائر', 'زبون', 'زائر'].includes(t.toLowerCase());
+    };
+
     const map: Record<string, any> = {};
 
     // 1. From CRM customers list loaded from API
     if (Array.isArray(customersList) && customersList.length > 0) {
       customersList.forEach(c => {
-        const key = c.phone ? c.phone.replace(/\D/g, '') : (c.name || c.id);
+        const cleanPhone = c.phone ? c.phone.replace(/\D/g, '') : '';
+        const key = cleanPhone || (c.id || c.name);
         if (key) {
           map[key] = {
-            name: c.name || 'عميل',
-            phone: c.phone || '—',
+            id: c.id || `cust-${cleanPhone}`,
+            name: c.name || 'عميل المتجر',
+            phone: cleanPhone || c.phone || '—',
             address: c.address || 'صنعاء',
-            ordersCount: c.ordersCount || 0,
-            totalSpent: c.totalSpent || 0,
+            ordersCount: Number(c.ordersCount) || 0,
+            totalSpent: Number(c.totalSpent) || 0,
             lastOrderDate: c.lastOrderDate || '—'
           };
         }
       });
     }
 
-    // 2. Always merge with orders so any newly placed order is immediately reflected!
+    // 2. Merge with actual orders: enrich real names and include newly placed orders
     (orders || []).forEach(o => {
       const cleanPhone = o.customerPhone ? o.customerPhone.replace(/\D/g, '') : '';
       const key = cleanPhone || (o.customerName ? o.customerName.trim() : o.id);
@@ -261,26 +287,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         : (typeof o.address === 'string' ? o.address : 'صنعاء');
 
       if (!map[key]) {
+        // Customer with orders that was not yet in CRM list
         map[key] = {
-          name: o.customerName || 'عميل',
-          phone: o.customerPhone || '—',
+          id: `cust-${cleanPhone || o.id}`,
+          name: o.customerName || 'عميل المتجر',
+          phone: cleanPhone || o.customerPhone || '—',
           address: districtName,
           ordersCount: 1,
-          totalSpent: o.status !== 'cancelled' ? (Number(o.total) || 0) : 0,
+          totalSpent: o.status !== 'cancelled' ? (Number(o.totalAmount ?? o.total) || 0) : 0,
           lastOrderDate: o.date || '—'
         };
       } else {
-        if (o.customerName && (map[key].name === 'عميل' || !map[key].name)) {
-          map[key].name = o.customerName;
+        // Customer exists: if order has a real valid name, upgrade generic name
+        if (isRealName(o.customerName)) {
+          if (!isRealName(map[key].name)) {
+            map[key].name = o.customerName.trim();
+          }
         }
-        if (districtName && districtName !== 'صنعاء') {
+        if (districtName && districtName !== 'صنعاء' && map[key].address === 'صنعاء') {
           map[key].address = districtName;
         }
-        // If map didn't have data from API, accumulate
+        // If CRM API wasn't available, accumulate from orders
         if (!customersList || customersList.length === 0) {
           map[key].ordersCount += 1;
           if (o.status !== 'cancelled') {
-            map[key].totalSpent += (Number(o.total) || 0);
+            map[key].totalSpent += (Number(o.totalAmount ?? o.total) || 0);
           }
           if (o.date) map[key].lastOrderDate = o.date;
         }
@@ -1733,7 +1764,33 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <Users className="w-4 h-4 text-amber-400" />
                   <span>دليل العملاء المسجلين وسجل المشتريات بصنعاء ({displayedCustomers.length}):</span>
                 </h4>
+                <button
+                  type="button"
+                  onClick={loadCustomersList}
+                  disabled={isLoadingCustomers}
+                  className="px-2.5 py-1 rounded-xl bg-slate-950 border border-slate-800 hover:border-amber-500/40 text-amber-300 text-xs flex items-center gap-1.5 cursor-pointer active:scale-95 transition-all shadow-sm"
+                  title="تحديث بيانات العملاء من الخادم"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isLoadingCustomers ? 'animate-spin text-amber-400' : ''}`} />
+                  <span className="text-[11px] font-bold">تحديث</span>
+                </button>
               </div>
+
+              {customerLoadError && (
+                <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-xs text-red-300 flex items-center justify-between">
+                  <span className="flex items-center gap-1.5">
+                    <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+                    <span>{customerLoadError}</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={loadCustomersList}
+                    className="px-2.5 py-1 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-200 text-[10px] font-bold cursor-pointer transition-colors"
+                  >
+                    إعادة المحاولة
+                  </button>
+                </div>
+              )}
 
               {displayedCustomers.length === 0 ? (
                 <div className="p-8 text-center rounded-xl bg-slate-950/60 border border-dashed border-slate-800 space-y-2">

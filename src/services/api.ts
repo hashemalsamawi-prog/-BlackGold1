@@ -131,6 +131,22 @@ export const api = {
     return res.json();
   },
 
+  async getMyOrders() {
+    const token = typeof window !== 'undefined'
+      ? (localStorage.getItem('bg_auth_token') || localStorage.getItem('bg_guest_token') || '')
+      : '';
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const res = await fetch('/api/my-orders', { headers });
+    return res.json();
+  },
+
+  async trackOrder(query: string) {
+    const cleanQ = query.trim().replace(/^#/, '');
+    const res = await fetch(`/api/orders/track/${encodeURIComponent(cleanQ)}`);
+    return res.json();
+  },
+
   async createOrder(orderData: any) {
     const token = authStorage.getToken();
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };

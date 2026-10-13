@@ -736,22 +736,6 @@ export default function App() {
     driverNotes?: string,
     driverInfo?: { driverId?: string; driverName?: string; driverPhone?: string }
   ) => {
-    setOrders((prev) => {
-      const updated = prev.map((o) => {
-        if (o.id !== orderId) return o;
-        return { 
-          ...o, 
-          status, 
-          driverNotes: driverNotes !== undefined ? driverNotes : o.driverNotes,
-          driverId: driverInfo?.driverId || o.driverId,
-          driverName: driverInfo?.driverName || o.driverName,
-          driverPhone: driverInfo?.driverPhone || o.driverPhone
-        };
-      });
-      safeSetLocalStorage('bg_saved_orders', JSON.stringify(updated));
-      return updated;
-    });
-
     try {
       const token = authStorage.getToken();
       const headers: Record<string, string> = { 
@@ -772,35 +756,45 @@ export default function App() {
         body: JSON.stringify(payload)
       });
       const data = await res.json();
-      if (data.success && data.data) {
+
+      if (res.ok && data.success && data.data) {
         setOrders((prev) => {
           const updated = prev.map((o) => (o.id === orderId ? data.data : o));
           safeSetLocalStorage('bg_saved_orders', JSON.stringify(updated));
           return updated;
         });
-      }
 
-      // If cancelled, refresh products to reflect restored stock levels
-      if (status === 'cancelled') {
-        const prodRes = await fetch('/api/products');
-        const prodData = await prodRes.json();
-        if (prodData.success && prodData.data) {
-          setProducts(prodData.data);
-          safeSetLocalStorage('bg_saved_products', JSON.stringify(prodData.data));
+        // If cancelled, refresh products to reflect restored stock levels
+        if (status === 'cancelled') {
+          const prodRes = await fetch('/api/products');
+          const prodData = await prodRes.json();
+          if (prodData.success && prodData.data) {
+            setProducts(prodData.data);
+            safeSetLocalStorage('bg_saved_products', JSON.stringify(prodData.data));
+          }
+          setToastMessage('⚠️ تم إلغاء الطلب واسترجاع كافة الكميات إلى المخزون بنجاح!');
+        } else if (status === 'delivered') {
+          setToastMessage('✅ تم تحديث حالة الطلب إلى: تم التسليم بنجاح');
+        } else {
+          const arabicStatus = status === 'delivering' ? 'في الطريق مع المندوب 🛵' 
+            : status === 'preparing' ? 'جاري التجهيز والتغليف 📦'
+            : status === 'received' ? 'تم استلام وتأكيد الطلب ✓'
+            : status === 'assigned' ? 'تم تكليف المندوب 🛵'
+            : status;
+          setToastMessage(`تم تحديث حالة الطلب إلى: ${arabicStatus}`);
         }
+      } else {
+        // Server rejected or failed update in D1
+        const errMessage = data?.message || 'فشل تحديث حالة الطلب في الخادم. تأكد من الصلاحيات والمراحل المسموحة.';
+        setToastMessage(`❌ خطأ: ${errMessage}`);
+        // Re-fetch genuine orders from server to restore real D1 state
+        fetchLatestOrders(false);
       }
-    } catch {
-      // Offline fallback
+    } catch (err: any) {
+      setToastMessage('❌ تعذر الاتصال بالخادم لتحديث حالة الطلب');
+      fetchLatestOrders(false);
     }
-
-    if (status === 'cancelled') {
-      setToastMessage('⚠️ تم إلغاء الطلب واسترجاع كافة الكميات إلى المخزون بنجاح!');
-    } else if (status === 'delivered') {
-      setToastMessage('✅ تم تحديث حالة الطلب إلى: تم التسليم بنجاح');
-    } else {
-      setToastMessage(`تم تحديث حالة الطلب إلى: ${status === 'delivering' ? 'في الطريق مع المندوب' : status}`);
-    }
-    setTimeout(() => setToastMessage(null), 4000);
+    setTimeout(() => setToastMessage(null), 5000);
   };
 
   const handleAddProduct = async (p: any) => {
@@ -1479,6 +1473,15 @@ export default function App() {
           focusOrderId={trackingFocusOrderId}
           onCleanOldOrders={handleCleanOldOrders}
           onOpenInvoice={(ord) => setInvoiceOrder(ord)}
+          onOrdersUpdated={(polledOrders) => {
+            setOrders((prev) => {
+              const orderMap = new Map(prev.map(o => [o.id || o.orderNumber, o]));
+              polledOrders.forEach(po => orderMap.set(po.id || po.orderNumber, po));
+              const merged = Array.from(orderMap.values());
+              safeSetLocalStorage('bg_saved_orders', JSON.stringify(merged));
+              return merged;
+            });
+          }}
           onShopNow={() => {
             setOrdersOpen(false);
             const el = document.getElementById('products-grid-section');

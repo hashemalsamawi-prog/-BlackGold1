@@ -107,6 +107,17 @@ export const VALID_ORDER_STATUS_TRANSITIONS: Record<string, string[]> = {
   cancelled: []
 };
 
+export function isRealValidCustomerName(name?: string | null): boolean {
+  if (!name || typeof name !== 'string') return false;
+  const trimmed = name.trim();
+  if (trimmed.length < 2) return false;
+  const genericList = [
+    'عميل', 'عميل المتجر', 'عميل الذهب الأسود', 'عميل جديد', 'عميل زائر', 
+    'زبون', 'زائر', 'مشتري', 'guest', 'customer', 'user', 'client', 'default', 'anonymous'
+  ];
+  return !genericList.includes(trimmed.toLowerCase());
+}
+
 // Memory / Local Persistent Store for D1 Entities
 class D1DatabaseAccessLayer {
   private localDbPath = path.join(process.cwd(), 'data', 'db.json');
@@ -1556,10 +1567,12 @@ class D1DatabaseAccessLayer {
     const cleanPhone = phone.replace(/\D/g, '');
     let cust = this.tables.customers.find(c => c.phone.replace(/\D/g, '') === cleanPhone);
 
+    const isIncomingReal = isRealValidCustomerName(name);
+
     if (!cust) {
       cust = {
         id: `cust-${cleanPhone}`,
-        name: name.trim(),
+        name: isIncomingReal ? name.trim() : (name?.trim() || 'عميل المتجر'),
         phone: cleanPhone,
         district: district || 'صنعاء',
         totalOrders: 0,
@@ -1571,10 +1584,13 @@ class D1DatabaseAccessLayer {
       this.tables.customers.push(cust);
       this.saveLocal();
     } else {
-      if (name && name !== 'عميل زائر') {
+      const isCurrentReal = isRealValidCustomerName(cust.name);
+      if (isIncomingReal) {
+        cust.name = name.trim();
+      } else if (!isCurrentReal && name && name.trim().length > 0) {
         cust.name = name.trim();
       }
-      if (district) {
+      if (district && district !== 'صنعاء') {
         cust.district = district;
       }
       cust.updatedAt = new Date().toISOString();
@@ -1587,16 +1603,21 @@ class D1DatabaseAccessLayer {
   public async findOrCreateCustomerAsync(name: string, phone: string, district?: string): Promise<CustomerRecord> {
     const cleanPhone = phone.replace(/\D/g, '');
     const custId = `cust-${cleanPhone}`;
+    const cleanName = (name || '').trim();
 
     if (this.isD1Configured()) {
       await this.executeCloudflareD1Query(
         `INSERT INTO customers (id, name, phone, district, total_orders, total_spent, loyalty_points, created_at, updated_at) ` +
         `VALUES (?, ?, ?, ?, 0, 0, 0, datetime('now'), datetime('now')) ` +
         `ON CONFLICT(phone) DO UPDATE SET ` +
-        `name = CASE WHEN ? != '' AND ? != 'عميل زائر' THEN ? ELSE customers.name END, ` +
+        `name = CASE ` +
+        `  WHEN ? NOT IN ('عميل', 'عميل المتجر', 'عميل الذهب الأسود', 'عميل جديد', 'عميل زائر', 'زبون', 'زائر', '') THEN ? ` +
+        `  WHEN customers.name IN ('عميل', 'عميل المتجر', 'عميل الذهب الأسود', 'عميل جديد', 'عميل زائر', 'زبون', 'زائر', '') AND ? != '' THEN ? ` +
+        `  ELSE customers.name ` +
+        `END, ` +
         `district = COALESCE(?, customers.district), ` +
         `updated_at = datetime('now');`,
-        [custId, name.trim(), cleanPhone, district || 'صنعاء', name.trim(), name.trim(), name.trim(), district || null]
+        [custId, cleanName || 'عميل المتجر', cleanPhone, district || 'صنعاء', cleanName, cleanName, cleanName, cleanName, district || null]
       );
 
       const rows = await this.executeCloudflareD1Query("SELECT * FROM customers WHERE phone = ? LIMIT 1;", [cleanPhone]);
@@ -1838,7 +1859,11 @@ class D1DatabaseAccessLayer {
         sql: `INSERT INTO customers (id, name, phone, district, street, notes, total_orders, total_spent, loyalty_points, created_at, updated_at) ` +
           `VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, datetime('now'), datetime('now')) ` +
           `ON CONFLICT(phone) DO UPDATE SET ` +
-          `name = CASE WHEN ? != '' AND ? != 'عميل زائر' THEN ? ELSE customers.name END, ` +
+          `name = CASE ` +
+          `  WHEN ? NOT IN ('عميل', 'عميل المتجر', 'عميل الذهب الأسود', 'عميل جديد', 'عميل زائر', 'زبون', 'زائر', '') THEN ? ` +
+          `  WHEN customers.name IN ('عميل', 'عميل المتجر', 'عميل الذهب الأسود', 'عميل جديد', 'عميل زائر', 'زبون', 'زائر', '') AND ? != '' THEN ? ` +
+          `  ELSE customers.name ` +
+          `END, ` +
           `district = COALESCE(?, customers.district), ` +
           `total_orders = customers.total_orders + 1, ` +
           `total_spent = customers.total_spent + ?, ` +
@@ -1847,7 +1872,7 @@ class D1DatabaseAccessLayer {
         params: [
           customerId, orderData.customerName, cleanPhone, orderData.address.district, orderData.address.street || '', orderData.notes || '',
           orderData.total, Math.floor(orderData.total / 100),
-          orderData.customerName, orderData.customerName, orderData.customerName,
+          orderData.customerName, orderData.customerName, orderData.customerName, orderData.customerName,
           orderData.address.district, orderData.total, Math.floor(orderData.total / 100)
         ]
       });

@@ -20,6 +20,7 @@ interface OrderTrackerModalProps {
   onShopNow: () => void;
   onCleanOldOrders?: () => void;
   onOpenInvoice?: (order: Order) => void;
+  onOrdersUpdated?: (orders: Order[]) => void;
 }
 
 interface PublicTrackResult {
@@ -49,22 +50,148 @@ export const OrderTrackerModal: React.FC<OrderTrackerModalProps> = ({
   onShopNow,
   onCleanOldOrders,
   onOpenInvoice,
+  onOrdersUpdated,
 }) => {
+  const [personalOrders, setPersonalOrders] = useState<Order[]>(orders);
   const [activeTab, setActiveTab] = useState<'my-orders' | 'live-search'>(
-    orders.length > 0 ? 'my-orders' : 'live-search'
+    (focusOrderId || orders.length === 0) ? 'live-search' : 'my-orders'
   );
   const [searchQuery, setSearchQuery] = useState('');
-  const [liveQuery, setLiveQuery] = useState('');
+  const [liveQuery, setLiveQuery] = useState(focusOrderId || '');
   const [isSearchingLive, setIsSearchingLive] = useState(false);
   const [liveResult, setLiveResult] = useState<PublicTrackResult | null>(null);
   const [liveError, setLiveError] = useState<string | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [lastSyncTime, setLastSyncTime] = useState<Date>(new Date());
   const modalContentRef = useRef<HTMLDivElement>(null);
+
+  // Synchronize internal orders when prop changes
+  useEffect(() => {
+    setPersonalOrders(orders);
+  }, [orders]);
 
   useEffect(() => {
     if (isOpen && modalContentRef.current) {
       modalContentRef.current.scrollTop = 0;
     }
   }, [isOpen]);
+
+  // Handle focusOrderId on modal open
+  useEffect(() => {
+    if (isOpen && focusOrderId) {
+      const clean = focusOrderId.trim().replace(/^#/, '');
+      setLiveQuery(clean);
+      setActiveTab('live-search');
+      executeLookup(clean);
+    }
+  }, [isOpen, focusOrderId]);
+
+  // Periodic Auto-Polling for My Orders (/api/my-orders) every 5 seconds
+  const fetchMyOrders = React.useCallback(async (silent = true) => {
+    if (!silent) setIsSyncing(true);
+    try {
+      const token = typeof window !== 'undefined'
+        ? (localStorage.getItem('bg_auth_token') || localStorage.getItem('bg_guest_token') || '')
+        : '';
+      const headers: Record<string, string> = {};
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const res = await fetch('/api/my-orders', { headers });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && Array.isArray(data.data)) {
+          setPersonalOrders(data.data);
+          setLastSyncTime(new Date());
+          if (onOrdersUpdated) {
+            onOrdersUpdated(data.data);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Auto-poll error for /api/my-orders:', err);
+    } finally {
+      if (!silent) setIsSyncing(false);
+    }
+  }, [onOrdersUpdated]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    // Immediate initial poll on modal open
+    fetchMyOrders(true);
+
+    // Re-fetch every 5 seconds as long as modal is open
+    const intervalId = setInterval(() => {
+      fetchMyOrders(true);
+    }, 5000);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [isOpen, fetchMyOrders]);
+
+  // Execute lookup by query
+  const executeLookup = async (queryToSearch: string) => {
+    const cleanQ = queryToSearch.trim().replace(/^#/, '');
+    if (!cleanQ) return;
+
+    setIsSearchingLive(true);
+    setLiveError(null);
+
+    try {
+      const res = await fetch(`/api/orders/track/${encodeURIComponent(cleanQ)}`);
+      const data = await res.json();
+      if (res.ok && data.success && data.data) {
+        setLiveResult(data.data);
+        setLastSyncTime(new Date());
+      } else {
+        setLiveError(data.message || 'لم يتم العثور على طلب بهذا الرقم. تأكد من إدخال رقم الطلب بشكل صحيح (مثال: BG-2026-1407).');
+        setLiveResult(null);
+      }
+    } catch {
+      setLiveError('تعذر الاتصال بالخادم، يرجى المحاولة مرة أخرى.');
+    } finally {
+      setIsSearchingLive(false);
+    }
+  };
+
+  const handleLookupLive = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    executeLookup(liveQuery);
+  };
+
+  // Periodic Auto-Polling for Direct Invoice Search every 5 seconds
+  useEffect(() => {
+    if (!isOpen || activeTab !== 'live-search' || !liveResult || !liveQuery.trim()) {
+      return;
+    }
+
+    const cleanQ = liveQuery.trim().replace(/^#/, '');
+    if (!cleanQ) return;
+
+    let isMounted = true;
+    const pollSingleOrder = async () => {
+      try {
+        const res = await fetch(`/api/orders/track/${encodeURIComponent(cleanQ)}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.data && isMounted) {
+            setLiveResult(data.data);
+            setLastSyncTime(new Date());
+          }
+        }
+      } catch (err) {
+        console.warn('Live track background poll error:', err);
+      }
+    };
+
+    const intervalId = setInterval(pollSingleOrder, 5000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(intervalId);
+    };
+  }, [isOpen, activeTab, liveResult?.orderNumber, liveQuery]);
 
   const statusLabels: Record<string, { text: string; color: string; bg: string; step: number }> = {
     pending: { text: 'قيد المراجعة والتأكيد', color: 'text-amber-400', bg: 'bg-amber-500/10 border-amber-500/30', step: 1 },
@@ -85,30 +212,6 @@ export const OrderTrackerModal: React.FC<OrderTrackerModalProps> = ({
     { num: 4, label: 'تم التسليم' }
   ];
 
-  const handleLookupLive = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    const cleanQ = liveQuery.trim();
-    if (!cleanQ) return;
-
-    setIsSearchingLive(true);
-    setLiveError(null);
-    setLiveResult(null);
-
-    try {
-      const res = await fetch(`/api/orders/track/${encodeURIComponent(cleanQ)}`);
-      const data = await res.json();
-      if (res.ok && data.success && data.data) {
-        setLiveResult(data.data);
-      } else {
-        setLiveError(data.message || 'لم يتم العثور على طلب بهذا الرقم. تأكد من إدخال رقم الطلب بشكل صحيح (مثال: BG-2026-1407).');
-      }
-    } catch {
-      setLiveError('تعذر الاتصال بالخادم، يرجى المحاولة مرة أخرى.');
-    } finally {
-      setIsSearchingLive(false);
-    }
-  };
-
   // Safe date formatter (never displays "Invalid Date")
   const formatOrderDate = (raw?: string) => {
     if (!raw) return 'اليوم';
@@ -128,9 +231,11 @@ export const OrderTrackerModal: React.FC<OrderTrackerModalProps> = ({
     return 'محدد في الفاتورة';
   };
 
+  const displayedOrdersList = isOwner ? orders : personalOrders;
+
   // Filter valid orders and apply search
   const filteredOrders = useMemo(() => {
-    return orders.filter((order) => {
+    return displayedOrdersList.filter((order) => {
       if (searchQuery.trim()) {
         const q = searchQuery.trim().toLowerCase();
         const num = (order.orderNumber || order.id || '').toLowerCase();
@@ -140,7 +245,7 @@ export const OrderTrackerModal: React.FC<OrderTrackerModalProps> = ({
       }
       return true;
     });
-  }, [orders, searchQuery]);
+  }, [displayedOrdersList, searchQuery]);
 
   if (!isOpen) return null;
 
@@ -160,13 +265,32 @@ export const OrderTrackerModal: React.FC<OrderTrackerModalProps> = ({
         </button>
 
         {/* Modal Header */}
-        <div className="flex items-center gap-3 mb-4">
-          <div className="w-10 h-10 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
-            <Truck className="w-5 h-5" />
+        <div className="flex items-center justify-between mb-4 border-b border-[#20202E] pb-3">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
+              <Truck className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-lg sm:text-xl font-black text-white">تتبع الطلبات والشحنات</h2>
+              <p className="text-xs text-slate-400">متابعة مسار شحنات فحم الذهب الأسود في صنعاء مباشرة من الخادم</p>
+            </div>
           </div>
-          <div>
-            <h2 className="text-lg sm:text-xl font-black text-white">تتبع الطلبات والشحنات</h2>
-            <p className="text-xs text-slate-400">متابعة مسار شحنات فحم الذهب الأسود في صنعاء مباشرة من الخادم</p>
+
+          <div className="flex items-center gap-2 pl-8">
+            <span className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/25 text-[10px] text-emerald-400 font-bold">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              <span>تحديث تلقائي كل 5 ثوانٍ</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => activeTab === 'my-orders' ? fetchMyOrders(false) : executeLookup(liveQuery)}
+              disabled={isSyncing || isSearchingLive}
+              className="p-1.5 px-2.5 rounded-xl bg-slate-900 border border-slate-700 hover:border-amber-500/40 text-amber-300 text-xs flex items-center gap-1 cursor-pointer transition-all active:scale-95"
+              title="تحديث البيانات الآن من الخادم"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isSyncing || isSearchingLive ? 'animate-spin text-amber-400' : ''}`} />
+              <span className="text-[11px] font-bold hidden xs:inline">تحديث</span>
+            </button>
           </div>
         </div>
 
@@ -181,7 +305,7 @@ export const OrderTrackerModal: React.FC<OrderTrackerModalProps> = ({
                 : 'text-slate-400 hover:text-white bg-[#14141E] border border-[#222232]'
             }`}
           >
-            سجل طلباتي ({orders.length})
+            سجل طلباتي ({displayedOrdersList.length})
           </button>
           <button
             type="button"

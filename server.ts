@@ -15,7 +15,7 @@ import {
   sanitizeInputString,
   createRateLimiter
 } from "./server/db";
-import { d1, CLOUDFLARE_CONFIG } from "./server/d1";
+import { d1, CLOUDFLARE_CONFIG, isRealValidCustomerName } from "./server/d1";
 import { Order, Product } from "./src/types";
 
 const app = express();
@@ -897,19 +897,30 @@ app.post("/api/orders", orderRateLimiter, async (req: AuthenticatedRequest, res)
     return res.status(400).json({ success: false, message: "السلة فارغة، يرجى إضافة منتجات أولاً" });
   }
 
-  // Bind to authenticated user JWT phone if customer is logged in
-  let resolvedPhone = customerPhone;
-  let resolvedName = customerName;
+  // 1. Phone resolution: prefer valid phone sent with order, fallback to authenticated JWT phone
+  let resolvedPhone = (customerPhone && String(customerPhone).trim()) || req.user?.phone || '';
 
-  if (req.user && req.user.role === 'customer' && req.user.phone) {
-    resolvedPhone = req.user.phone;
-    if (req.user.name) {
-      resolvedName = req.user.name;
-    }
+  // 2. Name resolution hierarchy:
+  // - If customer sent a real, valid name, ALWAYS use it (never overwrite with old/generic name).
+  // - Else if account has a real valid name, use it.
+  // - Else if customer sent any non-empty name, use it.
+  // - Else if account has any non-empty name, use it.
+  // - Else fallback to clear default: 'عميل المتجر'
+  let resolvedName = '';
+  if (isRealValidCustomerName(customerName)) {
+    resolvedName = String(customerName).trim();
+  } else if (isRealValidCustomerName(req.user?.name)) {
+    resolvedName = String(req.user!.name).trim();
+  } else if (customerName && String(customerName).trim().length > 0) {
+    resolvedName = String(customerName).trim();
+  } else if (req.user?.name && String(req.user.name).trim().length > 0) {
+    resolvedName = String(req.user.name).trim();
+  } else {
+    resolvedName = 'عميل المتجر';
   }
 
-  if (!resolvedName || !resolvedPhone) {
-    return res.status(400).json({ success: false, message: "يرجى توفير اسم العميل ورقم هاتفه" });
+  if (!resolvedPhone) {
+    return res.status(400).json({ success: false, message: "يرجى توفير رقم هاتف العميل لتأكيد التوصيل" });
   }
 
   const phoneValidation = validateYemeniPhone(resolvedPhone);
@@ -1219,18 +1230,22 @@ app.get("/api/my-orders", async (req: AuthenticatedRequest, res) => {
 
 // Order Public Tracking (Single Order Status & Timeline by Order Number or ID)
 app.get("/api/orders/track/:query", trackingRateLimiter, async (req, res) => {
-  const q = req.params.query.trim().toUpperCase();
-  if (!q || q.length < 3) {
+  const rawQ = req.params.query.trim().toUpperCase();
+  const q = rawQ.replace(/^#/, '').trim();
+  if (!q || q.length < 2) {
     return res.status(400).json({ success: false, message: "يرجى إدخال رقم طلب صحيح" });
   }
 
   // Strict matching only: full ID, exact orderNumber, or numeric suffix matching exact BG-2026-XXXX format
   const allOrders = await db.getOrdersAsync();
-  const order = allOrders.find(o => 
-    o.id.toUpperCase() === q || 
-    o.orderNumber.toUpperCase() === q ||
-    (q.length >= 4 && o.orderNumber.toUpperCase() === `BG-2026-${q}`)
-  );
+  const order = allOrders.find(o => {
+    const oId = (o.id || '').toUpperCase();
+    const oNum = (o.orderNumber || '').toUpperCase();
+    return oId === q || 
+      oNum === q ||
+      oNum === `BG-2026-${q}` ||
+      (q.length >= 3 && oNum.endsWith(q));
+  });
 
   if (!order) {
     return res.status(404).json({ success: false, message: "لم يتم العثور على الطلب. تأكد من رقم الطلب." });
@@ -1238,7 +1253,7 @@ app.get("/api/orders/track/:query", trackingRateLimiter, async (req, res) => {
 
   // Sanitized public tracking response: strictly NO customer phone, full street, landmark, or driver phone
   const itemsSummary = Array.isArray(order.items) 
-    ? order.items.map(it => `${it.productNameAr || 'منتج'} (${it.quantity || 1})`).join('، ')
+    ? order.items.map(it => `${(it as any).productNameAr || (it as any).product?.nameAr || 'منتج'} (${it.quantity || 1})`).join('، ')
     : '';
 
   res.json({
@@ -1248,7 +1263,7 @@ app.get("/api/orders/track/:query", trackingRateLimiter, async (req, res) => {
       status: order.status,
       date: order.date,
       itemsSummary,
-      district: order.address?.district || "صنعاء",
+      district: order.address?.district || (order as any).district || "صنعاء",
       driverName: order.driverName || null,
       timeline: order.timeline || []
     }
@@ -1890,34 +1905,47 @@ app.get("/api/admin/reports", requireRoles(['owner', 'admin']), async (req, res)
 app.get(["/api/customers", "/api/admin/customers", "/api/crm/customers"], requireRoles(['owner', 'admin', 'employee']), async (req, res) => {
   try {
     const orders = await db.getOrdersAsync();
-    const customerMap: Record<string, any> = {};
-
     let registeredCustomers: any[] = [];
     try {
       if (typeof (db as any).getCustomersAsync === 'function') {
         registeredCustomers = await (db as any).getCustomersAsync();
       }
     } catch (e) {
-      // ignore
+      console.warn("Could not fetch registered customers:", e);
     }
 
+    const customerMap: Record<string, {
+      id: string;
+      name: string;
+      phone: string;
+      address: string;
+      ordersCount: number;
+      totalSpent: number;
+      lastOrderDate: string;
+      lastOrderTimestamp: number;
+    }> = {};
+
+    // 1. Seed customer records from registered customers
     if (Array.isArray(registeredCustomers)) {
       registeredCustomers.forEach(c => {
-        const key = c.phone ? c.phone.replace(/\D/g, '') : (c.id || c.name);
-        if (key) {
-          customerMap[key] = {
-            id: c.id,
-            name: c.name || 'عميل',
-            phone: c.phone || '—',
-            address: c.district || 'صنعاء',
-            ordersCount: c.totalOrders || 0,
-            totalSpent: c.totalSpent || 0,
-            lastOrderDate: c.updatedAt ? new Date(c.updatedAt).toLocaleDateString('ar-YE') : '—'
-          };
-        }
+        const cleanPhone = (c.phone || '').replace(/\D/g, '');
+        const key = cleanPhone || c.id || c.name;
+        if (!key) return;
+
+        customerMap[key] = {
+          id: c.id || `cust-${cleanPhone}`,
+          name: c.name || 'عميل المتجر',
+          phone: cleanPhone || c.phone || '—',
+          address: c.district || 'صنعاء',
+          ordersCount: 0, // Calculated strictly from actual orders to avoid doubling
+          totalSpent: 0,  // Calculated strictly from actual non-cancelled orders to avoid doubling
+          lastOrderDate: c.updatedAt ? new Date(c.updatedAt).toLocaleDateString('ar-YE') : '—',
+          lastOrderTimestamp: c.updatedAt ? new Date(c.updatedAt).getTime() : 0,
+        };
       });
     }
 
+    // 2. Aggregate from actual orders using normalized phone number
     orders.forEach(o => {
       const cleanPhone = o.customerPhone ? o.customerPhone.replace(/\D/g, '') : '';
       const key = cleanPhone || (o.customerName ? o.customerName.trim() : o.id);
@@ -1925,36 +1953,71 @@ app.get(["/api/customers", "/api/admin/customers", "/api/crm/customers"], requir
 
       const districtName = (o.address && typeof o.address === 'object' && o.address.district)
         ? o.address.district
-        : (typeof o.address === 'string' ? o.address : 'صنعاء');
+        : (typeof o.address === 'string' ? o.address : ((o as any).district || 'صنعاء'));
+
+      const orderDateStr = o.date || (o.createdAt ? new Date(o.createdAt).toLocaleDateString('ar-YE') : '—');
+      const orderTimestamp = o.createdAt ? new Date(o.createdAt).getTime() : (o.date ? new Date(o.date).getTime() : 0);
 
       if (!customerMap[key]) {
+        // Customer with actual orders but not yet in CRM
         customerMap[key] = {
-          name: o.customerName || 'عميل',
-          phone: o.customerPhone || '—',
+          id: `cust-${cleanPhone || o.id}`,
+          name: o.customerName || 'عميل المتجر',
+          phone: cleanPhone || o.customerPhone || '—',
           address: districtName,
           ordersCount: 0,
           totalSpent: 0,
-          lastOrderDate: o.date || new Date().toLocaleDateString('ar-YE')
+          lastOrderDate: orderDateStr,
+          lastOrderTimestamp: orderTimestamp,
         };
-      } else {
-        if (o.customerName && (customerMap[key].name === 'عميل' || !customerMap[key].name)) {
-          customerMap[key].name = o.customerName;
-        }
-        if (districtName && districtName !== 'صنعاء') {
-          customerMap[key].address = districtName;
+      }
+
+      const cust = customerMap[key];
+
+      // Prioritize real customer name over generic names
+      if (isRealValidCustomerName(o.customerName)) {
+        if (!isRealValidCustomerName(cust.name) || orderTimestamp >= cust.lastOrderTimestamp) {
+          cust.name = o.customerName.trim();
         }
       }
 
-      customerMap[key].ordersCount += 1;
-      if (o.status !== 'cancelled') {
-        customerMap[key].totalSpent += (Number(o.total) || 0);
+      // Update phone if missing or generic
+      if ((!cust.phone || cust.phone === '—') && cleanPhone) {
+        cust.phone = cleanPhone;
       }
-      if (o.date) {
-        customerMap[key].lastOrderDate = o.date;
+
+      // Update address if default 'صنعاء' and a specific district is available
+      if ((!cust.address || cust.address === 'صنعاء') && districtName && districtName !== 'صنعاء') {
+        cust.address = districtName;
+      }
+
+      // Update latest order date
+      if (orderTimestamp >= cust.lastOrderTimestamp) {
+        cust.lastOrderTimestamp = orderTimestamp;
+        cust.lastOrderDate = orderDateStr;
+      }
+
+      // Compute ordersCount and totalSpent ONCE from actual orders (excluding cancelled)
+      cust.ordersCount += 1;
+      if (o.status !== 'cancelled') {
+        cust.totalSpent += (Number(o.totalAmount ?? o.total ?? 0) || 0);
       }
     });
 
-    res.json({ success: true, data: Object.values(customerMap) });
+    // 3. For any registered customer who has NO orders in the database, keep their registered D1 totals
+    if (Array.isArray(registeredCustomers)) {
+      registeredCustomers.forEach(c => {
+        const cleanPhone = (c.phone || '').replace(/\D/g, '');
+        const key = cleanPhone || c.id || c.name;
+        if (customerMap[key] && customerMap[key].ordersCount === 0) {
+          customerMap[key].ordersCount = c.totalOrders || 0;
+          customerMap[key].totalSpent = c.totalSpent || 0;
+        }
+      });
+    }
+
+    const result = Object.values(customerMap).map(({ lastOrderTimestamp, ...rest }) => rest);
+    res.json({ success: true, data: result });
   } catch (err: any) {
     console.error("Customers query error:", err);
     res.status(503).json({ success: false, message: "فشل استعلام العملاء من قاعدة البيانات", error: err.message });
