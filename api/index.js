@@ -2217,19 +2217,26 @@ var D1DatabaseAccessLayer = class {
     this.saveLocal();
     return order;
   }
-  activeRollbacks = /* @__PURE__ */ new Set();
+  activeRollbackPromises = /* @__PURE__ */ new Map();
   /**
    * Execute Stock Rollback when an order is cancelled.
    * Atomic, idempotent, and integrated with Cloudflare D1:
    * 1. Validates order items exist; aborts with error if no items.
-   * 2. Guards against duplicate or concurrent rollback execution.
-   * 3. Bundles stock restoration, inventory update, audit logs, coupon rollback, and order cancellation into a single atomic D1 batch.
-   * 4. Updates memory cache ONLY after D1 batch succeeds.
+   * 2. Guards against duplicate or concurrent rollback execution (cross-instance via D1 WHERE EXISTS).
+   * 3. Coalesces concurrent in-process calls via activeRollbackPromises.
+   * 4. Bundles stock restoration, inventory update, audit logs, coupon rollback, and order cancellation into a single atomic D1 batch.
+   * 5. Updates memory cache ONLY after D1 batch succeeds.
    */
   async executeStockRollback(order, actor = "\u0646\u0638\u0627\u0645 \u0625\u062F\u0627\u0631\u0629 \u0627\u0644\u0637\u0644\u0628\u0627\u062A", driverNotes, timeline) {
     const orderKey = order.id;
     if (order.isStockRolledBack) {
       console.log(`[D1 Stock Rollback] Order ${order.id} was already rolled back previously. Skipping.`);
+      return false;
+    }
+    const existingInFlight = this.activeRollbackPromises.get(orderKey);
+    if (existingInFlight) {
+      console.log(`[D1 Stock Rollback] Order ${order.id} rollback is already in-flight. Awaiting completion.`);
+      await existingInFlight;
       return false;
     }
     const alreadyLogged = this.tables.inventory_logs.some(
@@ -2240,11 +2247,7 @@ var D1DatabaseAccessLayer = class {
       console.log(`[D1 Stock Rollback] Audit log already contains rollback for order ${order.id}. Skipping duplicate.`);
       return false;
     }
-    if (this.activeRollbacks.has(orderKey)) {
-      throw new Error(`\u0639\u0645\u0644\u064A\u0629 \u0625\u0644\u063A\u0627\u0621 \u062C\u0627\u0631\u064A\u0629 \u0628\u0627\u0644\u0641\u0639\u0644 \u0644\u0644\u0637\u0644\u0628 #${order.orderNumber || order.id}. \u064A\u0631\u062C\u0649 \u0627\u0644\u0627\u0646\u062A\u0638\u0627\u0631.`);
-    }
-    this.activeRollbacks.add(orderKey);
-    try {
+    const runExecution = async () => {
       if (this.isD1Configured()) {
         const d1Rows = await this.executeCloudflareD1Query(
           "SELECT id, status, is_stock_rolled_back FROM orders WHERE id = ? OR order_number = ? LIMIT 1;",
@@ -2290,16 +2293,16 @@ var D1DatabaseAccessLayer = class {
         const logId = `tx-rollback-${Date.now()}-${it.productId}-${Math.random().toString(36).substring(2, 6)}`;
         if (this.isD1Configured()) {
           rollbackBatch.push({
-            sql: "UPDATE products SET stock = stock + ?, updated_at = datetime('now') WHERE id = ?;",
-            params: [restoredQty, it.productId]
+            sql: "UPDATE products SET stock = stock + ?, updated_at = datetime('now') WHERE id = ? AND EXISTS (SELECT 1 FROM orders WHERE (id = ? OR order_number = ?) AND (is_stock_rolled_back = 0 OR is_stock_rolled_back IS NULL));",
+            params: [restoredQty, it.productId, order.id, order.orderNumber || order.id]
           });
           rollbackBatch.push({
-            sql: "UPDATE inventory SET current_stock = current_stock + ?, updated_at = datetime('now') WHERE product_id = ?;",
-            params: [restoredQty, it.productId]
+            sql: "UPDATE inventory SET current_stock = current_stock + ?, updated_at = datetime('now') WHERE product_id = ? AND EXISTS (SELECT 1 FROM orders WHERE (id = ? OR order_number = ?) AND (is_stock_rolled_back = 0 OR is_stock_rolled_back IS NULL));",
+            params: [restoredQty, it.productId, order.id, order.orderNumber || order.id]
           });
           rollbackBatch.push({
-            sql: `INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, order_id, performed_by, created_at) VALUES (?, ?, ?, 'STOCK_ROLLBACK', ?, ?, ?, ?, ?, ?, datetime('now'));`,
-            params: [logId, it.productId, it.productNameAr, restoredQty, prevStock, newStock, `\u0627\u0633\u062A\u0631\u062C\u0627\u0639 \u0645\u062E\u0632\u0648\u0646 \u0644\u0625\u0644\u063A\u0627\u0621 \u0627\u0644\u0637\u0644\u0628 #${order.orderNumber || order.id}`, order.id, actor]
+            sql: "INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, order_id, performed_by, created_at) SELECT ?, ?, ?, 'STOCK_ROLLBACK', ?, ?, ?, ?, ?, ?, datetime('now') WHERE EXISTS (SELECT 1 FROM orders WHERE (id = ? OR order_number = ?) AND (is_stock_rolled_back = 0 OR is_stock_rolled_back IS NULL));",
+            params: [logId, it.productId, it.productNameAr, restoredQty, prevStock, newStock, `\u0627\u0633\u062A\u0631\u062C\u0627\u0639 \u0645\u062E\u0632\u0648\u0646 \u0644\u0625\u0644\u063A\u0627\u0621 \u0627\u0644\u0637\u0644\u0628 #${order.orderNumber || order.id}`, order.id, actor, order.id, order.orderNumber || order.id]
           });
         }
         memoryUpdates.push({
@@ -2323,8 +2326,8 @@ var D1DatabaseAccessLayer = class {
       const appliedCoupon = order.couponCode || order.coupon_code;
       if (appliedCoupon && this.isD1Configured()) {
         rollbackBatch.push({
-          sql: "UPDATE coupons SET usage_count = MAX(0, usage_count - 1) WHERE UPPER(code) = UPPER(?);",
-          params: [appliedCoupon]
+          sql: "UPDATE coupons SET usage_count = MAX(0, usage_count - 1) WHERE UPPER(code) = UPPER(?) AND EXISTS (SELECT 1 FROM orders WHERE (id = ? OR order_number = ?) AND (is_stock_rolled_back = 0 OR is_stock_rolled_back IS NULL));",
+          params: [appliedCoupon, order.id, order.orderNumber || order.id]
         });
       }
       const timelineToSave = timeline || [
@@ -2350,9 +2353,9 @@ var D1DatabaseAccessLayer = class {
           throw new Error(`\u0641\u0634\u0644\u062A \u0639\u0645\u0644\u064A\u0629 \u0627\u0633\u062A\u0631\u062C\u0627\u0639 \u0627\u0644\u0645\u062E\u0632\u0648\u0646 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1: ${errStr}`);
         }
         const orderUpdateResult = batchRes.result?.[batchRes.result.length - 1];
-        const changes = orderUpdateResult?.meta?.changes ?? 1;
+        const changes = orderUpdateResult?.meta?.changes ?? 0;
         if (changes === 0) {
-          console.warn(`[D1 Stock Rollback] Order ${order.id} was already rolled back concurrently by another process.`);
+          console.warn(`[D1 Stock Rollback] Order ${order.id} was already rolled back (concurrent or previous cancellation detected in D1). Zero rows modified in D1.`);
           order.isStockRolledBack = true;
           order.status = "cancelled";
           return false;
@@ -2408,8 +2411,13 @@ var D1DatabaseAccessLayer = class {
       this.saveLocal();
       console.log(`\u2705 [D1 Stock Rollback] Successfully rolled back stock for Order #${order.orderNumber || order.id} atomically.`);
       return true;
+    };
+    const inFlightPromise = runExecution();
+    this.activeRollbackPromises.set(orderKey, inFlightPromise);
+    try {
+      return await inFlightPromise;
     } finally {
-      this.activeRollbacks.delete(orderKey);
+      this.activeRollbackPromises.delete(orderKey);
     }
   }
   async updateOrderDriverAsync(orderId, driverId, driverName, driverPhone) {
