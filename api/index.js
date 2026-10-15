@@ -457,6 +457,28 @@ var VALID_ORDER_STATUS_TRANSITIONS = {
   completed: [],
   cancelled: []
 };
+function isRealValidCustomerName(name) {
+  if (!name || typeof name !== "string") return false;
+  const trimmed = name.trim();
+  if (trimmed.length < 2) return false;
+  const genericList = [
+    "\u0639\u0645\u064A\u0644",
+    "\u0639\u0645\u064A\u0644 \u0627\u0644\u0645\u062A\u062C\u0631",
+    "\u0639\u0645\u064A\u0644 \u0627\u0644\u0630\u0647\u0628 \u0627\u0644\u0623\u0633\u0648\u062F",
+    "\u0639\u0645\u064A\u0644 \u062C\u062F\u064A\u062F",
+    "\u0639\u0645\u064A\u0644 \u0632\u0627\u0626\u0631",
+    "\u0632\u0628\u0648\u0646",
+    "\u0632\u0627\u0626\u0631",
+    "\u0645\u0634\u062A\u0631\u064A",
+    "guest",
+    "customer",
+    "user",
+    "client",
+    "default",
+    "anonymous"
+  ];
+  return !genericList.includes(trimmed.toLowerCase());
+}
 var D1DatabaseAccessLayer = class {
   localDbPath = path.join(process.cwd(), "data", "db.json");
   isInitialized = false;
@@ -1726,10 +1748,11 @@ var D1DatabaseAccessLayer = class {
   findOrCreateCustomer(name, phone, district) {
     const cleanPhone = phone.replace(/\D/g, "");
     let cust = this.tables.customers.find((c) => c.phone.replace(/\D/g, "") === cleanPhone);
+    const isIncomingReal = isRealValidCustomerName(name);
     if (!cust) {
       cust = {
         id: `cust-${cleanPhone}`,
-        name: name.trim(),
+        name: isIncomingReal ? name.trim() : name?.trim() || "\u0639\u0645\u064A\u0644 \u0627\u0644\u0645\u062A\u062C\u0631",
         phone: cleanPhone,
         district: district || "\u0635\u0646\u0639\u0627\u0621",
         totalOrders: 0,
@@ -1741,10 +1764,13 @@ var D1DatabaseAccessLayer = class {
       this.tables.customers.push(cust);
       this.saveLocal();
     } else {
-      if (name && name !== "\u0639\u0645\u064A\u0644 \u0632\u0627\u0626\u0631") {
+      const isCurrentReal = isRealValidCustomerName(cust.name);
+      if (isIncomingReal) {
+        cust.name = name.trim();
+      } else if (!isCurrentReal && name && name.trim().length > 0) {
         cust.name = name.trim();
       }
-      if (district) {
+      if (district && district !== "\u0635\u0646\u0639\u0627\u0621") {
         cust.district = district;
       }
       cust.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
@@ -1755,10 +1781,11 @@ var D1DatabaseAccessLayer = class {
   async findOrCreateCustomerAsync(name, phone, district) {
     const cleanPhone = phone.replace(/\D/g, "");
     const custId = `cust-${cleanPhone}`;
+    const cleanName = (name || "").trim();
     if (this.isD1Configured()) {
       await this.executeCloudflareD1Query(
-        `INSERT INTO customers (id, name, phone, district, total_orders, total_spent, loyalty_points, created_at, updated_at) VALUES (?, ?, ?, ?, 0, 0, 0, datetime('now'), datetime('now')) ON CONFLICT(phone) DO UPDATE SET name = CASE WHEN ? != '' AND ? != '\u0639\u0645\u064A\u0644 \u0632\u0627\u0626\u0631' THEN ? ELSE customers.name END, district = COALESCE(?, customers.district), updated_at = datetime('now');`,
-        [custId, name.trim(), cleanPhone, district || "\u0635\u0646\u0639\u0627\u0621", name.trim(), name.trim(), name.trim(), district || null]
+        `INSERT INTO customers (id, name, phone, district, total_orders, total_spent, loyalty_points, created_at, updated_at) VALUES (?, ?, ?, ?, 0, 0, 0, datetime('now'), datetime('now')) ON CONFLICT(phone) DO UPDATE SET name = CASE   WHEN ? NOT IN ('\u0639\u0645\u064A\u0644', '\u0639\u0645\u064A\u0644 \u0627\u0644\u0645\u062A\u062C\u0631', '\u0639\u0645\u064A\u0644 \u0627\u0644\u0630\u0647\u0628 \u0627\u0644\u0623\u0633\u0648\u062F', '\u0639\u0645\u064A\u0644 \u062C\u062F\u064A\u062F', '\u0639\u0645\u064A\u0644 \u0632\u0627\u0626\u0631', '\u0632\u0628\u0648\u0646', '\u0632\u0627\u0626\u0631', '') THEN ?   WHEN customers.name IN ('\u0639\u0645\u064A\u0644', '\u0639\u0645\u064A\u0644 \u0627\u0644\u0645\u062A\u062C\u0631', '\u0639\u0645\u064A\u0644 \u0627\u0644\u0630\u0647\u0628 \u0627\u0644\u0623\u0633\u0648\u062F', '\u0639\u0645\u064A\u0644 \u062C\u062F\u064A\u062F', '\u0639\u0645\u064A\u0644 \u0632\u0627\u0626\u0631', '\u0632\u0628\u0648\u0646', '\u0632\u0627\u0626\u0631', '') AND ? != '' THEN ?   ELSE customers.name END, district = COALESCE(?, customers.district), updated_at = datetime('now');`,
+        [custId, cleanName || "\u0639\u0645\u064A\u0644 \u0627\u0644\u0645\u062A\u062C\u0631", cleanPhone, district || "\u0635\u0646\u0639\u0627\u0621", cleanName, cleanName, cleanName, cleanName, district || null]
       );
       const rows = await this.executeCloudflareD1Query("SELECT * FROM customers WHERE phone = ? LIMIT 1;", [cleanPhone]);
       if (Array.isArray(rows) && rows.length > 0) {
@@ -1950,7 +1977,7 @@ var D1DatabaseAccessLayer = class {
       }
       const customerId = `cust-${cleanPhone}`;
       batchStatements.push({
-        sql: `INSERT INTO customers (id, name, phone, district, street, notes, total_orders, total_spent, loyalty_points, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, datetime('now'), datetime('now')) ON CONFLICT(phone) DO UPDATE SET name = CASE WHEN ? != '' AND ? != '\u0639\u0645\u064A\u0644 \u0632\u0627\u0626\u0631' THEN ? ELSE customers.name END, district = COALESCE(?, customers.district), total_orders = customers.total_orders + 1, total_spent = customers.total_spent + ?, loyalty_points = customers.loyalty_points + ?, updated_at = datetime('now');`,
+        sql: `INSERT INTO customers (id, name, phone, district, street, notes, total_orders, total_spent, loyalty_points, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, datetime('now'), datetime('now')) ON CONFLICT(phone) DO UPDATE SET name = CASE   WHEN ? NOT IN ('\u0639\u0645\u064A\u0644', '\u0639\u0645\u064A\u0644 \u0627\u0644\u0645\u062A\u062C\u0631', '\u0639\u0645\u064A\u0644 \u0627\u0644\u0630\u0647\u0628 \u0627\u0644\u0623\u0633\u0648\u062F', '\u0639\u0645\u064A\u0644 \u062C\u062F\u064A\u062F', '\u0639\u0645\u064A\u0644 \u0632\u0627\u0626\u0631', '\u0632\u0628\u0648\u0646', '\u0632\u0627\u0626\u0631', '') THEN ?   WHEN customers.name IN ('\u0639\u0645\u064A\u0644', '\u0639\u0645\u064A\u0644 \u0627\u0644\u0645\u062A\u062C\u0631', '\u0639\u0645\u064A\u0644 \u0627\u0644\u0630\u0647\u0628 \u0627\u0644\u0623\u0633\u0648\u062F', '\u0639\u0645\u064A\u0644 \u062C\u062F\u064A\u062F', '\u0639\u0645\u064A\u0644 \u0632\u0627\u0626\u0631', '\u0632\u0628\u0648\u0646', '\u0632\u0627\u0626\u0631', '') AND ? != '' THEN ?   ELSE customers.name END, district = COALESCE(?, customers.district), total_orders = customers.total_orders + 1, total_spent = customers.total_spent + ?, loyalty_points = customers.loyalty_points + ?, updated_at = datetime('now');`,
         params: [
           customerId,
           orderData.customerName,
@@ -1960,6 +1987,7 @@ var D1DatabaseAccessLayer = class {
           orderData.notes || "",
           orderData.total,
           Math.floor(orderData.total / 100),
+          orderData.customerName,
           orderData.customerName,
           orderData.customerName,
           orderData.customerName,
@@ -2189,11 +2217,17 @@ var D1DatabaseAccessLayer = class {
     this.saveLocal();
     return order;
   }
+  activeRollbacks = /* @__PURE__ */ new Set();
   /**
-   * Execute Stock Rollback when an order is cancelled
-   * Guaranteed idempotency to prevent double-restoration of inventory
+   * Execute Stock Rollback when an order is cancelled.
+   * Atomic, idempotent, and integrated with Cloudflare D1:
+   * 1. Validates order items exist; aborts with error if no items.
+   * 2. Guards against duplicate or concurrent rollback execution.
+   * 3. Bundles stock restoration, inventory update, audit logs, coupon rollback, and order cancellation into a single atomic D1 batch.
+   * 4. Updates memory cache ONLY after D1 batch succeeds.
    */
-  async executeStockRollback(order, actor = "\u0646\u0638\u0627\u0645 \u0625\u062F\u0627\u0631\u0629 \u0627\u0644\u0637\u0644\u0628\u0627\u062A") {
+  async executeStockRollback(order, actor = "\u0646\u0638\u0627\u0645 \u0625\u062F\u0627\u0631\u0629 \u0627\u0644\u0637\u0644\u0628\u0627\u062A", driverNotes, timeline) {
+    const orderKey = order.id;
     if (order.isStockRolledBack) {
       console.log(`[D1 Stock Rollback] Order ${order.id} was already rolled back previously. Skipping.`);
       return false;
@@ -2206,132 +2240,177 @@ var D1DatabaseAccessLayer = class {
       console.log(`[D1 Stock Rollback] Audit log already contains rollback for order ${order.id}. Skipping duplicate.`);
       return false;
     }
-    if (this.isD1Configured()) {
-      const rollbackRes = await this.executeCloudflareD1Raw(
-        "UPDATE orders SET is_stock_rolled_back = 1, status = 'cancelled', cancelled_at = datetime('now'), updated_at = datetime('now') WHERE (id = ? OR order_number = ?) AND (is_stock_rolled_back = 0 OR is_stock_rolled_back IS NULL);",
-        [order.id, order.orderNumber || order.id]
-      );
-      const changes = rollbackRes.result?.[0]?.meta?.changes ?? 0;
-      if (!rollbackRes.success || changes === 0) {
-        order.isStockRolledBack = true;
-        console.log(`[D1 Stock Rollback] Order ${order.id} was already marked rolled back in D1. Skipping duplicate.`);
-        return false;
+    if (this.activeRollbacks.has(orderKey)) {
+      throw new Error(`\u0639\u0645\u0644\u064A\u0629 \u0625\u0644\u063A\u0627\u0621 \u062C\u0627\u0631\u064A\u0629 \u0628\u0627\u0644\u0641\u0639\u0644 \u0644\u0644\u0637\u0644\u0628 #${order.orderNumber || order.id}. \u064A\u0631\u062C\u0649 \u0627\u0644\u0627\u0646\u062A\u0638\u0627\u0631.`);
+    }
+    this.activeRollbacks.add(orderKey);
+    try {
+      if (this.isD1Configured()) {
+        const d1Rows = await this.executeCloudflareD1Query(
+          "SELECT id, status, is_stock_rolled_back FROM orders WHERE id = ? OR order_number = ? LIMIT 1;",
+          [order.id, order.orderNumber || order.id]
+        );
+        if (d1Rows && d1Rows.length > 0) {
+          const row = d1Rows[0];
+          if (row.is_stock_rolled_back === 1 || row.is_stock_rolled_back === true) {
+            order.isStockRolledBack = true;
+            order.status = "cancelled";
+            console.log(`[D1 Stock Rollback] Order ${order.id} is already rolled back in D1. Skipping duplicate.`);
+            return false;
+          }
+        }
       }
-    }
-    let itemsToRollback = order.items;
-    if (!itemsToRollback || itemsToRollback.length === 0) {
-      const relationalItems = await this.getOrderItemsAsync(order.id);
-      if (relationalItems && relationalItems.length > 0) {
-        itemsToRollback = relationalItems.map((ri) => ({
-          productId: ri.productId,
-          productNameAr: ri.productNameAr,
-          weight: ri.weightOption,
-          quantity: ri.quantity,
-          unitPrice: ri.unitPrice
-        }));
+      let itemsToRollback = order.items;
+      if (!itemsToRollback || itemsToRollback.length === 0) {
+        const relationalItems = await this.getOrderItemsAsync(order.id);
+        if (relationalItems && relationalItems.length > 0) {
+          itemsToRollback = relationalItems.map((ri) => ({
+            productId: ri.productId,
+            productNameAr: ri.productNameAr,
+            weight: ri.weightOption,
+            quantity: ri.quantity,
+            unitPrice: ri.unitPrice
+          }));
+        }
       }
-    }
-    if (!itemsToRollback || itemsToRollback.length === 0) {
-      console.warn(`[D1 Stock Rollback] No items found to rollback for order ${order.id}`);
-      this.saveLocal();
-      return true;
-    }
-    const rollbackBatch = [];
-    const memoryUpdates = [];
-    for (const it of itemsToRollback) {
-      const product = await this.findProductByIdAsync(it.productId);
-      const prevStock = product ? product.stock : 0;
-      const restoredQty = Number(it.quantity) || 1;
-      const newStock = prevStock + restoredQty;
-      const logId = `tx-rollback-${Date.now()}-${it.productId}-${Math.random().toString(36).substring(2, 6)}`;
+      if (!itemsToRollback || itemsToRollback.length === 0) {
+        throw new Error(`\u0644\u0627 \u062A\u0648\u062C\u062F \u0623\u0635\u0646\u0627\u0641 \u0642\u0627\u0628\u0644\u0629 \u0644\u0644\u0627\u0633\u062A\u0631\u062C\u0627\u0639 \u0641\u064A \u0627\u0644\u0637\u0644\u0628 #${order.orderNumber || order.id}. \u062A\u0645 \u0625\u064A\u0642\u0627\u0641 \u0627\u0644\u0639\u0645\u0644\u064A\u0629 \u0648\u0644\u0645 \u064A\u062A\u0645 \u0627\u0633\u062A\u0631\u062C\u0627\u0639 \u0627\u0644\u0645\u062E\u0632\u0648\u0646.`);
+      }
+      const validItemsToRestore = itemsToRollback.filter((it) => (Number(it.quantity) || 0) > 0);
+      if (validItemsToRestore.length === 0) {
+        throw new Error(`\u0644\u0627 \u062A\u0648\u062C\u062F \u0643\u0645\u064A\u0627\u062A \u0645\u0648\u062C\u0628\u0629 \u0635\u0627\u0644\u062D\u0629 \u0644\u0644\u0627\u0633\u062A\u0631\u062C\u0627\u0639 \u0641\u064A \u0627\u0644\u0637\u0644\u0628 #${order.orderNumber || order.id}. \u062A\u0645 \u0625\u064A\u0642\u0627\u0641 \u0627\u0644\u0639\u0645\u0644\u064A\u0629.`);
+      }
+      const rollbackBatch = [];
+      const memoryUpdates = [];
+      for (const it of validItemsToRestore) {
+        const product = await this.findProductByIdAsync(it.productId);
+        const prevStock = product ? product.stock : 0;
+        const restoredQty = Number(it.quantity) || 1;
+        const newStock = prevStock + restoredQty;
+        const logId = `tx-rollback-${Date.now()}-${it.productId}-${Math.random().toString(36).substring(2, 6)}`;
+        if (this.isD1Configured()) {
+          rollbackBatch.push({
+            sql: "UPDATE products SET stock = stock + ?, updated_at = datetime('now') WHERE id = ?;",
+            params: [restoredQty, it.productId]
+          });
+          rollbackBatch.push({
+            sql: "UPDATE inventory SET current_stock = current_stock + ?, updated_at = datetime('now') WHERE product_id = ?;",
+            params: [restoredQty, it.productId]
+          });
+          rollbackBatch.push({
+            sql: `INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, order_id, performed_by, created_at) VALUES (?, ?, ?, 'STOCK_ROLLBACK', ?, ?, ?, ?, ?, ?, datetime('now'));`,
+            params: [logId, it.productId, it.productNameAr, restoredQty, prevStock, newStock, `\u0627\u0633\u062A\u0631\u062C\u0627\u0639 \u0645\u062E\u0632\u0648\u0646 \u0644\u0625\u0644\u063A\u0627\u0621 \u0627\u0644\u0637\u0644\u0628 #${order.orderNumber || order.id}`, order.id, actor]
+          });
+        }
+        memoryUpdates.push({
+          product,
+          newStock,
+          logRecord: {
+            id: logId,
+            productId: it.productId,
+            productName: it.productNameAr,
+            type: "STOCK_ROLLBACK",
+            quantity: restoredQty,
+            previousStock: prevStock,
+            newStock,
+            reason: `\u0627\u0633\u062A\u0631\u062C\u0627\u0639 \u0645\u062E\u0632\u0648\u0646 \u0644\u0625\u0644\u063A\u0627\u0621 \u0627\u0644\u0637\u0644\u0628 #${order.orderNumber || order.id}`,
+            orderId: order.id,
+            performedBy: actor || "\u0646\u0638\u0627\u0645 \u0625\u062F\u0627\u0631\u0629 \u0627\u0644\u0637\u0644\u0628\u0627\u062A",
+            createdAt: (/* @__PURE__ */ new Date()).toISOString()
+          }
+        });
+      }
+      const appliedCoupon = order.couponCode || order.coupon_code;
+      if (appliedCoupon && this.isD1Configured()) {
+        rollbackBatch.push({
+          sql: "UPDATE coupons SET usage_count = MAX(0, usage_count - 1) WHERE UPPER(code) = UPPER(?);",
+          params: [appliedCoupon]
+        });
+      }
+      const timelineToSave = timeline || [
+        ...order.timeline || [],
+        {
+          status: "cancelled",
+          time: (/* @__PURE__ */ new Date()).toLocaleTimeString("ar-YE", { hour: "2-digit", minute: "2-digit" }),
+          titleAr: "\u062A\u0645 \u0625\u0644\u063A\u0627\u0621 \u0627\u0644\u0637\u0644\u0628 \u0648\u0627\u0633\u062A\u0631\u062C\u0627\u0639 \u0627\u0644\u0645\u062E\u0632\u0648\u0646",
+          titleEn: "Order Cancelled & Stock Rolled Back"
+        }
+      ];
       if (this.isD1Configured()) {
         rollbackBatch.push({
-          sql: "UPDATE products SET stock = stock + ?, updated_at = datetime('now') WHERE id = ?;",
-          params: [restoredQty, it.productId]
-        });
-        rollbackBatch.push({
-          sql: "UPDATE inventory SET current_stock = current_stock + ?, updated_at = datetime('now') WHERE product_id = ?;",
-          params: [restoredQty, it.productId]
-        });
-        rollbackBatch.push({
-          sql: `INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, order_id, performed_by, created_at) VALUES (?, ?, ?, 'STOCK_ROLLBACK', ?, ?, ?, ?, ?, ?, datetime('now'));`,
-          params: [logId, it.productId, it.productNameAr, restoredQty, prevStock, newStock, `\u0627\u0633\u062A\u0631\u062C\u0627\u0639 \u0645\u062E\u0632\u0648\u0646 \u0644\u0625\u0644\u063A\u0627\u0621 \u0627\u0644\u0637\u0644\u0628 #${order.orderNumber || order.id}`, order.id, actor]
+          sql: "UPDATE orders SET status = 'cancelled', is_stock_rolled_back = 1, cancelled_at = datetime('now'), driver_notes = COALESCE(?, driver_notes), timeline_json = ?, updated_at = datetime('now') WHERE (id = ? OR order_number = ?) AND (is_stock_rolled_back = 0 OR is_stock_rolled_back IS NULL);",
+          params: [driverNotes || null, JSON.stringify(timelineToSave), order.id, order.orderNumber || order.id]
         });
       }
-      memoryUpdates.push({
-        product,
-        newStock,
-        logRecord: {
-          id: logId,
-          productId: it.productId,
-          productName: it.productNameAr,
-          type: "STOCK_ROLLBACK",
-          quantity: restoredQty,
-          previousStock: prevStock,
-          newStock,
-          reason: `\u0627\u0633\u062A\u0631\u062C\u0627\u0639 \u0645\u062E\u0632\u0648\u0646 \u0644\u0625\u0644\u063A\u0627\u0621 \u0627\u0644\u0637\u0644\u0628 #${order.orderNumber || order.id}`,
-          orderId: order.id,
-          performedBy: actor || "\u0646\u0638\u0627\u0645 \u0625\u062F\u0627\u0631\u0629 \u0627\u0644\u0637\u0644\u0628\u0627\u062A",
-          createdAt: (/* @__PURE__ */ new Date()).toISOString()
+      if (this.isD1Configured()) {
+        const batchRes = await this.executeCloudflareD1BatchRaw(rollbackBatch);
+        if (!batchRes || batchRes.success === false) {
+          const errStr = (batchRes?.errors || []).map((e) => e.message || JSON.stringify(e)).join("; ") || "D1 Batch execution failed";
+          console.error("[D1 Stock Rollback Error] Cloudflare D1 batch rollback failed:", errStr);
+          throw new Error(`\u0641\u0634\u0644\u062A \u0639\u0645\u0644\u064A\u0629 \u0627\u0633\u062A\u0631\u062C\u0627\u0639 \u0627\u0644\u0645\u062E\u0632\u0648\u0646 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1: ${errStr}`);
         }
-      });
-    }
-    const appliedCoupon = order.couponCode || order.coupon_code;
-    if (appliedCoupon && this.isD1Configured()) {
-      rollbackBatch.push({
-        sql: "UPDATE coupons SET usage_count = MAX(0, usage_count - 1) WHERE UPPER(code) = UPPER(?);",
-        params: [appliedCoupon]
-      });
-    }
-    if (this.isD1Configured()) {
-      rollbackBatch.push({
-        sql: "UPDATE orders SET is_stock_rolled_back = 1, status = 'cancelled', cancelled_at = datetime('now'), updated_at = datetime('now') WHERE id = ? OR order_number = ?;",
-        params: [order.id, order.orderNumber || order.id]
-      });
-    }
-    if (this.isD1Configured() && rollbackBatch.length > 0) {
-      await this.executeCloudflareD1BatchRaw(rollbackBatch);
-    } else if (process.env.NODE_ENV === "production") {
-      throw new Error("\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u063A\u064A\u0631 \u0645\u0647\u064A\u0623\u0629 \u0641\u064A \u0628\u064A\u0626\u0629 \u0627\u0644\u0625\u0646\u062A\u0627\u062C");
-    }
-    order.isStockRolledBack = true;
-    order.status = "cancelled";
-    order.cancelledAt = (/* @__PURE__ */ new Date()).toISOString();
-    if (appliedCoupon) {
-      const c = this.tables.coupons.find((cp) => cp.code.toUpperCase() === appliedCoupon.toUpperCase());
-      if (c && c.usageCount && c.usageCount > 0) {
-        c.usageCount--;
+        const orderUpdateResult = batchRes.result?.[batchRes.result.length - 1];
+        const changes = orderUpdateResult?.meta?.changes ?? 1;
+        if (changes === 0) {
+          console.warn(`[D1 Stock Rollback] Order ${order.id} was already rolled back concurrently by another process.`);
+          order.isStockRolledBack = true;
+          order.status = "cancelled";
+          return false;
+        }
+      } else if (process.env.NODE_ENV === "production") {
+        throw new Error("\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u063A\u064A\u0631 \u0645\u0647\u064A\u0623\u0629 \u0641\u064A \u0628\u064A\u0626\u0629 \u0627\u0644\u0625\u0646\u062A\u0627\u062C");
       }
-    }
-    for (const update of memoryUpdates) {
-      if (update.product) {
-        update.product.stock = update.newStock;
+      for (const upd of memoryUpdates) {
+        if (upd.product) {
+          upd.product.stock = upd.newStock;
+        }
+        const inv = this.tables.inventory.get(upd.logRecord.productId);
+        if (inv) {
+          inv.currentStock = upd.newStock;
+          inv.lastCountedAt = (/* @__PURE__ */ new Date()).toISOString();
+        }
+        this.tables.inventory_logs.unshift(upd.logRecord);
       }
-      const inv = this.tables.inventory.get(update.logRecord.productId);
-      if (inv) {
-        inv.currentStock = update.newStock;
-        inv.lastCountedAt = (/* @__PURE__ */ new Date()).toISOString();
+      if (appliedCoupon) {
+        const c = this.tables.coupons.find((cp) => cp.code.toUpperCase() === appliedCoupon.toUpperCase());
+        if (c && typeof c.usageCount === "number") {
+          c.usageCount = Math.max(0, c.usageCount - 1);
+        }
       }
-      this.tables.inventory_logs.unshift(update.logRecord);
+      order.isStockRolledBack = true;
+      order.status = "cancelled";
+      order.cancelledAt = (/* @__PURE__ */ new Date()).toISOString();
+      order.timeline = timelineToSave;
+      if (driverNotes) order.driverNotes = driverNotes;
+      const inMem = this.findOrderById(order.id);
+      if (inMem) {
+        inMem.isStockRolledBack = true;
+        inMem.status = "cancelled";
+        inMem.cancelledAt = order.cancelledAt;
+        inMem.timeline = timelineToSave;
+        if (driverNotes) inMem.driverNotes = driverNotes;
+      }
+      const pay = this.tables.payments.find((p) => p.orderId === order.id);
+      if (pay && pay.status !== "confirmed") {
+        pay.status = "failed";
+        pay.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+      }
+      this.tables.notifications.unshift({
+        id: `notif-cancel-${Date.now()}`,
+        recipientRole: "admin",
+        title: "\u0627\u0633\u062A\u0631\u062C\u0627\u0639 \u0645\u062E\u0632\u0648\u0646 - \u0625\u0644\u063A\u0627\u0621 \u0637\u0644\u0628",
+        message: `\u062A\u0645 \u0625\u0644\u063A\u0627\u0621 \u0627\u0644\u0637\u0644\u0628 #${order.orderNumber || order.id} \u0648\u0625\u0639\u0627\u062F\u0629 \u0627\u0644\u0643\u0645\u064A\u0627\u062A \u062A\u0644\u0642\u0627\u0626\u064A\u064B\u0627 \u0644\u0644\u0645\u062E\u0632\u0648\u0646`,
+        type: "stock",
+        isRead: false,
+        link: `/admin/orders/${order.id}`,
+        createdAt: (/* @__PURE__ */ new Date()).toISOString()
+      });
+      this.saveLocal();
+      console.log(`\u2705 [D1 Stock Rollback] Successfully rolled back stock for Order #${order.orderNumber || order.id} atomically.`);
+      return true;
+    } finally {
+      this.activeRollbacks.delete(orderKey);
     }
-    const pay = this.tables.payments.find((p) => p.orderId === order.id);
-    if (pay && pay.status !== "confirmed") {
-      pay.status = "failed";
-      pay.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
-    }
-    this.tables.notifications.unshift({
-      id: `notif-cancel-${Date.now()}`,
-      recipientRole: "admin",
-      title: "\u0627\u0633\u062A\u0631\u062C\u0627\u0639 \u0645\u062E\u0632\u0648\u0646 - \u0625\u0644\u063A\u0627\u0621 \u0637\u0644\u0628",
-      message: `\u062A\u0645 \u0625\u0644\u063A\u0627\u0621 \u0627\u0644\u0637\u0644\u0628 #${order.orderNumber || order.id} \u0648\u0625\u0639\u0627\u062F\u0629 \u0627\u0644\u0643\u0645\u064A\u0627\u062A \u062A\u0644\u0642\u0627\u0626\u064A\u064B\u0627 \u0644\u0644\u0645\u062E\u0632\u0648\u0646`,
-      type: "stock",
-      isRead: false,
-      link: `/admin/orders/${order.id}`,
-      createdAt: (/* @__PURE__ */ new Date()).toISOString()
-    });
-    this.saveLocal();
-    console.log(`\u2705 [D1 Stock Rollback] Successfully rolled back stock for Order ${order.orderNumber || order.id}`);
-    return true;
   }
   async updateOrderDriverAsync(orderId, driverId, driverName, driverPhone) {
     const order = await this.findOrderByIdAsync(orderId) || this.findOrderById(orderId);
@@ -2375,9 +2454,20 @@ var D1DatabaseAccessLayer = class {
       }
     }
     if (status === "cancelled") {
-      if (previousStatus !== "cancelled" && !order.isStockRolledBack) {
-        await this.executeStockRollback(order, actor);
+      if (previousStatus === "cancelled" && order.isStockRolledBack) {
+        return order;
       }
+      const now2 = /* @__PURE__ */ new Date();
+      const timeFormatted2 = now2.toLocaleTimeString("ar-YE", { hour: "2-digit", minute: "2-digit" });
+      const newTimeline2 = [...order.timeline || []];
+      newTimeline2.push({
+        status: "cancelled",
+        time: timeFormatted2,
+        titleAr: "\u062A\u0645 \u0625\u0644\u063A\u0627\u0621 \u0627\u0644\u0637\u0644\u0628 \u0648\u0627\u0633\u062A\u0631\u062C\u0627\u0639 \u0627\u0644\u0645\u062E\u0632\u0648\u0646",
+        titleEn: "Order Cancelled & Stock Rolled Back"
+      });
+      await this.executeStockRollback(order, actor, driverNotes, newTimeline2);
+      return order;
     }
     let finalDriverId = order.driverId;
     let finalDriverName = order.driverName;
@@ -4220,16 +4310,21 @@ app.post("/api/orders", orderRateLimiter, async (req, res) => {
   if (!items || !Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ success: false, message: "\u0627\u0644\u0633\u0644\u0629 \u0641\u0627\u0631\u063A\u0629\u060C \u064A\u0631\u062C\u0649 \u0625\u0636\u0627\u0641\u0629 \u0645\u0646\u062A\u062C\u0627\u062A \u0623\u0648\u0644\u0627\u064B" });
   }
-  let resolvedPhone = customerPhone;
-  let resolvedName = customerName;
-  if (req.user && req.user.role === "customer" && req.user.phone) {
-    resolvedPhone = req.user.phone;
-    if (req.user.name) {
-      resolvedName = req.user.name;
-    }
+  let resolvedPhone = customerPhone && String(customerPhone).trim() || req.user?.phone || "";
+  let resolvedName = "";
+  if (isRealValidCustomerName(customerName)) {
+    resolvedName = String(customerName).trim();
+  } else if (isRealValidCustomerName(req.user?.name)) {
+    resolvedName = String(req.user.name).trim();
+  } else if (customerName && String(customerName).trim().length > 0) {
+    resolvedName = String(customerName).trim();
+  } else if (req.user?.name && String(req.user.name).trim().length > 0) {
+    resolvedName = String(req.user.name).trim();
+  } else {
+    resolvedName = "\u0639\u0645\u064A\u0644 \u0627\u0644\u0645\u062A\u062C\u0631";
   }
-  if (!resolvedName || !resolvedPhone) {
-    return res.status(400).json({ success: false, message: "\u064A\u0631\u062C\u0649 \u062A\u0648\u0641\u064A\u0631 \u0627\u0633\u0645 \u0627\u0644\u0639\u0645\u064A\u0644 \u0648\u0631\u0642\u0645 \u0647\u0627\u062A\u0641\u0647" });
+  if (!resolvedPhone) {
+    return res.status(400).json({ success: false, message: "\u064A\u0631\u062C\u0649 \u062A\u0648\u0641\u064A\u0631 \u0631\u0642\u0645 \u0647\u0627\u062A\u0641 \u0627\u0644\u0639\u0645\u064A\u0644 \u0644\u062A\u0623\u0643\u064A\u062F \u0627\u0644\u062A\u0648\u0635\u064A\u0644" });
   }
   const phoneValidation = validateYemeniPhone(resolvedPhone);
   if (!phoneValidation.isValid) {
@@ -4462,18 +4557,21 @@ app.get("/api/my-orders", async (req, res) => {
   return res.status(403).json({ success: false, message: "\u063A\u064A\u0631 \u0645\u0635\u0631\u062D \u0644\u0643 \u0628\u0639\u0631\u0636 \u0647\u0630\u0647 \u0627\u0644\u0637\u0644\u0628\u0627\u062A" });
 });
 app.get("/api/orders/track/:query", trackingRateLimiter, async (req, res) => {
-  const q = req.params.query.trim().toUpperCase();
-  if (!q || q.length < 3) {
+  const rawQ = req.params.query.trim().toUpperCase();
+  const q = rawQ.replace(/^#/, "").trim();
+  if (!q || q.length < 2) {
     return res.status(400).json({ success: false, message: "\u064A\u0631\u062C\u0649 \u0625\u062F\u062E\u0627\u0644 \u0631\u0642\u0645 \u0637\u0644\u0628 \u0635\u062D\u064A\u062D" });
   }
   const allOrders = await db.getOrdersAsync();
-  const order = allOrders.find(
-    (o) => o.id.toUpperCase() === q || o.orderNumber.toUpperCase() === q || q.length >= 4 && o.orderNumber.toUpperCase() === `BG-2026-${q}`
-  );
+  const order = allOrders.find((o) => {
+    const oId = (o.id || "").toUpperCase();
+    const oNum = (o.orderNumber || "").toUpperCase();
+    return oId === q || oNum === q || oNum === `BG-2026-${q}` || q.length >= 3 && oNum.endsWith(q);
+  });
   if (!order) {
     return res.status(404).json({ success: false, message: "\u0644\u0645 \u064A\u062A\u0645 \u0627\u0644\u0639\u062B\u0648\u0631 \u0639\u0644\u0649 \u0627\u0644\u0637\u0644\u0628. \u062A\u0623\u0643\u062F \u0645\u0646 \u0631\u0642\u0645 \u0627\u0644\u0637\u0644\u0628." });
   }
-  const itemsSummary = Array.isArray(order.items) ? order.items.map((it) => `${it.productNameAr || "\u0645\u0646\u062A\u062C"} (${it.quantity || 1})`).join("\u060C ") : "";
+  const itemsSummary = Array.isArray(order.items) ? order.items.map((it) => `${it.productNameAr || it.product?.nameAr || "\u0645\u0646\u062A\u062C"} (${it.quantity || 1})`).join("\u060C ") : "";
   res.json({
     success: true,
     data: {
@@ -4481,7 +4579,7 @@ app.get("/api/orders/track/:query", trackingRateLimiter, async (req, res) => {
       status: order.status,
       date: order.date,
       itemsSummary,
-      district: order.address?.district || "\u0635\u0646\u0639\u0627\u0621",
+      district: order.address?.district || order.district || "\u0635\u0646\u0639\u0627\u0621",
       driverName: order.driverName || null,
       timeline: order.timeline || []
     }
@@ -4980,28 +5078,92 @@ app.get("/api/admin/reports", requireRoles(["owner", "admin"]), async (req, res)
     res.status(503).json({ success: false, message: "\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0627\u0644\u062A\u0642\u0627\u0631\u064A\u0631 \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", error: err.message });
   }
 });
-app.get(["/api/customers", "/api/admin/customers"], requireRoles(["owner", "admin", "employee"]), async (req, res) => {
+app.get(["/api/customers", "/api/admin/customers", "/api/crm/customers"], requireRoles(["owner", "admin", "employee"]), async (req, res) => {
   try {
     const orders = await db.getOrdersAsync();
+    let registeredCustomers = [];
+    try {
+      if (typeof db.getCustomersAsync === "function") {
+        registeredCustomers = await db.getCustomersAsync();
+      }
+    } catch (e) {
+      console.warn("Could not fetch registered customers:", e);
+    }
     const customerMap = {};
+    if (Array.isArray(registeredCustomers)) {
+      registeredCustomers.forEach((c) => {
+        const cleanPhone = (c.phone || "").replace(/\D/g, "");
+        const key = cleanPhone || c.id || c.name;
+        if (!key) return;
+        customerMap[key] = {
+          id: c.id || `cust-${cleanPhone}`,
+          name: c.name || "\u0639\u0645\u064A\u0644 \u0627\u0644\u0645\u062A\u062C\u0631",
+          phone: cleanPhone || c.phone || "\u2014",
+          address: c.district || "\u0635\u0646\u0639\u0627\u0621",
+          ordersCount: 0,
+          // Calculated strictly from actual orders to avoid doubling
+          totalSpent: 0,
+          // Calculated strictly from actual non-cancelled orders to avoid doubling
+          lastOrderDate: c.updatedAt ? new Date(c.updatedAt).toLocaleDateString("ar-YE") : "\u2014",
+          lastOrderTimestamp: c.updatedAt ? new Date(c.updatedAt).getTime() : 0
+        };
+      });
+    }
     orders.forEach((o) => {
-      const key = o.customerPhone?.replace(/\D/g, "") || o.customerName;
+      const cleanPhone = o.customerPhone ? o.customerPhone.replace(/\D/g, "") : "";
+      const key = cleanPhone || (o.customerName ? o.customerName.trim() : o.id);
+      if (!key) return;
+      const districtName = o.address && typeof o.address === "object" && o.address.district ? o.address.district : typeof o.address === "string" ? o.address : o.district || "\u0635\u0646\u0639\u0627\u0621";
+      const orderDateStr = o.date || (o.createdAt ? new Date(o.createdAt).toLocaleDateString("ar-YE") : "\u2014");
+      const orderTimestamp = o.createdAt ? new Date(o.createdAt).getTime() : o.date ? new Date(o.date).getTime() : 0;
       if (!customerMap[key]) {
         customerMap[key] = {
-          name: o.customerName,
-          phone: o.customerPhone,
-          address: o.address?.district || "\u0635\u0646\u0639\u0627\u0621",
+          id: `cust-${cleanPhone || o.id}`,
+          name: o.customerName || "\u0639\u0645\u064A\u0644 \u0627\u0644\u0645\u062A\u062C\u0631",
+          phone: cleanPhone || o.customerPhone || "\u2014",
+          address: districtName,
           ordersCount: 0,
           totalSpent: 0,
-          lastOrderDate: o.date
+          lastOrderDate: orderDateStr,
+          lastOrderTimestamp: orderTimestamp
         };
       }
-      customerMap[key].ordersCount += 1;
+      const cust = customerMap[key];
+      if (isRealValidCustomerName(o.customerName)) {
+        if (!isRealValidCustomerName(cust.name) || orderTimestamp >= cust.lastOrderTimestamp) {
+          cust.name = o.customerName.trim();
+        }
+      }
+      if ((!cust.phone || cust.phone === "\u2014") && cleanPhone) {
+        cust.phone = cleanPhone;
+      }
+      if ((!cust.address || cust.address === "\u0635\u0646\u0639\u0627\u0621") && districtName && districtName !== "\u0635\u0646\u0639\u0627\u0621") {
+        cust.address = districtName;
+      }
+      if (orderTimestamp >= cust.lastOrderTimestamp) {
+        cust.lastOrderTimestamp = orderTimestamp;
+        cust.lastOrderDate = orderDateStr;
+      }
+      cust.ordersCount += 1;
       if (o.status !== "cancelled") {
-        customerMap[key].totalSpent += o.total;
+        cust.totalSpent += Number(o.totalAmount ?? o.total ?? 0) || 0;
       }
     });
-    res.json({ success: true, data: Object.values(customerMap) });
+    if (Array.isArray(registeredCustomers)) {
+      registeredCustomers.forEach((c) => {
+        const cleanPhone = (c.phone || "").replace(/\D/g, "");
+        const key = cleanPhone || c.id || c.name;
+        if (customerMap[key] && customerMap[key].ordersCount === 0) {
+          customerMap[key].ordersCount = c.totalOrders || 0;
+          customerMap[key].totalSpent = c.totalSpent || 0;
+        }
+      });
+    }
+    const result = Object.values(customerMap).map(({ lastOrderTimestamp, ...rest }) => ({
+      ...rest,
+      totalOrders: rest.ordersCount
+    }));
+    res.json({ success: true, data: result });
   } catch (err) {
     console.error("Customers query error:", err);
     res.status(503).json({ success: false, message: "\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0627\u0644\u0639\u0645\u0644\u0627\u0621 \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", error: err.message });

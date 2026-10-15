@@ -301,16 +301,6 @@ app.post("/api/auth/admin-login", authRateLimiter, async (req, res) => {
       }
     }
 
-    // In local development: if owner account exists in local store without pinHash and ADMIN_PIN is not configured, auto-initialize on first login
-    if (!matchedUser && process.env.NODE_ENV !== 'production' && !d1.isD1Configured() && !process.env.ADMIN_PIN) {
-      const owner = users.find(u => u.role === 'owner');
-      if (owner && !owner.pinHash && !owner.passwordHash) {
-        owner.pinHash = hashedInput;
-        await db.updateUserAsync(owner.id, { pinHash: hashedInput }).catch(() => {});
-        matchedUser = owner;
-      }
-    }
-
     if (!matchedUser) {
       if (!d1.isD1Configured() && !process.env.ADMIN_PIN) {
         return res.status(401).json({
@@ -389,10 +379,7 @@ app.post("/api/auth/driver-login", authRateLimiter, async (req, res) => {
           : ((matchedAgent as any).pin ? timingSafeEqual(hashSecret(normalizeDigits(String((matchedAgent as any).pin).trim())), hashedSecret) : false);
 
         const isEnvSecretValid = [envDriverPin, envAdminPin].filter(Boolean).some(p => timingSafeEqual(hashSecret(p), hashedSecret));
-        let isPinValid = isAgentSecretValid || isEnvSecretValid;
-        if (!isPinValid && process.env.NODE_ENV !== 'production' && !d1.isD1Configured() && !envDriverPin && !envAdminPin) {
-          isPinValid = true;
-        }
+        const isPinValid = isAgentSecretValid || isEnvSecretValid;
 
         if (isPinValid) {
           // Upsert driver user account into users table for persistent auth
@@ -2029,7 +2016,10 @@ app.get(["/api/customers", "/api/admin/customers", "/api/crm/customers"], requir
       });
     }
 
-    const result = Object.values(customerMap).map(({ lastOrderTimestamp, ...rest }) => rest);
+    const result = Object.values(customerMap).map(({ lastOrderTimestamp, ...rest }) => ({
+      ...rest,
+      totalOrders: rest.ordersCount
+    }));
     res.json({ success: true, data: result });
   } catch (err: any) {
     console.error("Customers query error:", err);

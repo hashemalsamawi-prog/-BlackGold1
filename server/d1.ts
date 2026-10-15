@@ -2126,18 +2126,31 @@ class D1DatabaseAccessLayer {
     return order;
   }
 
+  private activeRollbacks = new Set<string>();
+
   /**
-   * Execute Stock Rollback when an order is cancelled
-   * Guaranteed idempotency to prevent double-restoration of inventory
+   * Execute Stock Rollback when an order is cancelled.
+   * Atomic, idempotent, and integrated with Cloudflare D1:
+   * 1. Validates order items exist; aborts with error if no items.
+   * 2. Guards against duplicate or concurrent rollback execution.
+   * 3. Bundles stock restoration, inventory update, audit logs, coupon rollback, and order cancellation into a single atomic D1 batch.
+   * 4. Updates memory cache ONLY after D1 batch succeeds.
    */
-  public async executeStockRollback(order: Order, actor: string = 'نظام إدارة الطلبات'): Promise<boolean> {
+  public async executeStockRollback(
+    order: Order, 
+    actor: string = 'نظام إدارة الطلبات',
+    driverNotes?: string,
+    timeline?: any[]
+  ): Promise<boolean> {
+    const orderKey = order.id;
+
     // 1. Guard against duplicate rollback execution in memory
     if (order.isStockRolledBack) {
       console.log(`[D1 Stock Rollback] Order ${order.id} was already rolled back previously. Skipping.`);
       return false;
     }
 
-    // Secondary check: verify if inventory_logs already has a rollback log for this orderId
+    // Secondary in-memory check: verify if inventory_logs already has a rollback log for this orderId
     const alreadyLogged = this.tables.inventory_logs.some(
       log => log.orderId === order.id && log.type === 'STOCK_ROLLBACK'
     );
@@ -2147,156 +2160,216 @@ class D1DatabaseAccessLayer {
       return false;
     }
 
-    // 2. Atomic Idempotent Update on Cloudflare D1 or In-Memory
-    if (this.isD1Configured()) {
-      const rollbackRes = await this.executeCloudflareD1Raw(
-        "UPDATE orders SET is_stock_rolled_back = 1, status = 'cancelled', cancelled_at = datetime('now'), updated_at = datetime('now') WHERE (id = ? OR order_number = ?) AND (is_stock_rolled_back = 0 OR is_stock_rolled_back IS NULL);",
-        [order.id, order.orderNumber || order.id]
-      );
-      const changes = rollbackRes.result?.[0]?.meta?.changes ?? 0;
-      if (!rollbackRes.success || changes === 0) {
-        order.isStockRolledBack = true;
-        console.log(`[D1 Stock Rollback] Order ${order.id} was already marked rolled back in D1. Skipping duplicate.`);
-        return false;
+    // 2. Concurrency Lock: Prevent simultaneous rollback operations on the same order
+    if (this.activeRollbacks.has(orderKey)) {
+      throw new Error(`عملية إلغاء جارية بالفعل للطلب #${order.orderNumber || order.id}. يرجى الانتظار.`);
+    }
+    this.activeRollbacks.add(orderKey);
+
+    try {
+      // 3. Verify in Cloudflare D1 if the order is already marked rolled back
+      if (this.isD1Configured()) {
+        const d1Rows = await this.executeCloudflareD1Query(
+          "SELECT id, status, is_stock_rolled_back FROM orders WHERE id = ? OR order_number = ? LIMIT 1;",
+          [order.id, order.orderNumber || order.id]
+        );
+        if (d1Rows && d1Rows.length > 0) {
+          const row = d1Rows[0];
+          if (row.is_stock_rolled_back === 1 || row.is_stock_rolled_back === true) {
+            order.isStockRolledBack = true;
+            order.status = 'cancelled';
+            console.log(`[D1 Stock Rollback] Order ${order.id} is already rolled back in D1. Skipping duplicate.`);
+            return false;
+          }
+        }
       }
-    }
 
-    // 3. Resolve order items: check in-order items array or relational order_items table
-    let itemsToRollback = order.items;
-    if (!itemsToRollback || itemsToRollback.length === 0) {
-      const relationalItems = await this.getOrderItemsAsync(order.id);
-      if (relationalItems && relationalItems.length > 0) {
-        itemsToRollback = relationalItems.map(ri => ({
-          productId: ri.productId,
-          productNameAr: ri.productNameAr,
-          weight: ri.weightOption,
-          quantity: ri.quantity,
-          unitPrice: ri.unitPrice
-        }));
+      // 4. Resolve order items: check in-order items array or relational order_items table
+      let itemsToRollback = order.items;
+      if (!itemsToRollback || itemsToRollback.length === 0) {
+        const relationalItems = await this.getOrderItemsAsync(order.id);
+        if (relationalItems && relationalItems.length > 0) {
+          itemsToRollback = relationalItems.map(ri => ({
+            productId: ri.productId,
+            productNameAr: ri.productNameAr,
+            weight: ri.weightOption,
+            quantity: ri.quantity,
+            unitPrice: ri.unitPrice
+          }));
+        }
       }
-    }
 
-    if (!itemsToRollback || itemsToRollback.length === 0) {
-      console.warn(`[D1 Stock Rollback] No items found to rollback for order ${order.id}`);
-      this.saveLocal();
-      return true;
-    }
+      // Requirement 3: If no items found or cannot be determined, abort and throw clear error!
+      // Do NOT record rollback success, do NOT mark is_stock_rolled_back = 1, do NOT cancel order.
+      if (!itemsToRollback || itemsToRollback.length === 0) {
+        throw new Error(`لا توجد أصناف قابلة للاسترجاع في الطلب #${order.orderNumber || order.id}. تم إيقاف العملية ولم يتم استرجاع المخزون.`);
+      }
 
-    // 4. Batch restoration statements for D1
-    const rollbackBatch: Array<{ sql: string; params?: any[] }> = [];
-    const memoryUpdates: Array<{ product: Product | undefined; newStock: number; logRecord: InventoryLogRecord }> = [];
+      // Validate that all items have valid quantities > 0
+      const validItemsToRestore = itemsToRollback.filter(it => (Number(it.quantity) || 0) > 0);
+      if (validItemsToRestore.length === 0) {
+        throw new Error(`لا توجد كميات موجبة صالحة للاسترجاع في الطلب #${order.orderNumber || order.id}. تم إيقاف العملية.`);
+      }
 
-    for (const it of itemsToRollback) {
-      const product = await this.findProductByIdAsync(it.productId);
-      const prevStock = product ? product.stock : 0;
-      const restoredQty = Number(it.quantity) || 1;
-      const newStock = prevStock + restoredQty;
-      const logId = `tx-rollback-${Date.now()}-${it.productId}-${Math.random().toString(36).substring(2, 6)}`;
+      // 5. Prepare single compound atomic transaction batch
+      const rollbackBatch: Array<{ sql: string; params?: any[] }> = [];
+      const memoryUpdates: Array<{ product: Product | undefined; newStock: number; logRecord: InventoryLogRecord }> = [];
 
+      for (const it of validItemsToRestore) {
+        const product = await this.findProductByIdAsync(it.productId);
+        const prevStock = product ? product.stock : 0;
+        const restoredQty = Number(it.quantity) || 1;
+        const newStock = prevStock + restoredQty;
+        const logId = `tx-rollback-${Date.now()}-${it.productId}-${Math.random().toString(36).substring(2, 6)}`;
+
+        if (this.isD1Configured()) {
+          // Restore stock in products
+          rollbackBatch.push({
+            sql: "UPDATE products SET stock = stock + ?, updated_at = datetime('now') WHERE id = ?;",
+            params: [restoredQty, it.productId]
+          });
+          // Restore current_stock in inventory
+          rollbackBatch.push({
+            sql: "UPDATE inventory SET current_stock = current_stock + ?, updated_at = datetime('now') WHERE product_id = ?;",
+            params: [restoredQty, it.productId]
+          });
+          // Record STOCK_ROLLBACK audit log
+          rollbackBatch.push({
+            sql: `INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, order_id, performed_by, created_at) VALUES (?, ?, ?, 'STOCK_ROLLBACK', ?, ?, ?, ?, ?, ?, datetime('now'));`,
+            params: [logId, it.productId, it.productNameAr, restoredQty, prevStock, newStock, `استرجاع مخزون لإلغاء الطلب #${order.orderNumber || order.id}`, order.id, actor]
+          });
+        }
+
+        memoryUpdates.push({
+          product,
+          newStock,
+          logRecord: {
+            id: logId,
+            productId: it.productId,
+            productName: it.productNameAr,
+            type: 'STOCK_ROLLBACK',
+            quantity: restoredQty,
+            previousStock: prevStock,
+            newStock: newStock,
+            reason: `استرجاع مخزون لإلغاء الطلب #${order.orderNumber || order.id}`,
+            orderId: order.id,
+            performedBy: actor || 'نظام إدارة الطلبات',
+            createdAt: new Date().toISOString()
+          }
+        });
+      }
+
+      // Restore coupon usage count if coupon was applied
+      const appliedCoupon = order.couponCode || (order as any).coupon_code;
+      if (appliedCoupon && this.isD1Configured()) {
+        rollbackBatch.push({
+          sql: "UPDATE coupons SET usage_count = MAX(0, usage_count - 1) WHERE UPPER(code) = UPPER(?);",
+          params: [appliedCoupon]
+        });
+      }
+
+      // Prepare updated timeline if not supplied
+      const timelineToSave = timeline || [
+        ...(order.timeline || []),
+        {
+          status: 'cancelled',
+          time: new Date().toLocaleTimeString("ar-YE", { hour: "2-digit", minute: "2-digit" }),
+          titleAr: "تم إلغاء الطلب واسترجاع المخزون",
+          titleEn: "Order Cancelled & Stock Rolled Back"
+        }
+      ];
+
+      // Mark order as cancelled AND stock rolled back inside the EXACT SAME D1 ATOMIC BATCH
+      // Uses WHERE (is_stock_rolled_back = 0 OR is_stock_rolled_back IS NULL) to guarantee idempotency!
       if (this.isD1Configured()) {
         rollbackBatch.push({
-          sql: "UPDATE products SET stock = stock + ?, updated_at = datetime('now') WHERE id = ?;",
-          params: [restoredQty, it.productId]
-        });
-        rollbackBatch.push({
-          sql: "UPDATE inventory SET current_stock = current_stock + ?, updated_at = datetime('now') WHERE product_id = ?;",
-          params: [restoredQty, it.productId]
-        });
-        rollbackBatch.push({
-          sql: `INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, order_id, performed_by, created_at) ` +
-            `VALUES (?, ?, ?, 'STOCK_ROLLBACK', ?, ?, ?, ?, ?, ?, datetime('now'));`,
-          params: [logId, it.productId, it.productNameAr, restoredQty, prevStock, newStock, `استرجاع مخزون لإلغاء الطلب #${order.orderNumber || order.id}`, order.id, actor]
+          sql: "UPDATE orders SET status = 'cancelled', is_stock_rolled_back = 1, cancelled_at = datetime('now'), driver_notes = COALESCE(?, driver_notes), timeline_json = ?, updated_at = datetime('now') WHERE (id = ? OR order_number = ?) AND (is_stock_rolled_back = 0 OR is_stock_rolled_back IS NULL);",
+          params: [driverNotes || null, JSON.stringify(timelineToSave), order.id, order.orderNumber || order.id]
         });
       }
 
-      memoryUpdates.push({
-        product,
-        newStock,
-        logRecord: {
-          id: logId,
-          productId: it.productId,
-          productName: it.productNameAr,
-          type: 'STOCK_ROLLBACK',
-          quantity: restoredQty,
-          previousStock: prevStock,
-          newStock: newStock,
-          reason: `استرجاع مخزون لإلغاء الطلب #${order.orderNumber || order.id}`,
-          orderId: order.id,
-          performedBy: actor || 'نظام إدارة الطلبات',
-          createdAt: new Date().toISOString()
+      // 6. Execute atomic batch in Cloudflare D1
+      if (this.isD1Configured()) {
+        const batchRes = await this.executeCloudflareD1BatchRaw(rollbackBatch);
+        if (!batchRes || batchRes.success === false) {
+          const errStr = (batchRes?.errors || []).map((e: any) => e.message || JSON.stringify(e)).join('; ') || 'D1 Batch execution failed';
+          console.error('[D1 Stock Rollback Error] Cloudflare D1 batch rollback failed:', errStr);
+          throw new Error(`فشلت عملية استرجاع المخزون في قاعدة البيانات Cloudflare D1: ${errStr}`);
         }
-      });
-    }
 
-    // Restore coupon usage count if coupon was applied
-    const appliedCoupon = order.couponCode || (order as any).coupon_code;
-    if (appliedCoupon && this.isD1Configured()) {
-      rollbackBatch.push({
-        sql: "UPDATE coupons SET usage_count = MAX(0, usage_count - 1) WHERE UPPER(code) = UPPER(?);",
-        params: [appliedCoupon]
-      });
-    }
-
-    // Mark order as rolled back in D1 database
-    if (this.isD1Configured()) {
-      rollbackBatch.push({
-        sql: "UPDATE orders SET is_stock_rolled_back = 1, status = 'cancelled', cancelled_at = datetime('now'), updated_at = datetime('now') WHERE id = ? OR order_number = ?;",
-        params: [order.id, order.orderNumber || order.id]
-      });
-    }
-
-    if (this.isD1Configured() && rollbackBatch.length > 0) {
-      await this.executeCloudflareD1BatchRaw(rollbackBatch);
-    } else if (process.env.NODE_ENV === 'production') {
-      throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
-    }
-
-    // ONLY after D1 execution succeeds, update memory cache
-    order.isStockRolledBack = true;
-    order.status = 'cancelled';
-    order.cancelledAt = new Date().toISOString();
-
-    if (appliedCoupon) {
-      const c = this.tables.coupons.find(cp => cp.code.toUpperCase() === appliedCoupon.toUpperCase());
-      if (c && c.usageCount && c.usageCount > 0) {
-        c.usageCount--;
+        // Verify that the orders update statement matched and updated row (not already rolled back concurrently)
+        const orderUpdateResult = batchRes.result?.[batchRes.result.length - 1];
+        const changes = orderUpdateResult?.meta?.changes ?? 1;
+        if (changes === 0) {
+          console.warn(`[D1 Stock Rollback] Order ${order.id} was already rolled back concurrently by another process.`);
+          order.isStockRolledBack = true;
+          order.status = 'cancelled';
+          return false;
+        }
+      } else if (process.env.NODE_ENV === 'production') {
+        throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
       }
-    }
 
-    for (const update of memoryUpdates) {
-      if (update.product) {
-        update.product.stock = update.newStock;
+      // 7. ONLY after Cloudflare D1 transaction fully succeeds: commit updates to memory cache
+      for (const upd of memoryUpdates) {
+        if (upd.product) {
+          upd.product.stock = upd.newStock;
+        }
+        const inv = this.tables.inventory.get(upd.logRecord.productId);
+        if (inv) {
+          inv.currentStock = upd.newStock;
+          inv.lastCountedAt = new Date().toISOString();
+        }
+        this.tables.inventory_logs.unshift(upd.logRecord);
       }
-      const inv = this.tables.inventory.get(update.logRecord.productId);
-      if (inv) {
-        inv.currentStock = update.newStock;
-        inv.lastCountedAt = new Date().toISOString();
+
+      if (appliedCoupon) {
+        const c = this.tables.coupons.find(cp => cp.code.toUpperCase() === appliedCoupon.toUpperCase());
+        if (c && typeof c.usageCount === 'number') {
+          c.usageCount = Math.max(0, c.usageCount - 1);
+        }
       }
-      this.tables.inventory_logs.unshift(update.logRecord);
+
+      order.isStockRolledBack = true;
+      order.status = 'cancelled';
+      order.cancelledAt = new Date().toISOString();
+      order.timeline = timelineToSave;
+      if (driverNotes) order.driverNotes = driverNotes;
+
+      const inMem = this.findOrderById(order.id);
+      if (inMem) {
+        inMem.isStockRolledBack = true;
+        inMem.status = 'cancelled';
+        inMem.cancelledAt = order.cancelledAt;
+        inMem.timeline = timelineToSave;
+        if (driverNotes) inMem.driverNotes = driverNotes;
+      }
+
+      // 8. Update payment status if exists to cancelled / failed
+      const pay = this.tables.payments.find(p => p.orderId === order.id);
+      if (pay && pay.status !== 'confirmed') {
+        pay.status = 'failed';
+        pay.updatedAt = new Date().toISOString();
+      }
+
+      // 9. Create Admin In-App Stock Notification
+      this.tables.notifications.unshift({
+        id: `notif-cancel-${Date.now()}`,
+        recipientRole: 'admin',
+        title: 'استرجاع مخزون - إلغاء طلب',
+        message: `تم إلغاء الطلب #${order.orderNumber || order.id} وإعادة الكميات تلقائيًا للمخزون`,
+        type: 'stock',
+        isRead: false,
+        link: `/admin/orders/${order.id}`,
+        createdAt: new Date().toISOString()
+      });
+
+      this.saveLocal();
+      console.log(`✅ [D1 Stock Rollback] Successfully rolled back stock for Order #${order.orderNumber || order.id} atomically.`);
+      return true;
+    } finally {
+      this.activeRollbacks.delete(orderKey);
     }
-
-    // 5. Update payment status if exists to cancelled / failed
-    const pay = this.tables.payments.find(p => p.orderId === order.id);
-    if (pay && pay.status !== 'confirmed') {
-      pay.status = 'failed';
-      pay.updatedAt = new Date().toISOString();
-    }
-
-    // 6. Create Admin In-App Stock Notification
-    this.tables.notifications.unshift({
-      id: `notif-cancel-${Date.now()}`,
-      recipientRole: 'admin',
-      title: 'استرجاع مخزون - إلغاء طلب',
-      message: `تم إلغاء الطلب #${order.orderNumber || order.id} وإعادة الكميات تلقائيًا للمخزون`,
-      type: 'stock',
-      isRead: false,
-      link: `/admin/orders/${order.id}`,
-      createdAt: new Date().toISOString()
-    });
-
-    this.saveLocal();
-    console.log(`✅ [D1 Stock Rollback] Successfully rolled back stock for Order ${order.orderNumber || order.id}`);
-    return true;
   }
 
   public async updateOrderDriverAsync(orderId: string, driverId: string, driverName?: string, driverPhone?: string): Promise<Order | null> {
@@ -2359,11 +2432,23 @@ class D1DatabaseAccessLayer {
       }
     }
 
-    // Execute Stock Rollback if transitioning to 'cancelled' from a non-cancelled status
+    // Execute Stock Rollback atomically if transitioning to 'cancelled'
     if (status === 'cancelled') {
-      if (previousStatus !== 'cancelled' && !order.isStockRolledBack) {
-        await this.executeStockRollback(order, actor);
+      if (previousStatus === 'cancelled' && order.isStockRolledBack) {
+        return order;
       }
+      const now = new Date();
+      const timeFormatted = now.toLocaleTimeString("ar-YE", { hour: "2-digit", minute: "2-digit" });
+      const newTimeline = [...(order.timeline || [])];
+      newTimeline.push({
+        status: 'cancelled',
+        time: timeFormatted,
+        titleAr: "تم إلغاء الطلب واسترجاع المخزون",
+        titleEn: "Order Cancelled & Stock Rolled Back"
+      });
+
+      await this.executeStockRollback(order, actor, driverNotes, newTimeline);
+      return order;
     }
 
     let finalDriverId = order.driverId;
