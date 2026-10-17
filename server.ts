@@ -134,6 +134,36 @@ function requireRoles(allowedRoles: string[]) {
   };
 }
 
+// Universal D1 Initialization Middleware:
+// Guarantees Cloudflare D1 tables are initialized in EVERY environment (Vercel Serverless Functions, Docker, Cloud Run)
+// before any route handler reads data, preventing cold-start empty-memory anomalies.
+let d1InitializationPromise: Promise<void> | null = null;
+app.use(async (req: Request, res: Response, next: NextFunction) => {
+  if (req.path.startsWith('/assets/') || req.path.endsWith('.js') || req.path.endsWith('.css') || req.path.endsWith('.ico')) {
+    return next();
+  }
+
+  if (!d1InitializationPromise) {
+    d1InitializationPromise = db.init().catch(err => {
+      console.warn("⚠️ [D1 Middleware Init] Warning during lazy database initialization:", err.message);
+      d1InitializationPromise = null; // allow retry on next request if transient failure
+      throw err;
+    });
+  }
+
+  try {
+    await d1InitializationPromise;
+  } catch (err: any) {
+    if (process.env.NODE_ENV === 'production' && !d1.isD1Configured()) {
+      return res.status(503).json({
+        success: false,
+        message: "قاعدة بيانات Cloudflare D1 غير مهيأة أو غير متصلة في بيئة الإنتاج"
+      });
+    }
+  }
+  next();
+});
+
 app.use(authenticateUser);
 
 // Rate limiters for security protection against brute force and abuse
@@ -150,9 +180,9 @@ const orderRateLimiter = createRateLimiter({
 });
 
 const trackingRateLimiter = createRateLimiter({
-  windowMs: 5 * 60 * 1000,
-  maxRequests: 60,
-  message: "تم تجاوز الحد المسموح للاستعلام عن الطلبات. يرجى الانتظار قليلاً."
+  windowMs: 10 * 60 * 1000,
+  maxRequests: 25,
+  message: "تم تجاوز الحد المسموح للاستعلام عن الطلبات. يرجى الانتظار 10 دقائق."
 });
 
 const couponRateLimiter = createRateLimiter({
@@ -179,6 +209,15 @@ app.post("/api/auth/quick-customer", authRateLimiter, async (req, res) => {
     const safeName = sanitizeInputString(name || '', 80) || `عميل الذهب الأسود (${cleanPhone.slice(-4)})`;
     let user = await db.findUserByPhoneAsync(cleanPhone);
 
+    // SECURITY HARDENING: If an account with this phone already exists and is an administrative or delivery account,
+    // REJECT IMMEDIATELY! Staff and drivers must use their dedicated PIN login portals.
+    if (user && ['owner', 'admin', 'employee', 'delivery', 'mandoub'].includes(user.role)) {
+      return res.status(403).json({
+        success: false,
+        message: "هذا الرقم مسجل كحساب إداري أو حساب توصيل. يرجى تسجيل الدخول عبر بوابة الإدارة أو بوابة المناديب باستخدام رمز PIN."
+      });
+    }
+
     if (!user) {
       user = {
         id: "usr-" + Date.now(),
@@ -196,9 +235,10 @@ app.post("/api/auth/quick-customer", authRateLimiter, async (req, res) => {
       })) || user;
     }
 
+    // STRICT ROLE GUARANTEE: Force role to 'customer' exclusively. Never allow quick-customer to issue privileged tokens!
     const token = generateToken({
       userId: user.id,
-      role: user.role,
+      role: 'customer',
       phone: user.phone,
       name: user.name
     });
@@ -210,7 +250,7 @@ app.post("/api/auth/quick-customer", authRateLimiter, async (req, res) => {
         id: user.id,
         name: user.name,
         phone: user.phone,
-        role: user.role
+        role: 'customer'
       }
     });
   } catch (err: any) {
@@ -1228,33 +1268,37 @@ app.get("/api/my-orders", async (req: AuthenticatedRequest, res) => {
   return res.status(403).json({ success: false, message: "غير مصرح لك بعرض هذه الطلبات" });
 });
 
-// Order Public Tracking (Single Order Status & Timeline by Order Number or ID)
+// Order Public Tracking (Single Order Status & Milestone Timeline by Exact Order Number or ID)
 app.get("/api/orders/track/:query", trackingRateLimiter, async (req, res) => {
   const rawQ = req.params.query.trim().toUpperCase();
   const q = rawQ.replace(/^#/, '').trim();
-  if (!q || q.length < 2) {
-    return res.status(400).json({ success: false, message: "يرجى إدخال رقم طلب صحيح" });
+  if (!q || q.length < 4) {
+    return res.status(400).json({ success: false, message: "يرجى إدخال رقم الطلب كاملاً (مثال: BG-2026-1049)" });
   }
 
-  // Strict matching only: full ID, exact orderNumber, or numeric suffix matching exact BG-2026-XXXX format
+  // Strict matching only: full ID, exact orderNumber, or exact numeric suffix (e.g. 1049 -> BG-2026-1049)
+  // NEVER allow fuzzy substring or partial endsWith probing to prevent enumeration of other customers' orders!
   const allOrders = await db.getOrdersAsync();
   const order = allOrders.find(o => {
     const oId = (o.id || '').toUpperCase();
     const oNum = (o.orderNumber || '').toUpperCase();
     return oId === q || 
       oNum === q ||
-      oNum === `BG-2026-${q}` ||
-      (q.length >= 3 && oNum.endsWith(q));
+      (/^\d+$/.test(q) && oNum === `BG-2026-${q}`);
   });
 
   if (!order) {
-    return res.status(404).json({ success: false, message: "لم يتم العثور على الطلب. تأكد من رقم الطلب." });
+    return res.status(404).json({ success: false, message: "لم يتم العثور على الطلب. تأكد من إدخال رقم الطلب كاملاً." });
   }
 
-  // Sanitized public tracking response: strictly NO customer phone, full street, landmark, or driver phone
-  const itemsSummary = Array.isArray(order.items) 
-    ? order.items.map(it => `${(it as any).productNameAr || (it as any).product?.nameAr || 'منتج'} (${it.quantity || 1})`).join('، ')
-    : '';
+  // Sanitized public tracking response: strictly NO customer phone, street, landmark, driver name, or driver phone
+  // Only public status milestones without private internal notes
+  const publicTimeline = (order.timeline || []).map((t: any) => ({
+    status: t.status,
+    titleAr: t.titleAr || t.title,
+    titleEn: t.titleEn,
+    time: t.time
+  }));
 
   res.json({
     success: true,
@@ -1262,10 +1306,8 @@ app.get("/api/orders/track/:query", trackingRateLimiter, async (req, res) => {
       orderNumber: order.orderNumber,
       status: order.status,
       date: order.date,
-      itemsSummary,
-      district: order.address?.district || (order as any).district || "صنعاء",
-      driverName: order.driverName || null,
-      timeline: order.timeline || []
+      itemsCount: Array.isArray(order.items) ? order.items.reduce((acc, it) => acc + (Number(it.quantity) || 1), 0) : 1,
+      timeline: publicTimeline
     }
   });
 });

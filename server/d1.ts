@@ -2586,59 +2586,85 @@ class D1DatabaseAccessLayer {
     performedBy: string;
     orderId?: string;
   }): Promise<{ product: Product; transaction: InventoryLogRecord }> {
-    const product = this.findProductById(params.productId);
-    if (!product) throw new Error("المنتج غير موجود");
-
-    if (params.newStock < 0) {
-      throw new Error("لا يمكن تعيين المخزون لقيمة سالبة");
-    }
+    // 1. Fetch product asynchronously from Cloudflare D1 if not in memory (fixes Vercel cold-start empty memory)
+    const product = await this.findProductByIdAsync(params.productId) || this.findProductById(params.productId);
+    if (!product) throw new Error("المنتج غير موجود في قاعدة البيانات");
 
     const txId = 'tx-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+    const delta = params.quantity; // positive or negative delta
+    const isAbsoluteAdjustment = params.type === 'adjustment';
 
-    // Execute atomically on Cloudflare D1 via compound batch
+    // 2. Execute atomically on Cloudflare D1 via compound batch
     if (this.isD1Configured()) {
+      let updateSql = "";
+      let updateParams: any[] = [];
+      let invSql = "";
+      let invParams: any[] = [];
+
+      if (isAbsoluteAdjustment) {
+        // Optimistic concurrency control for absolute stock adjustment:
+        // Updates only if current stock matches the read previousStock, preventing overwriting concurrent edits
+        updateSql = "UPDATE products SET stock = ?, updated_at = datetime('now') WHERE id = ? AND stock = ?;";
+        updateParams = [params.newStock, params.productId, params.previousStock];
+        invSql = "UPDATE inventory SET current_stock = ?, updated_at = datetime('now') WHERE product_id = ?;";
+        invParams = [params.newStock, params.productId];
+      } else {
+        // Relative atomic update for supply, damage, sale, return, etc.:
+        // Updates stock by delta (+/-) directly in the database, eliminating lost updates between concurrent transactions
+        updateSql = "UPDATE products SET stock = stock + ?, updated_at = datetime('now') WHERE id = ?;";
+        updateParams = [delta, params.productId];
+        invSql = "UPDATE inventory SET current_stock = current_stock + ?, updated_at = datetime('now') WHERE product_id = ?;";
+        invParams = [delta, params.productId];
+      }
+
+      const logSql = isAbsoluteAdjustment
+        ? "INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, order_id, performed_by, created_at) " +
+          "SELECT ?, id, name_ar, ?, ?, ?, stock, ?, ?, ?, datetime('now') FROM products WHERE id = ?;"
+        : "INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, order_id, performed_by, created_at) " +
+          "SELECT ?, id, name_ar, ?, ?, (stock - ?), stock, ?, ?, ?, datetime('now') FROM products WHERE id = ?;";
+
+      const logParams = isAbsoluteAdjustment
+        ? [txId, params.type, delta, params.previousStock, params.reason, params.orderId || null, params.performedBy, params.productId]
+        : [txId, params.type, delta, delta, params.reason, params.orderId || null, params.performedBy, params.productId];
+
       const batchResult = await this.executeCloudflareD1BatchRaw([
-        {
-          sql: "UPDATE products SET stock = ?, updated_at = datetime('now') WHERE id = ?;",
-          params: [params.newStock, params.productId]
-        },
-        {
-          sql: "UPDATE inventory SET current_stock = ?, updated_at = datetime('now') WHERE product_id = ?;",
-          params: [params.newStock, params.productId]
-        },
-        {
-          sql: "INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, order_id, performed_by, created_at) " +
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'));",
-          params: [
-            txId,
-            params.productId,
-            product.nameAr,
-            params.type,
-            params.quantity,
-            params.previousStock,
-            params.newStock,
-            params.reason,
-            params.orderId || null,
-            params.performedBy
-          ]
-        }
+        { sql: updateSql, params: updateParams },
+        { sql: invSql, params: invParams },
+        { sql: logSql, params: logParams }
       ]);
 
       if (!batchResult || !batchResult.success) {
         const errMsg = (batchResult?.errors || []).map((e: any) => e.message).join('; ') || 'Batch inventory update failed';
         throw new Error(`فشل تحديث المخزون في Cloudflare D1: ${errMsg}`);
       }
+
+      // Check if optimistic lock failed for absolute adjustment
+      if (isAbsoluteAdjustment) {
+        const productUpdateRes = batchResult.result?.[0];
+        if (productUpdateRes?.meta?.changes === 0) {
+          throw new Error("تعذر تعديل المخزون لأن رصيد المنتج تغيّر بالتزامن من قبل مستخدم آخر. يرجى تحديث الصفحة والمحاولة مجدداً.");
+        }
+      }
     } else if (process.env.NODE_ENV === 'production') {
       throw new Error('قاعدة بيانات Cloudflare D1 غير مهيأة في بيئة الإنتاج');
     }
 
+    // 3. Query the authoritative fresh stock from D1 to update in-memory cache perfectly
+    let freshStock = params.newStock;
+    if (this.isD1Configured()) {
+      const freshRows = await this.executeCloudflareD1Query("SELECT stock FROM products WHERE id = ? LIMIT 1;", [params.productId]);
+      if (freshRows && freshRows.length > 0) {
+        freshStock = Number(freshRows[0].stock ?? params.newStock);
+      }
+    }
+
     // Update in-memory state ONLY after D1 batch succeeds
-    product.stock = params.newStock;
+    product.stock = freshStock;
     product.updatedAt = new Date().toISOString();
 
     const inv = this.tables.inventory.get(params.productId);
     if (inv) {
-      inv.currentStock = params.newStock;
+      inv.currentStock = freshStock;
       inv.lastCountedAt = new Date().toISOString();
     }
 

@@ -2574,50 +2574,59 @@ var D1DatabaseAccessLayer = class {
     });
   }
   async adjustProductStock(params) {
-    const product = this.findProductById(params.productId);
-    if (!product) throw new Error("\u0627\u0644\u0645\u0646\u062A\u062C \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F");
-    if (params.newStock < 0) {
-      throw new Error("\u0644\u0627 \u064A\u0645\u0643\u0646 \u062A\u0639\u064A\u064A\u0646 \u0627\u0644\u0645\u062E\u0632\u0648\u0646 \u0644\u0642\u064A\u0645\u0629 \u0633\u0627\u0644\u0628\u0629");
-    }
+    const product = await this.findProductByIdAsync(params.productId) || this.findProductById(params.productId);
+    if (!product) throw new Error("\u0627\u0644\u0645\u0646\u062A\u062C \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A");
     const txId = "tx-" + Date.now() + "-" + Math.floor(Math.random() * 1e3);
+    const delta = params.quantity;
+    const isAbsoluteAdjustment = params.type === "adjustment";
     if (this.isD1Configured()) {
+      let updateSql = "";
+      let updateParams = [];
+      let invSql = "";
+      let invParams = [];
+      if (isAbsoluteAdjustment) {
+        updateSql = "UPDATE products SET stock = ?, updated_at = datetime('now') WHERE id = ? AND stock = ?;";
+        updateParams = [params.newStock, params.productId, params.previousStock];
+        invSql = "UPDATE inventory SET current_stock = ?, updated_at = datetime('now') WHERE product_id = ?;";
+        invParams = [params.newStock, params.productId];
+      } else {
+        updateSql = "UPDATE products SET stock = stock + ?, updated_at = datetime('now') WHERE id = ?;";
+        updateParams = [delta, params.productId];
+        invSql = "UPDATE inventory SET current_stock = current_stock + ?, updated_at = datetime('now') WHERE product_id = ?;";
+        invParams = [delta, params.productId];
+      }
+      const logSql = isAbsoluteAdjustment ? "INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, order_id, performed_by, created_at) SELECT ?, id, name_ar, ?, ?, ?, stock, ?, ?, ?, datetime('now') FROM products WHERE id = ?;" : "INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, order_id, performed_by, created_at) SELECT ?, id, name_ar, ?, ?, (stock - ?), stock, ?, ?, ?, datetime('now') FROM products WHERE id = ?;";
+      const logParams = isAbsoluteAdjustment ? [txId, params.type, delta, params.previousStock, params.reason, params.orderId || null, params.performedBy, params.productId] : [txId, params.type, delta, delta, params.reason, params.orderId || null, params.performedBy, params.productId];
       const batchResult = await this.executeCloudflareD1BatchRaw([
-        {
-          sql: "UPDATE products SET stock = ?, updated_at = datetime('now') WHERE id = ?;",
-          params: [params.newStock, params.productId]
-        },
-        {
-          sql: "UPDATE inventory SET current_stock = ?, updated_at = datetime('now') WHERE product_id = ?;",
-          params: [params.newStock, params.productId]
-        },
-        {
-          sql: "INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, order_id, performed_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'));",
-          params: [
-            txId,
-            params.productId,
-            product.nameAr,
-            params.type,
-            params.quantity,
-            params.previousStock,
-            params.newStock,
-            params.reason,
-            params.orderId || null,
-            params.performedBy
-          ]
-        }
+        { sql: updateSql, params: updateParams },
+        { sql: invSql, params: invParams },
+        { sql: logSql, params: logParams }
       ]);
       if (!batchResult || !batchResult.success) {
         const errMsg = (batchResult?.errors || []).map((e) => e.message).join("; ") || "Batch inventory update failed";
         throw new Error(`\u0641\u0634\u0644 \u062A\u062D\u062F\u064A\u062B \u0627\u0644\u0645\u062E\u0632\u0648\u0646 \u0641\u064A Cloudflare D1: ${errMsg}`);
       }
+      if (isAbsoluteAdjustment) {
+        const productUpdateRes = batchResult.result?.[0];
+        if (productUpdateRes?.meta?.changes === 0) {
+          throw new Error("\u062A\u0639\u0630\u0631 \u062A\u0639\u062F\u064A\u0644 \u0627\u0644\u0645\u062E\u0632\u0648\u0646 \u0644\u0623\u0646 \u0631\u0635\u064A\u062F \u0627\u0644\u0645\u0646\u062A\u062C \u062A\u063A\u064A\u0651\u0631 \u0628\u0627\u0644\u062A\u0632\u0627\u0645\u0646 \u0645\u0646 \u0642\u0628\u0644 \u0645\u0633\u062A\u062E\u062F\u0645 \u0622\u062E\u0631. \u064A\u0631\u062C\u0649 \u062A\u062D\u062F\u064A\u062B \u0627\u0644\u0635\u0641\u062D\u0629 \u0648\u0627\u0644\u0645\u062D\u0627\u0648\u0644\u0629 \u0645\u062C\u062F\u062F\u0627\u064B.");
+        }
+      }
     } else if (process.env.NODE_ENV === "production") {
       throw new Error("\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u063A\u064A\u0631 \u0645\u0647\u064A\u0623\u0629 \u0641\u064A \u0628\u064A\u0626\u0629 \u0627\u0644\u0625\u0646\u062A\u0627\u062C");
     }
-    product.stock = params.newStock;
+    let freshStock = params.newStock;
+    if (this.isD1Configured()) {
+      const freshRows = await this.executeCloudflareD1Query("SELECT stock FROM products WHERE id = ? LIMIT 1;", [params.productId]);
+      if (freshRows && freshRows.length > 0) {
+        freshStock = Number(freshRows[0].stock ?? params.newStock);
+      }
+    }
+    product.stock = freshStock;
     product.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
     const inv = this.tables.inventory.get(params.productId);
     if (inv) {
-      inv.currentStock = params.newStock;
+      inv.currentStock = freshStock;
       inv.lastCountedAt = (/* @__PURE__ */ new Date()).toISOString();
     }
     const logRecord = {
@@ -3672,6 +3681,30 @@ function requireRoles(allowedRoles) {
     return next();
   };
 }
+var d1InitializationPromise = null;
+app.use(async (req, res, next) => {
+  if (req.path.startsWith("/assets/") || req.path.endsWith(".js") || req.path.endsWith(".css") || req.path.endsWith(".ico")) {
+    return next();
+  }
+  if (!d1InitializationPromise) {
+    d1InitializationPromise = db.init().catch((err) => {
+      console.warn("\u26A0\uFE0F [D1 Middleware Init] Warning during lazy database initialization:", err.message);
+      d1InitializationPromise = null;
+      throw err;
+    });
+  }
+  try {
+    await d1InitializationPromise;
+  } catch (err) {
+    if (process.env.NODE_ENV === "production" && !d1.isD1Configured()) {
+      return res.status(503).json({
+        success: false,
+        message: "\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u063A\u064A\u0631 \u0645\u0647\u064A\u0623\u0629 \u0623\u0648 \u063A\u064A\u0631 \u0645\u062A\u0635\u0644\u0629 \u0641\u064A \u0628\u064A\u0626\u0629 \u0627\u0644\u0625\u0646\u062A\u0627\u062C"
+      });
+    }
+  }
+  next();
+});
 app.use(authenticateUser);
 var authRateLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1e3,
@@ -3684,9 +3717,9 @@ var orderRateLimiter = createRateLimiter({
   message: "\u062A\u0645 \u0627\u0633\u062A\u0642\u0628\u0627\u0644 \u0639\u062F\u062F \u0643\u0628\u064A\u0631 \u0645\u0646 \u0627\u0644\u0637\u0644\u0628\u0627\u062A \u0641\u064A \u0648\u0642\u062A \u0642\u0635\u064A\u0631. \u064A\u0631\u062C\u0649 \u0627\u0644\u0627\u0646\u062A\u0638\u0627\u0631 \u0642\u0644\u064A\u0644\u0627\u064B \u0648\u0627\u0644\u0645\u062D\u0627\u0648\u0644\u0629 \u0645\u062C\u062F\u062F\u0627\u064B."
 });
 var trackingRateLimiter = createRateLimiter({
-  windowMs: 5 * 60 * 1e3,
-  maxRequests: 60,
-  message: "\u062A\u0645 \u062A\u062C\u0627\u0648\u0632 \u0627\u0644\u062D\u062F \u0627\u0644\u0645\u0633\u0645\u0648\u062D \u0644\u0644\u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0639\u0646 \u0627\u0644\u0637\u0644\u0628\u0627\u062A. \u064A\u0631\u062C\u0649 \u0627\u0644\u0627\u0646\u062A\u0638\u0627\u0631 \u0642\u0644\u064A\u0644\u0627\u064B."
+  windowMs: 10 * 60 * 1e3,
+  maxRequests: 25,
+  message: "\u062A\u0645 \u062A\u062C\u0627\u0648\u0632 \u0627\u0644\u062D\u062F \u0627\u0644\u0645\u0633\u0645\u0648\u062D \u0644\u0644\u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0639\u0646 \u0627\u0644\u0637\u0644\u0628\u0627\u062A. \u064A\u0631\u062C\u0649 \u0627\u0644\u0627\u0646\u062A\u0638\u0627\u0631 10 \u062F\u0642\u0627\u0626\u0642."
 });
 var couponRateLimiter = createRateLimiter({
   windowMs: 5 * 60 * 1e3,
@@ -3704,6 +3737,12 @@ app.post("/api/auth/quick-customer", authRateLimiter, async (req, res) => {
     const cleanPhone = phoneValidation.normalized;
     const safeName = sanitizeInputString(name || "", 80) || `\u0639\u0645\u064A\u0644 \u0627\u0644\u0630\u0647\u0628 \u0627\u0644\u0623\u0633\u0648\u062F (${cleanPhone.slice(-4)})`;
     let user = await db.findUserByPhoneAsync(cleanPhone);
+    if (user && ["owner", "admin", "employee", "delivery", "mandoub"].includes(user.role)) {
+      return res.status(403).json({
+        success: false,
+        message: "\u0647\u0630\u0627 \u0627\u0644\u0631\u0642\u0645 \u0645\u0633\u062C\u0644 \u0643\u062D\u0633\u0627\u0628 \u0625\u062F\u0627\u0631\u064A \u0623\u0648 \u062D\u0633\u0627\u0628 \u062A\u0648\u0635\u064A\u0644. \u064A\u0631\u062C\u0649 \u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u062F\u062E\u0648\u0644 \u0639\u0628\u0631 \u0628\u0648\u0627\u0628\u0629 \u0627\u0644\u0625\u062F\u0627\u0631\u0629 \u0623\u0648 \u0628\u0648\u0627\u0628\u0629 \u0627\u0644\u0645\u0646\u0627\u062F\u064A\u0628 \u0628\u0627\u0633\u062A\u062E\u062F\u0627\u0645 \u0631\u0645\u0632 PIN."
+      });
+    }
     if (!user) {
       user = {
         id: "usr-" + Date.now(),
@@ -3722,7 +3761,7 @@ app.post("/api/auth/quick-customer", authRateLimiter, async (req, res) => {
     }
     const token = generateToken({
       userId: user.id,
-      role: user.role,
+      role: "customer",
       phone: user.phone,
       name: user.name
     });
@@ -3733,7 +3772,7 @@ app.post("/api/auth/quick-customer", authRateLimiter, async (req, res) => {
         id: user.id,
         name: user.name,
         phone: user.phone,
-        role: user.role
+        role: "customer"
       }
     });
   } catch (err) {
@@ -4567,29 +4606,32 @@ app.get("/api/my-orders", async (req, res) => {
 app.get("/api/orders/track/:query", trackingRateLimiter, async (req, res) => {
   const rawQ = req.params.query.trim().toUpperCase();
   const q = rawQ.replace(/^#/, "").trim();
-  if (!q || q.length < 2) {
-    return res.status(400).json({ success: false, message: "\u064A\u0631\u062C\u0649 \u0625\u062F\u062E\u0627\u0644 \u0631\u0642\u0645 \u0637\u0644\u0628 \u0635\u062D\u064A\u062D" });
+  if (!q || q.length < 4) {
+    return res.status(400).json({ success: false, message: "\u064A\u0631\u062C\u0649 \u0625\u062F\u062E\u0627\u0644 \u0631\u0642\u0645 \u0627\u0644\u0637\u0644\u0628 \u0643\u0627\u0645\u0644\u0627\u064B (\u0645\u062B\u0627\u0644: BG-2026-1049)" });
   }
   const allOrders = await db.getOrdersAsync();
   const order = allOrders.find((o) => {
     const oId = (o.id || "").toUpperCase();
     const oNum = (o.orderNumber || "").toUpperCase();
-    return oId === q || oNum === q || oNum === `BG-2026-${q}` || q.length >= 3 && oNum.endsWith(q);
+    return oId === q || oNum === q || /^\d+$/.test(q) && oNum === `BG-2026-${q}`;
   });
   if (!order) {
-    return res.status(404).json({ success: false, message: "\u0644\u0645 \u064A\u062A\u0645 \u0627\u0644\u0639\u062B\u0648\u0631 \u0639\u0644\u0649 \u0627\u0644\u0637\u0644\u0628. \u062A\u0623\u0643\u062F \u0645\u0646 \u0631\u0642\u0645 \u0627\u0644\u0637\u0644\u0628." });
+    return res.status(404).json({ success: false, message: "\u0644\u0645 \u064A\u062A\u0645 \u0627\u0644\u0639\u062B\u0648\u0631 \u0639\u0644\u0649 \u0627\u0644\u0637\u0644\u0628. \u062A\u0623\u0643\u062F \u0645\u0646 \u0625\u062F\u062E\u0627\u0644 \u0631\u0642\u0645 \u0627\u0644\u0637\u0644\u0628 \u0643\u0627\u0645\u0644\u0627\u064B." });
   }
-  const itemsSummary = Array.isArray(order.items) ? order.items.map((it) => `${it.productNameAr || it.product?.nameAr || "\u0645\u0646\u062A\u062C"} (${it.quantity || 1})`).join("\u060C ") : "";
+  const publicTimeline = (order.timeline || []).map((t) => ({
+    status: t.status,
+    titleAr: t.titleAr || t.title,
+    titleEn: t.titleEn,
+    time: t.time
+  }));
   res.json({
     success: true,
     data: {
       orderNumber: order.orderNumber,
       status: order.status,
       date: order.date,
-      itemsSummary,
-      district: order.address?.district || order.district || "\u0635\u0646\u0639\u0627\u0621",
-      driverName: order.driverName || null,
-      timeline: order.timeline || []
+      itemsCount: Array.isArray(order.items) ? order.items.reduce((acc, it) => acc + (Number(it.quantity) || 1), 0) : 1,
+      timeline: publicTimeline
     }
   });
 });
