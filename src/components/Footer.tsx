@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Logo } from './Logo';
 import { 
   MessageSquare, Mail, MapPin, Phone, ShieldCheck, 
-  Truck, Award, FileText, CheckCircle2, X, Sparkles, CreditCard
+  Truck, Award, FileText, CheckCircle2, X, Sparkles, CreditCard, Lock
 } from 'lucide-react';
 import { Language } from '../types';
 
@@ -197,14 +197,40 @@ export const Footer: React.FC<FooterProps> = ({
       </div>
 
       {/* Bottom Copyright Strip */}
-      <div className="border-t border-[#14141E] py-4 bg-[#060609] text-center text-[11px] text-slate-500">
-        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
+      <div className="border-t border-[#14141E] py-4 bg-[#060609] text-[11px] text-slate-500">
+        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3 text-center sm:text-right">
           <span>
             شركة فحم الذهب الأسود © {new Date().getFullYear()} • جميع الحقوق محفوظة لعلامة الذهب الأسود المسجلة
           </span>
-          <span className="text-slate-600">
-            فحم نباتي طبيعي فاخر • صنعاء، الجمهورية اليمنية
-          </span>
+          <div className="flex items-center gap-3">
+            <span className="text-slate-600">
+              صنعاء، الجمهورية اليمنية
+            </span>
+            <span className="text-slate-800">•</span>
+            <button
+              type="button"
+              onClick={onOpenAdmin}
+              className="text-slate-500 hover:text-amber-400 transition-colors flex items-center gap-1 cursor-pointer"
+              title="دخول إدارة المتجر"
+            >
+              <Lock className="w-3 h-3 text-slate-500" />
+              <span>بوابة الإدارة</span>
+            </button>
+            {onOpenMandoub && (
+              <>
+                <span className="text-slate-800">•</span>
+                <button
+                  type="button"
+                  onClick={onOpenMandoub}
+                  className="text-slate-500 hover:text-emerald-400 transition-colors flex items-center gap-1 cursor-pointer"
+                  title="دخول مناديب التوصيل"
+                >
+                  <Truck className="w-3 h-3 text-slate-500" />
+                  <span>بوابة المناديب</span>
+                </button>
+              </>
+            )}
+          </div>
         </div>
       </div>
 

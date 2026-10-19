@@ -1010,19 +1010,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
 
         {/* 11 Main Navigation Tabs - Fully Padded & Non-Clipping */}
-        <div className="shrink-0 flex items-center gap-1.5 overflow-x-auto pb-2.5 pt-1.5 px-0.5 border-b border-slate-800 text-xs font-bold scroll-smooth select-none">
+        <div className="shrink-0 flex items-center gap-2 overflow-x-auto py-2.5 px-2 border-b border-slate-800 text-xs font-bold scroll-smooth select-none" dir="rtl">
           {[
-            { id: 'dashboard', label: 'المؤشرات العامة', icon: BarChart3 },
-            { id: 'orders', label: `الطلبات (${orders.length}) ${newOrdersCount > 0 ? `🚨 (${newOrdersCount} جديد)` : ''}`, icon: ShoppingCart },
-            { id: 'products', label: `المنتجات (${products.length})`, icon: Package },
-            { id: 'inventory', label: `المخزون والجرد (${lowStockProducts.length > 0 ? `⚠️ ${lowStockProducts.length}` : 'سليم'})`, icon: Layers },
-            { id: 'customers', label: `العملاء (${displayedCustomers.length})`, icon: Users },
-            { id: 'fleet', label: `المناديب (${deliveryAgents.length})`, icon: Truck },
-            { id: 'coupons', label: `الكوبونات (${campaigns.length})`, icon: Tag },
-            { id: 'reviews', label: `التقييمات (${reviews.length})`, icon: MessageSquare },
-            { id: 'marketing', label: 'الصور والهوية والمعرض', icon: Sparkles },
-            { id: 'reports', label: 'التقارير المالية', icon: TrendingUp },
-            { id: 'settings', label: 'إعدادات المتجر', icon: Settings }
+            { id: 'dashboard', title: 'المؤشرات العامة', icon: BarChart3 },
+            { 
+              id: 'orders', 
+              title: 'الطلبات', 
+              badge: `${orders.length}${newOrdersCount > 0 ? ` (+${newOrdersCount})` : ''}`, 
+              badgeColor: newOrdersCount > 0 ? 'bg-rose-500 text-white' : undefined,
+              icon: ShoppingCart 
+            },
+            { id: 'products', title: 'المنتجات', badge: `${products.length}`, icon: Package },
+            { 
+              id: 'inventory', 
+              title: 'المخزون والجرد', 
+              badge: lowStockProducts.length > 0 ? `تنبيه (${lowStockProducts.length})` : 'سليم', 
+              badgeColor: lowStockProducts.length > 0 ? 'bg-amber-500/30 text-amber-300 border border-amber-500/50' : undefined,
+              icon: Layers 
+            },
+            { id: 'customers', title: 'العملاء', badge: `${displayedCustomers.length}`, icon: Users },
+            { id: 'fleet', title: 'المناديب', badge: `${deliveryAgents.length}`, icon: Truck },
+            { id: 'coupons', title: 'الكوبونات', badge: `${campaigns.length}`, icon: Tag },
+            { id: 'reviews', title: 'التقييمات', badge: `${reviews.length}`, icon: MessageSquare },
+            { id: 'marketing', title: 'معرض الصور والهوية', icon: Sparkles },
+            { id: 'reports', title: 'التقارير المالية', icon: TrendingUp },
+            { id: 'settings', title: 'إعدادات المتجر', icon: Settings }
           ].map((t) => {
             const Icon = t.icon;
             const isActive = activeTab === t.id;
@@ -1030,14 +1042,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <button
                 key={t.id}
                 onClick={() => setActiveTab(t.id as any)}
-                className={`shrink-0 whitespace-nowrap px-3 py-2 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer text-xs leading-normal ${
+                className={`shrink-0 whitespace-nowrap px-3.5 py-2.5 rounded-xl transition-all flex items-center gap-2 cursor-pointer text-xs font-bold min-h-[42px] leading-normal ${
                   isActive
                     ? 'bg-amber-500 text-slate-950 font-black shadow-md shadow-amber-500/20'
-                    : 'bg-slate-900/80 hover:bg-slate-800 text-slate-300 border border-slate-800'
+                    : 'bg-slate-900/90 hover:bg-slate-800 text-slate-200 border border-slate-800/80 hover:border-amber-500/30'
                 }`}
               >
-                <Icon className="w-3.5 h-3.5 shrink-0" />
-                <span className="leading-tight">{t.label}</span>
+                <Icon className="w-4 h-4 shrink-0" />
+                <span className="leading-normal">{t.title}</span>
+                {t.badge && (
+                  <span className={`px-2 py-0.5 rounded-md text-[11px] font-black shrink-0 ${
+                    t.badgeColor 
+                      ? t.badgeColor 
+                      : isActive 
+                        ? 'bg-slate-950/20 text-slate-950' 
+                        : 'bg-slate-800 text-amber-300 border border-slate-700/60'
+                  }`}>
+                    {t.badge}
+                  </span>
+                )}
               </button>
             );
           })}
