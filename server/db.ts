@@ -3,10 +3,10 @@ import path from 'path';
 import crypto from 'crypto';
 import { Product, Order, Review, Coupon, DeliveryAgent, StoreSettings, GalleryItem } from '../src/types';
 import { d1, CLOUDFLARE_CONFIG, VALID_ORDER_STATUS_TRANSITIONS } from './d1';
-import type { UserAccount, CustomerRecord, OrderItemRecord, InventoryLogRecord } from './d1';
+import type { UserAccount, CustomerRecord, OrderItemRecord, InventoryLogRecord, PaymentRecord, NotificationRecord } from './d1';
 import { hashSecret, getJwtSecret, timingSafeEqual, normalizeDigits, validateYemeniPhone, sanitizeInputString, generateToken, verifyToken, createRateLimiter } from './security';
 
-export type { UserAccount, CustomerRecord, OrderItemRecord, InventoryLogRecord };
+export type { UserAccount, CustomerRecord, OrderItemRecord, InventoryLogRecord, PaymentRecord, NotificationRecord };
 export { CLOUDFLARE_CONFIG, VALID_ORDER_STATUS_TRANSITIONS, hashSecret, getJwtSecret, timingSafeEqual, normalizeDigits, validateYemeniPhone, sanitizeInputString, generateToken, verifyToken, createRateLimiter };
 
 export interface InventoryTransaction {
@@ -117,7 +117,7 @@ class DatabaseProxy {
   }
 
   public async updateUserAsync(id: string, updates: Partial<UserAccount>): Promise<UserAccount | null> {
-    return this.updateUser(id, updates);
+    return d1.updateUserAsync(id, updates);
   }
 
   // Customers (CRM)
@@ -439,6 +439,56 @@ class DatabaseProxy {
       const hasProduct = order.items.some(it => it.productId === productId);
       return isMatchPhone && isDelivered && hasProduct;
     });
+  }
+
+  // Payments
+  public async getPaymentsAsync(orderId?: string): Promise<PaymentRecord[]> {
+    return d1.getPaymentsAsync(orderId);
+  }
+
+  public async confirmOrderPaymentAsync(params: {
+    orderId: string;
+    amount?: number;
+    method?: string;
+    referenceNumber?: string;
+    proofImageUrl?: string;
+    notes?: string;
+    actor: string;
+  }) {
+    return d1.confirmOrderPaymentAsync(params);
+  }
+
+  public async refundOrderPaymentAsync(params: {
+    orderId: string;
+    reason?: string;
+    actor: string;
+  }) {
+    return d1.refundOrderPaymentAsync(params);
+  }
+
+  // Notifications
+  public async getNotificationsAsync(filter: { role: string; userId?: string; phone?: string; limit?: number }): Promise<NotificationRecord[]> {
+    return d1.getNotificationsAsync(filter);
+  }
+
+  public async createNotificationAsync(input: {
+    id?: string;
+    recipientRole: string;
+    recipientId?: string | null;
+    title: string;
+    message: string;
+    type?: 'order' | 'stock' | 'alert' | 'system';
+    link?: string;
+  }): Promise<NotificationRecord> {
+    return d1.createNotificationAsync(input);
+  }
+
+  public async markNotificationReadAsync(id: string, user: { role: string; userId?: string; phone?: string }): Promise<NotificationRecord | null> {
+    return d1.markNotificationReadAsync(id, user);
+  }
+
+  public async markAllNotificationsReadAsync(user: { role: string; userId?: string; phone?: string }): Promise<number> {
+    return d1.markAllNotificationsReadAsync(user);
   }
 
   public async init(): Promise<void> {

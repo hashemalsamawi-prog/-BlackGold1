@@ -1,7 +1,6 @@
-import { d1 } from '../d1';
-import { generateToken } from '../security';
+import { enforceIsolatedTestEnvironment } from './testGuard';
 
-const BASE_URL = 'http://localhost:3000';
+let BASE_URL = '';
 
 let passed = 0;
 let failed = 0;
@@ -36,6 +35,11 @@ async function req(url: string, options: any = {}) {
 }
 
 async function runRealConcurrencyAudit() {
+  const testConfig = await enforceIsolatedTestEnvironment({ requireMutationOptIn: true, requireBaseUrl: true });
+  BASE_URL = testConfig.baseUrl;
+
+  const { d1 } = await import('../d1');
+
   console.log('======================================================================');
   console.log('🧪 REAL CONCURRENCY AUDIT: CLOUDFLARE D1 ATOMIC ROLLBACK SAFETY');
   console.log('======================================================================\n');

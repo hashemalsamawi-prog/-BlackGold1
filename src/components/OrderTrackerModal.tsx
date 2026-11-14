@@ -27,9 +27,7 @@ interface PublicTrackResult {
   orderNumber: string;
   status: string;
   date: string;
-  itemsSummary: string;
-  district: string;
-  driverName: string | null;
+  itemsCount?: number;
   timeline: Array<{
     status: string;
     time?: string;
@@ -393,8 +391,8 @@ export const OrderTrackerModal: React.FC<OrderTrackerModalProps> = ({
                     <span className="font-mono font-black text-amber-400 text-sm">#{liveResult.orderNumber}</span>
                   </div>
                   <div className="text-left">
-                    <span className="text-[11px] text-zinc-500 block">منطقة التوصيل</span>
-                    <span className="font-bold text-white text-xs">{liveResult.district}</span>
+                    <span className="text-[11px] text-zinc-500 block">تاريخ الطلب</span>
+                    <span className="font-bold text-white text-xs font-mono">{liveResult.date}</span>
                   </div>
                 </div>
 
@@ -439,18 +437,25 @@ export const OrderTrackerModal: React.FC<OrderTrackerModalProps> = ({
                   );
                 })()}
 
-                {/* Items & Driver info */}
+                {/* Items count & public milestones */}
                 <div className="p-3 rounded-xl bg-zinc-950 border border-zinc-800/80 space-y-2 text-xs">
-                  <div>
-                    <span className="text-zinc-500 text-[11px] block">الأصناف:</span>
-                    <p className="text-zinc-200">{liveResult.itemsSummary || 'فحم الذهب الأسود'}</p>
-                  </div>
-                  <div className="pt-2 border-t border-zinc-800 flex items-center justify-between">
-                    <span className="text-zinc-400">حالة المندوب:</span>
-                    <span className="font-bold text-amber-300">
-                      {liveResult.driverName ? `المندوب المكلف: ${liveResult.driverName}` : 'جاري تعيين مندوب التوصيل في منطقتك بصنعاء'}
+                  <div className="flex items-center justify-between">
+                    <span className="text-zinc-400">عدد العبوات في الشحنة:</span>
+                    <span className="font-bold text-amber-300 font-mono">
+                      {liveResult.itemsCount || 1} عبوة
                     </span>
                   </div>
+                  {Array.isArray(liveResult.timeline) && liveResult.timeline.length > 0 && (
+                    <div className="pt-2 border-t border-zinc-800 space-y-1">
+                      <span className="text-zinc-500 text-[11px] block">سجل المراحل:</span>
+                      {liveResult.timeline.map((step, idx) => (
+                        <div key={idx} className="flex items-center justify-between text-[11px] text-zinc-300">
+                          <span>• {step.titleAr || step.status}</span>
+                          {step.time && <span className="text-zinc-500 font-mono">{step.time}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             )}

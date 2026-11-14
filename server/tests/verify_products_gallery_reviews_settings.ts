@@ -1,7 +1,6 @@
-import { d1 } from '../d1';
-import { generateToken } from '../security';
+import { enforceIsolatedTestEnvironment } from './testGuard';
 
-const BASE_URL = 'http://localhost:3000';
+let BASE_URL = '';
 
 let passed = 0;
 let failed = 0;
@@ -32,6 +31,12 @@ async function req(url: string, options: any = {}) {
 }
 
 async function runComprehensiveAudit() {
+  const testConfig = await enforceIsolatedTestEnvironment({ requireMutationOptIn: true, requireBaseUrl: true });
+  BASE_URL = testConfig.baseUrl;
+
+  const { d1 } = await import('../d1');
+  const { generateToken } = await import('../security');
+
   console.log('======================================================================');
   console.log('🧪 Starting Full Production Audit: Products, Gallery, Reviews & Settings');
   console.log('======================================================================\n');
@@ -301,16 +306,16 @@ async function runComprehensiveAudit() {
   assert(d1Settings?.whatsappPhone === testWhatsapp, 'Updated WhatsApp phone persisted in Cloudflare D1');
   assert(Number(d1Settings?.freeDeliveryThreshold) === testThreshold, 'Updated free delivery threshold persisted in Cloudflare D1');
 
-  // 4.4 Restore Settings to clean state
+  // 4.4 Restore Settings to initial state
   await req('/api/settings', {
     method: 'PUT',
     headers: { 'Authorization': `Bearer ${adminToken}` },
     body: JSON.stringify({
       ...initialSettings,
-      whatsappPhone: '967775000150',
-      whatsappNumber: '967775000150',
-      freeDeliveryThreshold: 8000,
-      freeShippingThreshold: 8000
+      whatsappPhone: initialSettings?.whatsappPhone || '967770009900',
+      whatsappNumber: initialSettings?.whatsappNumber || '967770009900',
+      freeDeliveryThreshold: initialSettings?.freeDeliveryThreshold ?? 8000,
+      freeShippingThreshold: initialSettings?.freeShippingThreshold ?? 8000
     })
   });
 

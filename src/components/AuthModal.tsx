@@ -52,7 +52,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [showStaffTabs, setShowStaffTabs] = useState(false);
   const [customerName, setCustomerName] = useState(() => safeGetLocalStorage('bg_customer_name', ''));
   const [customerPhone, setCustomerPhone] = useState(() => safeGetLocalStorage('bg_customer_phone', ''));
-  const [driverPhone, setDriverPhone] = useState('770099887');
+  const [driverPhone, setDriverPhone] = useState('');
   const [driverPin, setDriverPin] = useState('');
   const [ownerPin, setOwnerPin] = useState('');
   const [pinError, setPinError] = useState<string | null>(null);
@@ -605,39 +605,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   </div>
                 </div>
 
-                {/* Quick Driver Preset Badges */}
-                <div className="space-y-1.5">
-                  <span className="text-slate-400 text-[10px] font-bold block">اختر الكابتن للتجربة السريعة:</span>
-                  <div className="grid grid-cols-2 gap-1.5">
-                    {[
-                      { name: 'أحمد الكبسي', phone: '770099887', zone: 'حدة والسبعين' },
-                      { name: 'محمد العنسي', phone: '771122334', zone: 'الصافية والتحرير' },
-                      { name: 'إبراهيم المؤيد', phone: '773344556', zone: 'شعوب والحصبة' },
-                      { name: 'سامي الحيمي', phone: '775566778', zone: 'معين وشملان' },
-                    ].map((dr) => (
-                      <button
-                        key={dr.phone}
-                        type="button"
-                        onClick={() => {
-                          setDriverPhone(dr.phone);
-                          if (driverError) setDriverError(null);
-                        }}
-                        className={`p-2 rounded-xl text-[11px] text-right border transition-all cursor-pointer ${
-                          driverPhone === dr.phone
-                            ? 'bg-amber-500/20 border-amber-500/60 text-amber-300 font-black'
-                            : 'bg-slate-900 border-slate-800 text-slate-300 hover:border-slate-700'
-                        }`}
-                      >
-                        <div className="font-bold text-white flex items-center gap-1">
-                          <Truck className="w-3 h-3 text-amber-400" />
-                          <span>{dr.name}</span>
-                        </div>
-                        <div className="text-[10px] text-slate-400 font-mono">{dr.phone} • {dr.zone}</div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
                 <form onSubmit={handleDriverLoginSubmit} className="space-y-3 text-xs">
                   <div>
                     <label className="block text-slate-300 font-bold mb-1">
@@ -646,7 +613,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     <div className="relative">
                       <input
                         type="tel"
-                        placeholder="770099887"
+                        placeholder="77XXXXXXX"
                         value={driverPhone}
                         onChange={(e) => {
                           setDriverPhone(e.target.value);

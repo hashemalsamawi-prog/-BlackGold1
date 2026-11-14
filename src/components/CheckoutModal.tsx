@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { CartItem, Language, DeliveryAddress, Order } from '../types';
+import { CartItem, Language, DeliveryAddress, Order, StoreSettings } from '../types';
 import { SANAA_DISTRICTS } from '../data/mockData';
 import { 
   X, Check, ShieldCheck, MapPin, Truck, Phone, User, 
@@ -27,6 +27,7 @@ interface CheckoutModalProps {
   whatsappNumber?: string;
   appliedCoupon?: { code: string; discountPercent?: number } | null;
   couponCode?: string;
+  storeSettings?: StoreSettings;
 }
 
 export const CheckoutModal: React.FC<CheckoutModalProps> = ({
@@ -45,6 +46,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   whatsappNumber = '967775000150',
   appliedCoupon = null,
   couponCode,
+  storeSettings,
 }) => {
   const [customerName, setCustomerName] = useState(() => localStorage.getItem('bg_customer_name') || '');
   const [customerPhone, setCustomerPhone] = useState(() => localStorage.getItem('bg_customer_phone') || '');
@@ -101,10 +103,29 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
   if (!isOpen) return null;
 
-  // Dynamic shipping fee based on selected district
-  const selectedDistrictObj = SANAA_DISTRICTS.find((d) => d.nameAr === district);
-  const currentShippingFee = selectedDistrictObj ? selectedDistrictObj.fee : (shippingFee || 1000);
+  const rawDistricts =
+    storeSettings?.deliveryDistricts && storeSettings.deliveryDistricts.length > 0
+      ? storeSettings.deliveryDistricts
+      : storeSettings?.districts && storeSettings.districts.length > 0
+      ? storeSettings.districts
+      : SANAA_DISTRICTS;
+
+  const availableDistricts = rawDistricts
+    .filter((d: any) => d && d.isAvailable !== false)
+    .map((d: any, idx: number) => ({
+      id: d.id || `dist-${idx}`,
+      nameAr: d.nameAr || d.district || 'صنعاء',
+      fee: Number(d.fee ?? d.deliveryFee ?? storeSettings?.defaultShippingFee ?? 800),
+      timeEstimate: d.timeEstimate || (d.estimatedMinutes ? `${d.estimatedMinutes} دقيقة` : '45 دقيقة'),
+    }));
+
+  // Dynamic shipping fee based on selected district & free delivery threshold
+  const selectedDistrictObj = availableDistricts.find((d) => d.nameAr === district);
+  const baseDistrictFee = selectedDistrictObj ? selectedDistrictObj.fee : (shippingFee || Number(storeSettings?.defaultShippingFee ?? 800));
   const subtotal = cart.reduce((sum, it) => sum + ((it.unitPrice || it.product.price) * it.quantity), 0);
+  const freeThreshold = Number(storeSettings?.freeDeliveryThreshold ?? storeSettings?.freeShippingThreshold ?? 0);
+  const qualifiesFreeDelivery = freeThreshold > 0 && subtotal >= freeThreshold;
+  const currentShippingFee = cart.length > 0 ? (qualifiesFreeDelivery ? 0 : baseDistrictFee) : 0;
   const effectiveDiscount = localDiscount > 0 ? localDiscount : (discount || 0);
   const totalAmount = Math.max(0, subtotal + currentShippingFee - effectiveDiscount);
 
@@ -117,7 +138,15 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       const res = await fetch('/api/validate-coupon', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, amount: subtotal })
+        body: JSON.stringify({
+          code,
+          amount: subtotal,
+          items: cart.map((i) => ({
+            productId: i.product.id,
+            quantity: i.quantity,
+            weight: i.selectedWeight || i.product.weight || '250g',
+          })),
+        })
       });
       const data = await res.json();
       if (data.success && typeof data.discount === 'number') {
@@ -389,7 +418,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                   onChange={(e) => setDistrict(e.target.value)}
                   className="w-full bg-[#181824] border border-[#28283C] rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-amber-400/80 focus:ring-1 focus:ring-amber-400/25 transition-all duration-300"
                 >
-                  {SANAA_DISTRICTS.map((d) => (
+                  {availableDistricts.map((d) => (
                     <option key={d.id} value={d.nameAr}>
                       {d.nameAr} (توصيل: {d.fee.toLocaleString()} ر.ي - {d.timeEstimate || '45 دقيقة'})
                     </option>

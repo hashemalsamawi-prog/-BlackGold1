@@ -1,4 +1,4 @@
-import { d1 as db, VALID_ORDER_STATUS_TRANSITIONS } from '../d1';
+import { enforceIsolatedTestEnvironment } from './testGuard';
 
 let passed = 0;
 let failed = 0;
@@ -14,6 +14,9 @@ function assert(condition: boolean, msg: string) {
 }
 
 async function runInventoryAndOrderLifecycleTests() {
+  await enforceIsolatedTestEnvironment({ requireMutationOptIn: true, requireBaseUrl: false });
+  const { d1: db } = await import('../d1');
+
   console.log("====================================================");
   console.log("📦 Starting Comprehensive Inventory & Order Lifecycle Audit");
   console.log("====================================================");

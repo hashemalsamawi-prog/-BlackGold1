@@ -1,10 +1,9 @@
-import { d1 } from '../d1';
-import { generateToken } from '../security';
+import { enforceIsolatedTestEnvironment } from './testGuard';
 
 // Comprehensive Automated Test Suite for Black Gold Charcoal Store
 // Covers all 20 critical test scenarios defined in USER_REQUEST
 
-const BASE_URL = 'http://localhost:3000';
+let BASE_URL = '';
 
 async function req(url: string, options: any = {}) {
   const headers = { 'Content-Type': 'application/json', 'x-audit-test': 'local-audit', ...(options.headers || {}) };
@@ -26,6 +25,13 @@ async function req(url: string, options: any = {}) {
 }
 
 async function runAllTests() {
+  const testConfig = await enforceIsolatedTestEnvironment({ requireMutationOptIn: true, requireBaseUrl: true });
+  BASE_URL = testConfig.baseUrl;
+
+  const { d1 } = await import('../d1');
+  const { generateToken } = await import('../security');
+  await d1.init();
+
   console.log('🧪 Starting 20 Comprehensive Security & Transaction Tests...\n');
   const results: Record<string, { pass: boolean; details: string }> = {};
 
@@ -388,10 +394,10 @@ async function runAllTests() {
 
   // 20. Strict Driver Lookup Enforcement (Fake Driver Assignment Rejected)
   const ownerToken = generateToken({
-    userId: 'usr-owner-hashem',
+    userId: 'usr-ci-owner-test',
     role: 'owner',
-    phone: '777000111',
-    name: 'هاشم السماوي'
+    phone: '770009901',
+    name: 'مالك اختبار معزول'
   });
 
   const fakeDriverAssign = await req(`/api/orders/${anotherOrderId}/assign-driver`, {

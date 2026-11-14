@@ -161,19 +161,20 @@ export function createRateLimiter(options: RateLimiterOptions) {
     if (isNonProduction && req.headers['x-audit-test'] === 'local-audit') {
       return next();
     }
-    let ip = '127.0.0.1';
+    let ip = 'unknown';
     try {
-      const forwarded = req.headers['x-forwarded-for'];
-      const realIp = req.headers['x-real-ip'];
-      if (typeof forwarded === 'string' && forwarded.length > 0) {
-        ip = forwarded.split(',')[0].trim();
-      } else if (typeof realIp === 'string' && realIp.length > 0) {
-        ip = realIp.trim();
+      const isVercel = Boolean(process.env.VERCEL);
+      const vercelForwarded = req.headers?.['x-vercel-forwarded-for'];
+      if (isVercel && typeof vercelForwarded === 'string' && vercelForwarded.trim().length > 0) {
+        const parts = vercelForwarded.split(',').map(s => s.trim()).filter(Boolean);
+        ip = parts[parts.length - 1] || req.ip || 'unknown';
+      } else if (req.ip) {
+        ip = req.ip;
       } else if (req.socket && req.socket.remoteAddress) {
         ip = req.socket.remoteAddress;
       }
     } catch {
-      ip = '127.0.0.1';
+      ip = 'unknown';
     }
     const now = Date.now();
     const record = ipRequests.get(ip);

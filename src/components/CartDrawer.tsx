@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { CartItem, Language, DeliveryAddress } from '../types';
+import { CartItem, Language, DeliveryAddress, StoreSettings } from '../types';
 import { 
   X, Trash2, ShoppingBag, MapPin, Tag, ArrowLeft, ArrowRight, 
   ChevronRight, CheckCircle2, Plus, Minus, ShieldCheck, Truck, Check, AlertCircle 
@@ -21,6 +21,7 @@ interface CartDrawerProps {
   savedAddresses: DeliveryAddress[];
   selectedAddressId: string;
   setSelectedAddressId: (id: string) => void;
+  storeSettings?: StoreSettings;
 }
 
 export const CartDrawer: React.FC<CartDrawerProps> = ({
@@ -34,7 +35,8 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
   onOpenMap,
   savedAddresses,
   selectedAddressId,
-  setSelectedAddressId
+  setSelectedAddressId,
+  storeSettings
 }) => {
   const [couponCode, setCouponCode] = useState('');
   const [discountVal, setDiscountVal] = useState(0);
@@ -56,12 +58,31 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
 
   if (!isOpen) return null;
 
+  const rawDistricts =
+    storeSettings?.deliveryDistricts && storeSettings.deliveryDistricts.length > 0
+      ? storeSettings.deliveryDistricts
+      : storeSettings?.districts && storeSettings.districts.length > 0
+      ? storeSettings.districts
+      : SANAA_DISTRICTS;
+
+  const availableDistricts = rawDistricts
+    .filter((d: any) => d && d.isAvailable !== false)
+    .map((d: any, idx: number) => ({
+      id: d.id || `dist-${idx}`,
+      nameAr: d.nameAr || d.district || 'صنعاء',
+      fee: Number(d.fee ?? d.deliveryFee ?? storeSettings?.defaultShippingFee ?? 800),
+      timeEstimate: d.timeEstimate || (d.estimatedMinutes ? `${d.estimatedMinutes} دقيقة` : '45 دقيقة'),
+    }));
+
   const totalItemsCount = cart.reduce((sum, item) => sum + item.quantity, 0);
   const subtotal = cart.reduce((sum, item) => sum + (item.unitPrice || item.product.price) * item.quantity, 0);
   
-  // Calculate delivery fee based on selected district
-  const districtObj = SANAA_DISTRICTS.find((d) => d.nameAr === selectedDistrict);
-  const shippingFee = cart.length > 0 ? (districtObj ? districtObj.fee : 1000) : 0;
+  // Calculate delivery fee based on selected district & free delivery threshold
+  const districtObj = availableDistricts.find((d) => d.nameAr === selectedDistrict);
+  const baseDistrictFee = districtObj ? districtObj.fee : Number(storeSettings?.defaultShippingFee ?? 800);
+  const freeThreshold = Number(storeSettings?.freeDeliveryThreshold ?? storeSettings?.freeShippingThreshold ?? 0);
+  const qualifiesFreeDelivery = freeThreshold > 0 && subtotal >= freeThreshold;
+  const shippingFee = cart.length > 0 ? (qualifiesFreeDelivery ? 0 : baseDistrictFee) : 0;
   const total = Math.max(0, subtotal + shippingFee - discountVal);
 
   const handleApplyCoupon = async () => {
@@ -72,7 +93,15 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
       const res = await fetch('/api/validate-coupon', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: couponCode.trim(), amount: subtotal })
+        body: JSON.stringify({
+          code: couponCode.trim(),
+          amount: subtotal,
+          items: cart.map((i) => ({
+            productId: i.product.id,
+            quantity: i.quantity,
+            weight: i.selectedWeight || i.product.weight || '250g',
+          })),
+        })
       });
       const data = await res.json();
       if (data.success) {
@@ -237,7 +266,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                   onChange={(e) => setSelectedDistrict(e.target.value)}
                   className="w-full bg-[#181824] border border-[#28283C] text-xs text-white rounded-xl px-3 py-2 focus:outline-none"
                 >
-                  {SANAA_DISTRICTS.map((d) => (
+                  {availableDistricts.map((d) => (
                     <option key={d.id} value={d.nameAr}>
                       صنعاء - {d.nameAr} ({d.fee.toLocaleString()} ر.ي - {d.timeEstimate || '45 دقيقة'})
                     </option>

@@ -1,8 +1,5 @@
 import assert from 'assert';
-import { createRateLimiter } from '../security';
-import { d1 } from '../d1';
-import { api } from '../../src/services/api';
-import { handleD1HealthAndStatus } from '../../server';
+import { enforceIsolatedTestEnvironment } from './testGuard';
 
 /**
  * Dedicated Test Suite for the 4 specific mandatory repair points:
@@ -13,6 +10,13 @@ import { handleD1HealthAndStatus } from '../../server';
  */
 
 async function runRepairVerificationTests() {
+  await enforceIsolatedTestEnvironment({ requireMutationOptIn: false, requireBaseUrl: false });
+
+  const { createRateLimiter } = await import('../security');
+  const { d1 } = await import('../d1');
+  const { api } = await import('../../src/services/api');
+  const { handleD1HealthAndStatus } = await import('../../server');
+
   console.log('🚀 Running Dedicated Production Repair Verification Tests...\n');
   let passedCount = 0;
   let totalCount = 0;

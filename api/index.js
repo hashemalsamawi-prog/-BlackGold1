@@ -2,12 +2,13 @@
 import express from "express";
 import path2 from "path";
 import fs2 from "fs";
-import crypto2 from "crypto";
+import crypto3 from "crypto";
 import { GoogleGenAI } from "@google/genai";
 
 // server/d1.ts
 import fs from "fs";
 import path from "path";
+import crypto2 from "crypto";
 
 // src/assets/images.ts
 var ASSETS = {
@@ -407,19 +408,20 @@ function createRateLimiter(options) {
     if (isNonProduction && req.headers["x-audit-test"] === "local-audit") {
       return next();
     }
-    let ip = "127.0.0.1";
+    let ip = "unknown";
     try {
-      const forwarded = req.headers["x-forwarded-for"];
-      const realIp = req.headers["x-real-ip"];
-      if (typeof forwarded === "string" && forwarded.length > 0) {
-        ip = forwarded.split(",")[0].trim();
-      } else if (typeof realIp === "string" && realIp.length > 0) {
-        ip = realIp.trim();
+      const isVercel = Boolean(process.env.VERCEL);
+      const vercelForwarded = req.headers?.["x-vercel-forwarded-for"];
+      if (isVercel && typeof vercelForwarded === "string" && vercelForwarded.trim().length > 0) {
+        const parts = vercelForwarded.split(",").map((s) => s.trim()).filter(Boolean);
+        ip = parts[parts.length - 1] || req.ip || "unknown";
+      } else if (req.ip) {
+        ip = req.ip;
       } else if (req.socket && req.socket.remoteAddress) {
         ip = req.socket.remoteAddress;
       }
     } catch {
-      ip = "127.0.0.1";
+      ip = "unknown";
     }
     const now = Date.now();
     const record = ipRequests.get(ip);
@@ -440,10 +442,35 @@ function createRateLimiter(options) {
 
 // server/d1.ts
 var CLOUDFLARE_CONFIG = {
-  databaseId: process.env.CLOUDFLARE_DATABASE_ID || "",
-  accountId: process.env.CLOUDFLARE_ACCOUNT_ID || "",
-  apiToken: process.env.CLOUDFLARE_API_TOKEN || ""
+  get databaseId() {
+    return process.env.CLOUDFLARE_DATABASE_ID || "";
+  },
+  get accountId() {
+    return process.env.CLOUDFLARE_ACCOUNT_ID || "";
+  },
+  get apiToken() {
+    return process.env.CLOUDFLARE_API_TOKEN || "";
+  }
 };
+function sanitizeD1ErrorMessage(err) {
+  const raw = typeof err === "string" ? err : err?.message || String(err || "Unknown D1 error");
+  let sanitized = raw;
+  const secrets = [
+    process.env.CLOUDFLARE_API_TOKEN,
+    process.env.CLOUDFLARE_ACCOUNT_ID,
+    process.env.CLOUDFLARE_DATABASE_ID,
+    process.env.JWT_SECRET,
+    process.env.ADMIN_PIN,
+    process.env.ADMIN_PASSWORD,
+    process.env.DRIVER_PIN,
+    process.env.GEMINI_API_KEY
+  ].filter((v) => Boolean(v && v.length >= 4));
+  for (const sec of secrets) {
+    sanitized = sanitized.split(sec).join("[REDACTED]");
+  }
+  sanitized = sanitized.replace(/Bearer\s+[A-Za-z0-9._~+/-]+=*/gi, "Bearer [REDACTED]");
+  return sanitized;
+}
 var VALID_ORDER_STATUS_TRANSITIONS = {
   pending: ["confirmed", "assigned", "received", "preparing", "shipped", "cancelled"],
   received: ["confirmed", "assigned", "preparing", "shipped", "cancelled"],
@@ -457,6 +484,16 @@ var VALID_ORDER_STATUS_TRANSITIONS = {
   completed: [],
   cancelled: []
 };
+function normalizePaymentMethodForD1(method) {
+  const m = String(method || "").trim().toLowerCase();
+  if (m === "cash") return "cash";
+  if (m === "cod" || m === "cash_on_delivery") return "cod";
+  if (m === "kuraimi") return "kuraimi";
+  if (m === "haseb") return "haseb";
+  if (m === "jawali") return "jawali";
+  if (m === "floosak") return "floosak";
+  return "other";
+}
 function isRealValidCustomerName(name) {
   if (!name || typeof name !== "string") return false;
   const trimmed = name.trim();
@@ -529,187 +566,194 @@ var D1DatabaseAccessLayer = class {
   };
   initPromise = null;
   constructor() {
-    this.init().catch((err) => {
-      console.warn("\u26A0\uFE0F [D1] Initial background sync deferred/error:", err?.message || err);
-    });
   }
   /**
    * Initialize Schema, migrate legacy data, and sync with Cloudflare D1
    */
   async init() {
     if (this.isInitialized) return;
-    if (this.initPromise) return this.initPromise;
-    this.initPromise = (async () => {
+    if (!this.initPromise) {
+      this.initPromise = this.performInit();
+    }
+    const activePromise = this.initPromise;
+    try {
+      await activePromise;
+    } finally {
+      if (this.initPromise === activePromise) {
+        this.initPromise = null;
+      }
+    }
+  }
+  async performInit() {
+    if (this.isInitialized) return;
+    try {
+      const dataDir = path.dirname(this.localDbPath);
       try {
-        const dataDir = path.dirname(this.localDbPath);
-        try {
-          if (!fs.existsSync(dataDir)) {
-            fs.mkdirSync(dataDir, { recursive: true });
-          }
-        } catch {
+        if (!fs.existsSync(dataDir)) {
+          fs.mkdirSync(dataDir, { recursive: true });
         }
-        const hasD1Credentials = Boolean(
-          CLOUDFLARE_CONFIG.accountId && CLOUDFLARE_CONFIG.apiToken && CLOUDFLARE_CONFIG.databaseId
-        );
-        if (process.env.NODE_ENV !== "production" && !hasD1Credentials) {
-          this.tables.categories = [
-            { id: "cat-pouches", name_ar: "\u0627\u0644\u0639\u0628\u0648\u0627\u062A \u0627\u0644\u0641\u0627\u062E\u0631\u0629 Zipper Lock", name_en: "Premium Pouches", slug: "pouches", sort_order: 1, is_active: 1, created_at: (/* @__PURE__ */ new Date()).toISOString() },
-            { id: "cat-wholesale", name_ar: "\u0627\u0644\u062A\u0648\u0631\u064A\u062F \u0648\u0627\u0644\u062C\u0645\u0644\u0629 \u0644\u0644\u0645\u0637\u0627\u0639\u0645 \u0648\u0627\u0644\u0645\u0642\u0627\u0647\u064A", name_en: "Wholesale & B2B", slug: "wholesale", sort_order: 2, is_active: 1, created_at: (/* @__PURE__ */ new Date()).toISOString() },
-            { id: "cat-local", name_ar: "\u0641\u062D\u0645 \u0628\u0644\u062F\u064A \u0637\u0628\u064A\u0639\u064A \u0645\u0646 \u0645\u0632\u0627\u0631\u0639 \u0627\u0644\u064A\u0645\u0646", name_en: "Yemeni Local Charcoal", slug: "local", sort_order: 3, is_active: 1, created_at: (/* @__PURE__ */ new Date()).toISOString() },
-            { id: "cat-premium", name_ar: "\u0627\u0644\u0641\u062D\u0645 \u0627\u0644\u0645\u0644\u0643\u064A \u0627\u0644\u062E\u0627\u0635 \u0628\u0627\u0644\u0634\u064A\u0634\u0629", name_en: "Royal Shisha Charcoal", slug: "premium", sort_order: 4, is_active: 1, created_at: (/* @__PURE__ */ new Date()).toISOString() },
-            { id: "cat-bbq", name_ar: "\u0641\u062D\u0645 \u0627\u0644\u0634\u0648\u0627\u0621 \u0648\u0627\u0644\u0645\u0634\u0627\u0648\u064A \u0639\u0627\u0644\u064A \u0627\u0644\u062D\u0631\u0627\u0631\u0629", name_en: "High-Heat BBQ Charcoal", slug: "bbq", sort_order: 5, is_active: 1, created_at: (/* @__PURE__ */ new Date()).toISOString() },
-            { id: "cat-incense", name_ar: "\u0623\u0642\u0631\u0627\u0635 \u0627\u0644\u0628\u062E\u0648\u0631 \u0648\u0627\u0644\u0645\u0628\u0627\u062E\u0631 \u0633\u0631\u064A\u0639\u0629 \u0627\u0644\u0627\u0634\u062A\u0639\u0627\u0644", name_en: "Incense Charcoal Tablets", slug: "incense", sort_order: 6, is_active: 1, created_at: (/* @__PURE__ */ new Date()).toISOString() }
+      } catch {
+      }
+      const hasD1Credentials = this.isD1Configured();
+      if (process.env.NODE_ENV !== "production" && !hasD1Credentials) {
+        this.tables.categories = [
+          { id: "cat-pouches", name_ar: "\u0627\u0644\u0639\u0628\u0648\u0627\u062A \u0627\u0644\u0641\u0627\u062E\u0631\u0629 Zipper Lock", name_en: "Premium Pouches", slug: "pouches", sort_order: 1, is_active: 1, created_at: (/* @__PURE__ */ new Date()).toISOString() },
+          { id: "cat-wholesale", name_ar: "\u0627\u0644\u062A\u0648\u0631\u064A\u062F \u0648\u0627\u0644\u062C\u0645\u0644\u0629 \u0644\u0644\u0645\u0637\u0627\u0639\u0645 \u0648\u0627\u0644\u0645\u0642\u0627\u0647\u064A", name_en: "Wholesale & B2B", slug: "wholesale", sort_order: 2, is_active: 1, created_at: (/* @__PURE__ */ new Date()).toISOString() },
+          { id: "cat-local", name_ar: "\u0641\u062D\u0645 \u0628\u0644\u062F\u064A \u0637\u0628\u064A\u0639\u064A \u0645\u0646 \u0645\u0632\u0627\u0631\u0639 \u0627\u0644\u064A\u0645\u0646", name_en: "Yemeni Local Charcoal", slug: "local", sort_order: 3, is_active: 1, created_at: (/* @__PURE__ */ new Date()).toISOString() },
+          { id: "cat-premium", name_ar: "\u0627\u0644\u0641\u062D\u0645 \u0627\u0644\u0645\u0644\u0643\u064A \u0627\u0644\u062E\u0627\u0635 \u0628\u0627\u0644\u0634\u064A\u0634\u0629", name_en: "Royal Shisha Charcoal", slug: "premium", sort_order: 4, is_active: 1, created_at: (/* @__PURE__ */ new Date()).toISOString() },
+          { id: "cat-bbq", name_ar: "\u0641\u062D\u0645 \u0627\u0644\u0634\u0648\u0627\u0621 \u0648\u0627\u0644\u0645\u0634\u0627\u0648\u064A \u0639\u0627\u0644\u064A \u0627\u0644\u062D\u0631\u0627\u0631\u0629", name_en: "High-Heat BBQ Charcoal", slug: "bbq", sort_order: 5, is_active: 1, created_at: (/* @__PURE__ */ new Date()).toISOString() },
+          { id: "cat-incense", name_ar: "\u0623\u0642\u0631\u0627\u0635 \u0627\u0644\u0628\u062E\u0648\u0631 \u0648\u0627\u0644\u0645\u0628\u0627\u062E\u0631 \u0633\u0631\u064A\u0639\u0629 \u0627\u0644\u0627\u0634\u062A\u0639\u0627\u0644", name_en: "Incense Charcoal Tablets", slug: "incense", sort_order: 6, is_active: 1, created_at: (/* @__PURE__ */ new Date()).toISOString() }
+        ];
+      }
+      if (hasD1Credentials) {
+        this.tables.products = [];
+        this.tables.delivery_agents = [];
+        this.tables.coupons = [];
+        this.tables.gallery_items = [];
+        console.log("\u26A1 Cloudflare D1 is active as PRIMARY authoritative database. Fetching remote tables...");
+        const syncOk = await this.syncFromCloudflareD1();
+        if (!syncOk) {
+          console.error("CRITICAL: Cloudflare D1 initial sync failed!");
+          throw new Error("\u0641\u0634\u0644 \u0627\u0644\u0645\u0632\u0627\u0645\u0646\u0629 \u0627\u0644\u0623\u0648\u0644\u064A\u0629 \u0645\u0639 \u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1");
+        }
+      } else {
+        if (process.env.NODE_ENV === "production") {
+          console.error("CRITICAL: Cloudflare D1 credentials missing in production environment!");
+          throw new Error("\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u063A\u064A\u0631 \u0645\u0647\u064A\u0623\u0629 \u0641\u064A \u0628\u064A\u0626\u0629 \u0627\u0644\u0625\u0646\u062A\u0627\u062C");
+        }
+        if (fs.existsSync(this.localDbPath)) {
+          try {
+            const raw = fs.readFileSync(this.localDbPath, "utf-8");
+            const parsed = JSON.parse(raw);
+            if (parsed.products && Array.isArray(parsed.products)) {
+              this.tables.products = parsed.products;
+            }
+            if (parsed.users && Array.isArray(parsed.users)) {
+              this.tables.users = parsed.users;
+            }
+            if (parsed.orders && Array.isArray(parsed.orders)) {
+              this.tables.orders = parsed.orders;
+            }
+            if (parsed.reviews && Array.isArray(parsed.reviews)) {
+              this.tables.reviews = parsed.reviews;
+            }
+            if (parsed.coupons && Array.isArray(parsed.coupons)) {
+              this.tables.coupons = parsed.coupons;
+            }
+            if (parsed.deliveryAgents && Array.isArray(parsed.deliveryAgents)) {
+              this.tables.delivery_agents = parsed.deliveryAgents;
+            }
+            if (parsed.storeSettings) {
+              this.tables.store_settings = parsed.storeSettings;
+            }
+            if (parsed.galleryItems && Array.isArray(parsed.galleryItems)) {
+              this.tables.gallery_items = parsed.galleryItems;
+            }
+            if (parsed.inventoryTransactions && Array.isArray(parsed.inventoryTransactions)) {
+              this.tables.inventory_logs = parsed.inventoryTransactions.map((tx) => ({
+                id: tx.id,
+                productId: tx.productId,
+                productName: tx.productName,
+                type: tx.type,
+                quantity: tx.quantity,
+                previousStock: tx.previousStock,
+                newStock: tx.newStock,
+                reason: tx.reason,
+                performedBy: tx.performedBy,
+                createdAt: tx.date || (/* @__PURE__ */ new Date()).toISOString()
+              }));
+            }
+          } catch (err) {
+            console.error("Error reading legacy db.json:", err);
+          }
+        }
+      }
+      if (!hasD1Credentials && process.env.NODE_ENV !== "production") {
+        if (this.tables.products.length === 0) {
+          this.tables.products = [...INITIAL_PRODUCTS];
+        }
+        if (this.tables.gallery_items.length === 0) {
+          this.tables.gallery_items = [...INITIAL_GALLERY_ITEMS];
+        }
+        if (!this.tables.store_settings || !this.tables.store_settings.whatsappPhone) {
+          this.tables.store_settings = { ...INITIAL_STORE_SETTINGS, deliveryDistricts: [
+            { id: "d1", nameAr: "\u062D\u062F\u0629 \u0648\u0634\u0627\u0631\u0639 \u0627\u0644\u062E\u0645\u0633\u064A\u0646 \u0648\u0627\u0644\u062D\u064A \u0627\u0644\u0633\u064A\u0627\u0633\u064A", nameEn: "Hadda & Political Area", fee: 500, etaMinutes: 35, isActive: true },
+            { id: "d2", nameAr: "\u0627\u0644\u0623\u0635\u0628\u062D\u064A \u0648\u0634\u0627\u0631\u0639 \u0627\u0644\u0645\u0642\u0627\u0644\u062D \u0648\u0628\u064A\u062A \u0628\u0648\u0633", nameEn: "Asbahi & Bait Baws", fee: 500, etaMinutes: 40, isActive: true },
+            { id: "d3", nameAr: "\u0627\u0644\u062A\u062D\u0631\u064A\u0631 \u0648\u0634\u0627\u0631\u0639 \u062C\u0645\u0627\u0644 \u0648\u0627\u0644\u0642\u0627\u0639", nameEn: "Tahrir & Al-Qaa", fee: 600, etaMinutes: 40, isActive: true },
+            { id: "d4", nameAr: "\u0635\u0646\u0639\u0627\u0621 \u0627\u0644\u0642\u062F\u064A\u0645\u0629 \u0648\u0628\u0627\u0628 \u0627\u0644\u064A\u0645\u0646 \u0648\u0634\u0639\u0648\u0628", nameEn: "Old Sanaa & Bab Al-Yaman", fee: 700, etaMinutes: 45, isActive: true },
+            { id: "d5", nameAr: "\u0634\u0645\u0644\u0627\u0646 \u0648\u0645\u0630\u0628\u062D \u0648\u0634\u0627\u0631\u0639 \u0627\u0644\u062B\u0644\u0627\u062B\u064A\u0646", nameEn: "Shamlan & Madhbah", fee: 800, etaMinutes: 45, isActive: true },
+            { id: "d6", nameAr: "\u0627\u0644\u062D\u0635\u0628\u0629 \u0648\u0634\u0627\u0631\u0639 \u0627\u0644\u0645\u0637\u0627\u0631 \u0648\u0627\u0644\u0631\u0648\u0636\u0629", nameEn: "Hasaba & Airport Rd", fee: 900, etaMinutes: 50, isActive: true }
+          ] };
+        }
+        if (this.tables.delivery_agents.length === 0) {
+          this.tables.delivery_agents = [...INITIAL_DELIVERY_AGENTS];
+        }
+        if (this.tables.coupons.length === 0) {
+          this.tables.coupons = [
+            { code: "GOLD2026", discountPercent: 10, maxDiscount: 2e3, minOrderAmount: 2e3, isActive: true },
+            { code: "SANAA15", discountPercent: 15, maxDiscount: 3500, minOrderAmount: 5e3, isActive: true },
+            { code: "VIPBLACK", discountPercent: 20, maxDiscount: 5e3, minOrderAmount: 1e4, isActive: true }
           ];
         }
-        if (hasD1Credentials) {
-          console.log("\u26A1 Cloudflare D1 is active as PRIMARY authoritative database. Fetching remote tables...");
-          const syncOk = await this.syncFromCloudflareD1();
-          if (!syncOk && process.env.NODE_ENV === "production") {
-            console.error("CRITICAL: Cloudflare D1 initial sync failed in production environment!");
-            throw new Error("\u0641\u0634\u0644 \u0627\u0644\u0645\u0632\u0627\u0645\u0646\u0629 \u0627\u0644\u0623\u0648\u0644\u064A\u0629 \u0645\u0639 \u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u0641\u064A \u0628\u064A\u0626\u0629 \u0627\u0644\u0625\u0646\u062A\u0627\u062C");
-          }
-        } else {
-          if (process.env.NODE_ENV === "production") {
-            console.error("CRITICAL: Cloudflare D1 credentials missing in production environment!");
-            throw new Error("\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u063A\u064A\u0631 \u0645\u0647\u064A\u0623\u0629 \u0641\u064A \u0628\u064A\u0626\u0629 \u0627\u0644\u0625\u0646\u062A\u0627\u062C");
-          }
-          if (fs.existsSync(this.localDbPath)) {
-            try {
-              const raw = fs.readFileSync(this.localDbPath, "utf-8");
-              const parsed = JSON.parse(raw);
-              if (parsed.products && Array.isArray(parsed.products)) {
-                this.tables.products = parsed.products;
-              }
-              if (parsed.users && Array.isArray(parsed.users)) {
-                this.tables.users = parsed.users;
-              }
-              if (parsed.orders && Array.isArray(parsed.orders)) {
-                this.tables.orders = parsed.orders;
-              }
-              if (parsed.reviews && Array.isArray(parsed.reviews)) {
-                this.tables.reviews = parsed.reviews;
-              }
-              if (parsed.coupons && Array.isArray(parsed.coupons)) {
-                this.tables.coupons = parsed.coupons;
-              }
-              if (parsed.deliveryAgents && Array.isArray(parsed.deliveryAgents)) {
-                this.tables.delivery_agents = parsed.deliveryAgents;
-              }
-              if (parsed.storeSettings) {
-                this.tables.store_settings = parsed.storeSettings;
-              }
-              if (parsed.galleryItems && Array.isArray(parsed.galleryItems)) {
-                this.tables.gallery_items = parsed.galleryItems;
-              }
-              if (parsed.inventoryTransactions && Array.isArray(parsed.inventoryTransactions)) {
-                this.tables.inventory_logs = parsed.inventoryTransactions.map((tx) => ({
-                  id: tx.id,
-                  productId: tx.productId,
-                  productName: tx.productName,
-                  type: tx.type,
-                  quantity: tx.quantity,
-                  previousStock: tx.previousStock,
-                  newStock: tx.newStock,
-                  reason: tx.reason,
-                  performedBy: tx.performedBy,
-                  createdAt: tx.date || (/* @__PURE__ */ new Date()).toISOString()
-                }));
-              }
-            } catch (err) {
-              console.error("Error reading legacy db.json:", err);
-            }
-          }
-        }
-        if (!hasD1Credentials && process.env.NODE_ENV !== "production") {
-          if (this.tables.products.length === 0) {
-            this.tables.products = [...INITIAL_PRODUCTS];
-          }
-          if (this.tables.gallery_items.length === 0) {
-            this.tables.gallery_items = [...INITIAL_GALLERY_ITEMS];
-          }
-          if (!this.tables.store_settings || !this.tables.store_settings.whatsappPhone) {
-            this.tables.store_settings = { ...INITIAL_STORE_SETTINGS, deliveryDistricts: [
-              { id: "d1", nameAr: "\u062D\u062F\u0629 \u0648\u0634\u0627\u0631\u0639 \u0627\u0644\u062E\u0645\u0633\u064A\u0646 \u0648\u0627\u0644\u062D\u064A \u0627\u0644\u0633\u064A\u0627\u0633\u064A", nameEn: "Hadda & Political Area", fee: 500, etaMinutes: 35, isActive: true },
-              { id: "d2", nameAr: "\u0627\u0644\u0623\u0635\u0628\u062D\u064A \u0648\u0634\u0627\u0631\u0639 \u0627\u0644\u0645\u0642\u0627\u0644\u062D \u0648\u0628\u064A\u062A \u0628\u0648\u0633", nameEn: "Asbahi & Bait Baws", fee: 500, etaMinutes: 40, isActive: true },
-              { id: "d3", nameAr: "\u0627\u0644\u062A\u062D\u0631\u064A\u0631 \u0648\u0634\u0627\u0631\u0639 \u062C\u0645\u0627\u0644 \u0648\u0627\u0644\u0642\u0627\u0639", nameEn: "Tahrir & Al-Qaa", fee: 600, etaMinutes: 40, isActive: true },
-              { id: "d4", nameAr: "\u0635\u0646\u0639\u0627\u0621 \u0627\u0644\u0642\u062F\u064A\u0645\u0629 \u0648\u0628\u0627\u0628 \u0627\u0644\u064A\u0645\u0646 \u0648\u0634\u0639\u0648\u0628", nameEn: "Old Sanaa & Bab Al-Yaman", fee: 700, etaMinutes: 45, isActive: true },
-              { id: "d5", nameAr: "\u0634\u0645\u0644\u0627\u0646 \u0648\u0645\u0630\u0628\u062D \u0648\u0634\u0627\u0631\u0639 \u0627\u0644\u062B\u0644\u0627\u062B\u064A\u0646", nameEn: "Shamlan & Madhbah", fee: 800, etaMinutes: 45, isActive: true },
-              { id: "d6", nameAr: "\u0627\u0644\u062D\u0635\u0628\u0629 \u0648\u0634\u0627\u0631\u0639 \u0627\u0644\u0645\u0637\u0627\u0631 \u0648\u0627\u0644\u0631\u0648\u0636\u0629", nameEn: "Hasaba & Airport Rd", fee: 900, etaMinutes: 50, isActive: true }
-            ] };
-          }
-          if (this.tables.delivery_agents.length === 0) {
-            this.tables.delivery_agents = [...INITIAL_DELIVERY_AGENTS];
-          }
-          if (this.tables.coupons.length === 0) {
-            this.tables.coupons = [
-              { code: "GOLD2026", discountPercent: 10, maxDiscount: 2e3, minOrderAmount: 2e3, isActive: true },
-              { code: "SANAA15", discountPercent: 15, maxDiscount: 3500, minOrderAmount: 5e3, isActive: true },
-              { code: "VIPBLACK", discountPercent: 20, maxDiscount: 5e3, minOrderAmount: 1e4, isActive: true }
-            ];
-          }
-          this.saveLocal();
-        }
-        for (const order of this.tables.orders) {
-          if (order.items && Array.isArray(order.items)) {
-            for (const it of order.items) {
-              const existingItem = this.tables.order_items.find((oi) => oi.orderId === order.id && oi.productId === it.productId);
-              if (!existingItem) {
-                this.tables.order_items.push({
-                  id: `oi-${order.id}-${it.productId}-${Math.random().toString(36).substring(2, 6)}`,
-                  orderId: order.id,
-                  productId: it.productId,
-                  productNameAr: it.productNameAr || "\u0641\u062D\u0645 \u0627\u0644\u0630\u0647\u0628 \u0627\u0644\u0623\u0633\u0648\u062F",
-                  productNameEn: "Black Gold Premium Charcoal",
-                  weightOption: it.weight || "250g",
-                  quantity: it.quantity || 1,
-                  unitPrice: it.unitPrice || 600,
-                  totalPrice: (it.unitPrice || 600) * (it.quantity || 1),
-                  createdAt: order.date || (/* @__PURE__ */ new Date()).toISOString()
-                });
-              }
-            }
-          }
-          if (order.customerPhone) {
-            const existingCust = this.tables.customers.find((c) => c.phone === order.customerPhone);
-            if (existingCust) {
-              existingCust.totalOrders += 1;
-              existingCust.totalSpent += order.total || 0;
-            } else {
-              this.tables.customers.push({
-                id: `cust-${order.customerPhone.replace(/\D/g, "")}`,
-                name: order.customerName || "\u0639\u0645\u064A\u0644",
-                phone: order.customerPhone,
-                district: order.address?.district || "\u0635\u0646\u0639\u0627\u0621",
-                totalOrders: 1,
-                totalSpent: order.total || 0,
-                loyaltyPoints: Math.floor((order.total || 0) / 100),
-                createdAt: order.date || (/* @__PURE__ */ new Date()).toISOString(),
-                updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+        this.saveLocal();
+      }
+      for (const order of this.tables.orders) {
+        if (order.items && Array.isArray(order.items)) {
+          for (const it of order.items) {
+            const existingItem = this.tables.order_items.find((oi) => oi.orderId === order.id && oi.productId === it.productId);
+            if (!existingItem) {
+              this.tables.order_items.push({
+                id: `oi-${order.id}-${it.productId}-${Math.random().toString(36).substring(2, 6)}`,
+                orderId: order.id,
+                productId: it.productId,
+                productNameAr: it.productNameAr || "\u0641\u062D\u0645 \u0627\u0644\u0630\u0647\u0628 \u0627\u0644\u0623\u0633\u0648\u062F",
+                productNameEn: "Black Gold Premium Charcoal",
+                weightOption: it.weight || "250g",
+                quantity: it.quantity || 1,
+                unitPrice: it.unitPrice || 600,
+                totalPrice: (it.unitPrice || 600) * (it.quantity || 1),
+                createdAt: order.date || (/* @__PURE__ */ new Date()).toISOString()
               });
             }
           }
         }
-        for (const product of this.tables.products) {
-          this.tables.inventory.set(product.id, {
-            currentStock: product.stock,
-            reservedStock: 0,
-            minThreshold: 15,
-            lastCountedAt: (/* @__PURE__ */ new Date()).toISOString()
-          });
+        if (order.customerPhone) {
+          const existingCust = this.tables.customers.find((c) => c.phone === order.customerPhone);
+          if (existingCust) {
+            existingCust.totalOrders += 1;
+            existingCust.totalSpent += order.total || 0;
+          } else {
+            this.tables.customers.push({
+              id: `cust-${order.customerPhone.replace(/\D/g, "")}`,
+              name: order.customerName || "\u0639\u0645\u064A\u0644",
+              phone: order.customerPhone,
+              district: order.address?.district || "\u0635\u0646\u0639\u0627\u0621",
+              totalOrders: 1,
+              totalSpent: order.total || 0,
+              loyaltyPoints: Math.floor((order.total || 0) / 100),
+              createdAt: order.date || (/* @__PURE__ */ new Date()).toISOString(),
+              updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+            });
+          }
         }
-        await this.ensureDefaultUsersAsync();
-        this.isInitialized = true;
-        this.saveLocal();
-        console.log("\u2705 Cloudflare D1 Database Access Layer Initialized Successfully. Database ID:", CLOUDFLARE_CONFIG.databaseId);
-      } catch (e) {
-        console.error("Error during D1 DAL initialization:", e?.message || e);
-        if (process.env.NODE_ENV === "production" && !process.env.VERCEL) {
-          throw e;
-        }
-        this.isInitialized = true;
       }
-    })();
-    return this.initPromise;
+      for (const product of this.tables.products) {
+        this.tables.inventory.set(product.id, {
+          currentStock: product.stock,
+          reservedStock: 0,
+          minThreshold: 15,
+          lastCountedAt: (/* @__PURE__ */ new Date()).toISOString()
+        });
+      }
+      await this.ensureDefaultUsersAsync();
+      this.isInitialized = true;
+      this.saveLocal();
+      console.log("\u2705 Cloudflare D1 Database Access Layer Initialized Successfully.");
+    } catch (e) {
+      this.isInitialized = false;
+      console.error("Error during D1 DAL initialization:", sanitizeD1ErrorMessage(e));
+      throw e;
+    }
   }
   /**
    * Ensure Owner Account structure exists and loads credentials strictly from environment or D1.
@@ -838,7 +882,7 @@ var D1DatabaseAccessLayer = class {
     } catch (err) {
       reachable = false;
       schemaValid = false;
-      error = err?.message || "\u0641\u0634\u0644 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1";
+      error = sanitizeD1ErrorMessage(err) || "\u0641\u0634\u0644 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1";
     }
     const isConnected = configured && reachable && schemaValid;
     return {
@@ -993,16 +1037,7 @@ var D1DatabaseAccessLayer = class {
         createdAt: l.created_at
       })) : [];
       const daResult = await this.executeCloudflareD1Query("SELECT * FROM delivery_agents;");
-      this.tables.delivery_agents = Array.isArray(daResult) ? daResult.map((da) => ({
-        id: da.id,
-        name: da.name,
-        phone: da.phone,
-        vehicleType: da.vehicle_type || da.vehicle || "motorcycle",
-        assignedDistricts: typeof da.assigned_districts === "string" ? JSON.parse(da.assigned_districts || "[]") : da.assigned_districts || [],
-        completedOrdersCount: da.total_delivered_count || da.completed_orders_count || 0,
-        rating: da.rating || 5,
-        isActive: da.is_available !== void 0 ? Boolean(da.is_available) : da.is_active !== void 0 ? Boolean(da.is_active) : true
-      })) : [];
+      this.tables.delivery_agents = Array.isArray(daResult) ? daResult.map((da) => this.mapD1DeliveryAgentToAgent(da)) : [];
       const couponResult = await this.executeCloudflareD1Query("SELECT * FROM coupons;");
       this.tables.coupons = Array.isArray(couponResult) ? couponResult.map((cp) => ({
         code: cp.code,
@@ -1027,27 +1062,9 @@ var D1DatabaseAccessLayer = class {
       })) : [];
       const stResult = await this.executeCloudflareD1Query("SELECT * FROM store_settings WHERE id = 'default_settings';");
       if (Array.isArray(stResult) && stResult.length > 0) {
-        const st = stResult[0];
-        const districts = typeof st.delivery_districts === "string" ? JSON.parse(st.delivery_districts || "[]") : st.delivery_districts || this.tables.store_settings.deliveryDistricts;
-        this.tables.store_settings = {
-          ...this.tables.store_settings,
-          storeNameAr: st.store_name_ar || this.tables.store_settings.storeNameAr,
-          storeNameEn: st.store_name_en || this.tables.store_settings.storeNameEn,
-          sloganAr: st.slogan_ar || this.tables.store_settings.sloganAr,
-          logoText: st.logo_text || this.tables.store_settings.logoText,
-          customLogoUrl: st.custom_logo_url || this.tables.store_settings.customLogoUrl,
-          topBannerNoticeAr: st.top_banner_notice_ar || this.tables.store_settings.topBannerNoticeAr,
-          topBannerNoticeEn: st.top_banner_notice_en || this.tables.store_settings.topBannerNoticeEn,
-          whatsappPhone: st.whatsapp_phone || this.tables.store_settings.whatsappPhone,
-          whatsappNumber: st.whatsapp_phone || this.tables.store_settings.whatsappNumber,
-          supportPhone: st.call_phone || this.tables.store_settings.supportPhone,
-          supportEmail: st.contact_email || this.tables.store_settings.supportEmail,
-          freeDeliveryThreshold: Number(st.free_delivery_threshold || this.tables.store_settings.freeDeliveryThreshold),
-          freeShippingThreshold: Number(st.free_delivery_threshold || this.tables.store_settings.freeShippingThreshold),
-          defaultShippingFee: st.default_delivery_fee || this.tables.store_settings.defaultShippingFee,
-          isOrderingEnabled: st.is_store_open !== void 0 ? Boolean(st.is_store_open) : true,
-          deliveryDistricts: districts
-        };
+        this.tables.store_settings = this.mapD1SettingsToStoreSettings(stResult[0]);
+      } else {
+        this.tables.store_settings = this.getSafeCodeDefaultStoreSettings();
       }
       const galResult = await this.executeCloudflareD1Query("SELECT * FROM gallery_items ORDER BY sort_order ASC, created_at DESC;");
       this.tables.gallery_items = Array.isArray(galResult) ? galResult.map((g) => ({
@@ -1062,15 +1079,20 @@ var D1DatabaseAccessLayer = class {
         isActive: g.is_active !== void 0 ? Boolean(g.is_active) : true,
         createdAt: g.created_at
       })) : [];
+      const payResult = await this.executeCloudflareD1Query("SELECT * FROM payments ORDER BY created_at DESC LIMIT 500;").catch(() => []);
+      if (Array.isArray(payResult)) {
+        this.tables.payments = payResult.map((p) => this.mapD1PaymentToPayment(p));
+      }
+      const notifResult = await this.executeCloudflareD1Query("SELECT * FROM notifications ORDER BY created_at DESC LIMIT 500;").catch(() => []);
+      if (Array.isArray(notifResult)) {
+        this.tables.notifications = notifResult.map((n) => this.mapD1NotificationToNotification(n));
+      }
       await this.ensureDefaultUsersAsync();
       console.log("\u2705 Cloudflare D1 primary sync completed successfully for all operational tables.");
       return true;
     } catch (e) {
-      console.error("CRITICAL: D1 remote sync failed on one or more tables:", e);
-      if (process.env.NODE_ENV === "production") {
-        throw e;
-      }
-      return false;
+      console.error("CRITICAL: D1 remote sync failed on one or more tables:", sanitizeD1ErrorMessage(e));
+      throw e;
     }
   }
   /**
@@ -1095,11 +1117,15 @@ var D1DatabaseAccessLayer = class {
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(3e4)
       });
-      const json = await res.json();
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json) {
+        const errors = json && Array.isArray(json.errors) && json.errors.length > 0 ? json.errors : [{ code: res.status || 5e3, message: `Cloudflare D1 HTTP ${res.status}` }];
+        return { success: false, errors };
+      }
       return json;
     } catch (err) {
-      console.warn("Cloudflare D1 HTTP query error:", err);
-      return { success: false, errors: [{ code: 5e3, message: err.message || "Network error" }] };
+      console.warn("Cloudflare D1 HTTP query error:", sanitizeD1ErrorMessage(err));
+      return { success: false, errors: [{ code: 5e3, message: sanitizeD1ErrorMessage(err) || "Network error" }] };
     }
   }
   /**
@@ -1123,11 +1149,15 @@ var D1DatabaseAccessLayer = class {
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(3e4)
       });
-      const json = await res.json();
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json) {
+        const errors = json && Array.isArray(json.errors) && json.errors.length > 0 ? json.errors : [{ code: res.status || 5e3, message: `Cloudflare D1 HTTP ${res.status}` }];
+        return { success: false, errors };
+      }
       return json;
     } catch (err) {
-      console.warn("Cloudflare D1 HTTP batch query error:", err);
-      return { success: false, errors: [{ code: 5e3, message: err.message || "Network error" }] };
+      console.warn("Cloudflare D1 HTTP batch query error:", sanitizeD1ErrorMessage(err));
+      return { success: false, errors: [{ code: 5e3, message: sanitizeD1ErrorMessage(err) || "Network error" }] };
     }
   }
   /**
@@ -1144,8 +1174,8 @@ var D1DatabaseAccessLayer = class {
     }
     const json = await this.executeCloudflareD1Raw(sql, params);
     if (!json || json.success === false || !json.result) {
-      const errMsg = (json?.errors || []).map((e) => e.message || JSON.stringify(e)).join("; ") || "D1 query failed";
-      console.error("Cloudflare D1 HTTP query failed:", errMsg, "SQL:", sql);
+      const errMsg = sanitizeD1ErrorMessage((json?.errors || []).map((e) => e.message || JSON.stringify(e)).join("; ") || "D1 query failed");
+      console.error("Cloudflare D1 HTTP query failed:", errMsg);
       throw new Error(`\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 Cloudflare D1: ${errMsg}`);
     }
     return json.result?.[0]?.results ?? [];
@@ -1300,16 +1330,118 @@ var D1DatabaseAccessLayer = class {
       date: r.created_at
     };
   }
+  mapD1PaymentToPayment(p) {
+    return {
+      id: p.id,
+      orderId: p.order_id || p.orderId,
+      amount: Number(p.amount || 0),
+      method: p.method || "cod",
+      status: (p.status === "paid" ? "confirmed" : p.status) || "pending",
+      referenceNumber: p.reference_number || void 0,
+      proofImageUrl: p.proof_image_url || void 0,
+      notes: p.notes || void 0,
+      confirmedBy: p.confirmed_by || void 0,
+      createdAt: p.created_at || (/* @__PURE__ */ new Date()).toISOString(),
+      updatedAt: p.updated_at || (/* @__PURE__ */ new Date()).toISOString()
+    };
+  }
+  mapD1NotificationToNotification(n) {
+    return {
+      id: n.id,
+      recipientRole: n.recipient_role || "all",
+      recipientId: n.recipient_id || void 0,
+      title: n.title || "",
+      message: n.message || "",
+      type: n.type || "system",
+      isRead: Boolean(n.is_read),
+      link: n.link || void 0,
+      createdAt: n.created_at || (/* @__PURE__ */ new Date()).toISOString()
+    };
+  }
   mapD1DeliveryAgentToAgent(r) {
+    let assignedDistricts = [];
+    try {
+      assignedDistricts = typeof r.assigned_districts === "string" ? JSON.parse(r.assigned_districts || "[]") || [] : Array.isArray(r.assigned_districts) ? r.assigned_districts : [];
+    } catch {
+      assignedDistricts = [];
+    }
     return {
       id: r.id,
       name: r.name,
       phone: r.phone,
-      vehicleType: r.vehicle_type || "motorcycle",
-      assignedDistricts: typeof r.assigned_districts === "string" ? JSON.parse(r.assigned_districts || "[]") || [] : r.assigned_districts || [],
-      completedOrdersCount: Number(r.total_delivered_count || r.completed_orders_count || 0),
-      rating: Number(r.rating || 5),
-      isActive: Boolean(r.is_available !== void 0 ? r.is_available : r.is_active)
+      vehicleType: r.vehicle_type || r.vehicle || "motorcycle",
+      assignedDistricts,
+      completedOrdersCount: Number(r.total_deliveries ?? r.total_delivered_count ?? r.completed_orders_count ?? 0),
+      rating: Number(r.rating ?? 5),
+      isActive: r.is_active !== void 0 && r.is_active !== null ? Boolean(r.is_active) : r.is_available !== void 0 && r.is_available !== null ? Boolean(r.is_available) : true
+    };
+  }
+  getSafeCodeDefaultStoreSettings() {
+    return {
+      storeNameAr: "\u0641\u062D\u0645 \u0627\u0644\u0630\u0647\u0628 \u0627\u0644\u0623\u0633\u0648\u062F \u0627\u0644\u0645\u0644\u0643\u064A",
+      storeNameEn: "BLACK GOLD ROYAL CHARCOAL",
+      sloganAr: "\u062C\u0648\u062F\u0629 \u0641\u0627\u062E\u0631\u0629 \u0648\u062B\u0628\u0627\u062A \u064A\u062F\u0648\u0645 \u0637\u0648\u064A\u0644\u0627\u064B",
+      logoText: "\u0627\u0644\u0630\u0647\u0628 \u0627\u0644\u0623\u0633\u0648\u062F",
+      customLogoUrl: "",
+      topBannerNoticeAr: "",
+      topBannerNoticeEn: "",
+      whatsappPhone: "967775000150",
+      whatsappNumber: "967775000150",
+      supportPhone: "967775000150",
+      supportEmail: "info@blackgold.ye",
+      contactEmail: "info@blackgold.ye",
+      minOrderAmount: 1e3,
+      freeDeliveryThreshold: 8e3,
+      freeShippingThreshold: 8e3,
+      defaultShippingFee: 800,
+      workingHoursAr: "\u064A\u0648\u0645\u064A\u0627\u064B: 8:00 \u0635 - 11:30 \u0645",
+      workingHoursEn: "Daily: 8:00 AM - 11:30 PM",
+      announcementAr: "",
+      announcementEn: "",
+      isOrderingEnabled: true,
+      currencySymbol: "\u0631.\u064A",
+      districts: [],
+      deliveryDistricts: [],
+      loyaltyPointsPer1000YER: 10
+    };
+  }
+  parseDeliveryDistricts(raw) {
+    try {
+      if (Array.isArray(raw)) return raw;
+      if (typeof raw === "string" && raw.trim().length > 0) {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+      }
+      return [];
+    } catch {
+      return [];
+    }
+  }
+  mapD1SettingsToStoreSettings(st) {
+    const defaults = this.getSafeCodeDefaultStoreSettings();
+    const districts = this.parseDeliveryDistricts(st?.delivery_districts);
+    const freeThresh = st?.free_delivery_threshold !== void 0 && st?.free_delivery_threshold !== null ? Number(st.free_delivery_threshold) : defaults.freeDeliveryThreshold;
+    const whatsapp = st?.whatsapp_phone || defaults.whatsappPhone;
+    const supportPhone = st?.call_phone || defaults.supportPhone;
+    return {
+      ...defaults,
+      storeNameAr: st?.store_name_ar || defaults.storeNameAr,
+      storeNameEn: st?.store_name_en ?? defaults.storeNameEn,
+      sloganAr: st?.slogan_ar ?? defaults.sloganAr,
+      logoText: st?.logo_text ?? defaults.logoText,
+      customLogoUrl: st?.custom_logo_url ?? defaults.customLogoUrl,
+      topBannerNoticeAr: st?.top_banner_notice_ar ?? defaults.topBannerNoticeAr,
+      topBannerNoticeEn: st?.top_banner_notice_en ?? defaults.topBannerNoticeEn,
+      whatsappPhone: whatsapp,
+      whatsappNumber: whatsapp,
+      supportPhone,
+      supportEmail: st?.contact_email ?? defaults.supportEmail,
+      contactEmail: st?.contact_email ?? defaults.contactEmail,
+      freeDeliveryThreshold: freeThresh,
+      freeShippingThreshold: freeThresh,
+      defaultShippingFee: st?.default_delivery_fee !== void 0 && st?.default_delivery_fee !== null ? Number(st.default_delivery_fee) : defaults.defaultShippingFee,
+      isOrderingEnabled: st?.is_store_open !== void 0 && st?.is_store_open !== null ? Boolean(st.is_store_open) : defaults.isOrderingEnabled,
+      deliveryDistricts: districts
     };
   }
   // ==========================================
@@ -1329,18 +1461,13 @@ var D1DatabaseAccessLayer = class {
     if (this.isD1Configured()) {
       try {
         const rows = await this.executeCloudflareD1Query("SELECT * FROM products ORDER BY id ASC;");
-        if (Array.isArray(rows)) {
-          const prods = rows.map((r) => this.mapD1ProductToProduct(r));
-          this.tables.products = prods;
-          return prods;
-        }
+        const prods = Array.isArray(rows) ? rows.map((r) => this.mapD1ProductToProduct(r)) : [];
+        this.tables.products = prods;
+        return prods;
       } catch (e) {
-        console.error("D1 getProductsAsync error:", e);
-      }
-      if (process.env.NODE_ENV === "production") {
+        console.error("D1 getProductsAsync error:", sanitizeD1ErrorMessage(e));
         throw new Error("\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0627\u0644\u0645\u0646\u062A\u062C\u0627\u062A \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1");
       }
-      return this.tables.products;
     }
     if (process.env.NODE_ENV === "production") {
       throw new Error("\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u063A\u064A\u0631 \u0645\u0647\u064A\u0623\u0629 \u0641\u064A \u0628\u064A\u0626\u0629 \u0627\u0644\u0625\u0646\u062A\u0627\u062C");
@@ -1361,16 +1488,12 @@ var D1DatabaseAccessLayer = class {
     if (this.isD1Configured()) {
       try {
         const rows = await this.executeCloudflareD1Query("SELECT * FROM products WHERE id = ? LIMIT 1;", [id]);
-        if (Array.isArray(rows)) {
-          if (rows.length > 0) {
-            return this.mapD1ProductToProduct(rows[0]);
-          }
-          return void 0;
+        if (Array.isArray(rows) && rows.length > 0) {
+          return this.mapD1ProductToProduct(rows[0]);
         }
+        return void 0;
       } catch (e) {
-        console.error("D1 findProductByIdAsync error:", e);
-      }
-      if (process.env.NODE_ENV === "production") {
+        console.error("D1 findProductByIdAsync error:", sanitizeD1ErrorMessage(e));
         throw new Error("\u0641\u0634\u0644 \u0627\u0644\u0628\u062D\u062B \u0639\u0646 \u0627\u0644\u0645\u0646\u062A\u062C \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1");
       }
     }
@@ -1391,40 +1514,56 @@ var D1DatabaseAccessLayer = class {
     const primaryImg = product.image || product.images?.[0] || "/images/black_gold_pouch_pair_1786125935649.jpg";
     product.image = primaryImg;
     product.images = product.images && product.images.length > 0 ? product.images : [primaryImg];
+    const initialStock = Number(product.stock ?? 100);
+    if (!Number.isFinite(initialStock) || initialStock < 0) {
+      throw new Error("\u0644\u0627 \u064A\u0645\u0643\u0646 \u0623\u0646 \u064A\u0643\u0648\u0646 \u0627\u0644\u0645\u062E\u0632\u0648\u0646 \u0633\u0627\u0644\u0628\u0627\u064B");
+    }
     if (this.isD1Configured()) {
-      await this.executeCloudflareD1Query(
-        `INSERT INTO products (id, name_ar, name_en, category, price, original_price, discount_percent, description_ar, description_en, origin, burn_duration_hours, ash_percentage, moisture, rating, review_count, images, specs, weight_options, is_featured, is_best_seller, stock, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'));`,
-        [
-          product.id,
-          product.nameAr,
-          product.nameEn || "",
-          product.category || "pouches",
-          product.price,
-          product.originalPrice || product.price,
-          product.discountPercent || 0,
-          product.descriptionAr || "",
-          product.descriptionEn || "",
-          product.origin || "\u0627\u0644\u0630\u0647\u0628 \u0627\u0644\u0623\u0633\u0648\u062F - \u0635\u0646\u0639\u0627\u0621",
-          product.burnDurationHours || "6+ \u0633\u0627\u0639\u0627\u062A \u0645\u062A\u0648\u0627\u0635\u0644\u0629",
-          product.ashPercentage || "\u0623\u0642\u0644 \u0645\u0646 1.5% \u0631\u0645\u0627\u062F \u0623\u0628\u064A\u0636",
-          product.moisture || "< 2%",
-          product.rating || 5,
-          product.reviewCount || 0,
-          JSON.stringify(product.images || [primaryImg]),
-          JSON.stringify(product.specs || []),
-          JSON.stringify(product.weightOptions || []),
-          product.isFeatured ? 1 : 0,
-          product.isBestSeller ? 1 : 0,
-          product.stock ?? 100
-        ]
-      );
+      const batchResult = await this.executeCloudflareD1BatchRaw([
+        {
+          sql: `INSERT INTO products (id, name_ar, name_en, category, price, original_price, discount_percent, description_ar, description_en, origin, burn_duration_hours, ash_percentage, moisture, rating, review_count, images, specs, weight_options, is_featured, is_best_seller, stock, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'));`,
+          params: [
+            product.id,
+            product.nameAr,
+            product.nameEn || "",
+            product.category || "pouches",
+            product.price,
+            product.originalPrice || product.price,
+            product.discountPercent || 0,
+            product.descriptionAr || "",
+            product.descriptionEn || "",
+            product.origin || "\u0627\u0644\u0630\u0647\u0628 \u0627\u0644\u0623\u0633\u0648\u062F - \u0635\u0646\u0639\u0627\u0621",
+            product.burnDurationHours || "6+ \u0633\u0627\u0639\u0627\u062A \u0645\u062A\u0648\u0627\u0635\u0644\u0629",
+            product.ashPercentage || "\u0623\u0642\u0644 \u0645\u0646 1.5% \u0631\u0645\u0627\u062F \u0623\u0628\u064A\u0636",
+            product.moisture || "< 2%",
+            product.rating || 5,
+            product.reviewCount || 0,
+            JSON.stringify(product.images || [primaryImg]),
+            JSON.stringify(product.specs || []),
+            JSON.stringify(product.weightOptions || []),
+            product.isFeatured ? 1 : 0,
+            product.isBestSeller ? 1 : 0,
+            initialStock
+          ]
+        },
+        {
+          sql: `INSERT INTO inventory (product_id, current_stock, min_threshold, updated_at) VALUES (?, ?, 10, datetime('now')) ON CONFLICT(product_id) DO UPDATE SET current_stock = excluded.current_stock, updated_at = datetime('now');`,
+          params: [product.id, initialStock]
+        }
+      ]);
+      if (!batchResult || !batchResult.success) {
+        const errMsg = sanitizeD1ErrorMessage((batchResult?.errors || []).map((e) => e.message || JSON.stringify(e)).join("; ") || "Batch add product failed");
+        throw new Error(`\u0641\u0634\u0644 \u0625\u0636\u0627\u0641\u0629 \u0627\u0644\u0645\u0646\u062A\u062C \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1: ${errMsg}`);
+      }
       const created = await this.findProductByIdAsync(product.id);
       if (created) {
-        await this.executeCloudflareD1Query(
-          `INSERT INTO inventory (product_id, current_stock, min_threshold, updated_at) VALUES (?, ?, 10, datetime('now')) ON CONFLICT(product_id) DO UPDATE SET current_stock = excluded.current_stock, updated_at = datetime('now');`,
-          [product.id, product.stock ?? 100]
-        );
         this.tables.products.push(created);
+        this.tables.inventory.set(created.id, {
+          currentStock: Number(created.stock ?? initialStock),
+          reservedStock: 0,
+          minThreshold: 10,
+          lastCountedAt: (/* @__PURE__ */ new Date()).toISOString()
+        });
         return created;
       }
       throw new Error("\u0641\u0634\u0644 \u062A\u0623\u0643\u064A\u062F \u0625\u0636\u0627\u0641\u0629 \u0627\u0644\u0645\u0646\u062A\u062C \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1");
@@ -1432,7 +1571,14 @@ var D1DatabaseAccessLayer = class {
     if (process.env.NODE_ENV === "production") {
       throw new Error("\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u063A\u064A\u0631 \u0645\u0647\u064A\u0623\u0629 \u0641\u064A \u0628\u064A\u0626\u0629 \u0627\u0644\u0625\u0646\u062A\u0627\u062C");
     }
-    return this.addProduct(product);
+    const added = this.addProduct(product);
+    this.tables.inventory.set(added.id, {
+      currentStock: Number(added.stock ?? initialStock),
+      reservedStock: 0,
+      minThreshold: 10,
+      lastCountedAt: (/* @__PURE__ */ new Date()).toISOString()
+    });
+    return added;
   }
   updateProduct(id, updates) {
     const idx = this.tables.products.findIndex((p) => p.id === id);
@@ -1447,6 +1593,14 @@ var D1DatabaseAccessLayer = class {
       images: finalImages
     };
     this.tables.products[idx] = updated;
+    if (updates.stock !== void 0) {
+      this.tables.inventory.set(id, {
+        currentStock: Number(updated.stock ?? 0),
+        reservedStock: this.tables.inventory.get(id)?.reservedStock ?? 0,
+        minThreshold: this.tables.inventory.get(id)?.minThreshold ?? 10,
+        lastCountedAt: (/* @__PURE__ */ new Date()).toISOString()
+      });
+    }
     this.saveLocal();
     return updated;
   }
@@ -1462,7 +1616,11 @@ var D1DatabaseAccessLayer = class {
       const finalDiscount = updates.discountPercent !== void 0 ? Number(updates.discountPercent) : current.discountPercent || 0;
       const finalDescAr = updates.descriptionAr !== void 0 ? updates.descriptionAr : current.descriptionAr;
       const finalDescEn = updates.descriptionEn !== void 0 ? updates.descriptionEn : current.descriptionEn || "";
-      const finalStock = updates.stock !== void 0 ? Math.max(0, Number(updates.stock)) : current.stock;
+      const rawStock = updates.stock !== void 0 ? Number(updates.stock) : Number(current.stock ?? 0);
+      if (!Number.isFinite(rawStock) || rawStock < 0) {
+        throw new Error("\u0644\u0627 \u064A\u0645\u0643\u0646 \u0623\u0646 \u064A\u0643\u0648\u0646 \u0627\u0644\u0645\u062E\u0632\u0648\u0646 \u0633\u0627\u0644\u0628\u0627\u064B");
+      }
+      const finalStock = rawStock;
       let finalImages = current.images || [];
       if (updates.images && updates.images.length > 0) {
         finalImages = updates.images;
@@ -1473,40 +1631,49 @@ var D1DatabaseAccessLayer = class {
       const finalSpecs = updates.specs !== void 0 ? updates.specs : current.specs || [];
       const finalIsFeatured = updates.isFeatured !== void 0 ? updates.isFeatured ? 1 : 0 : current.isFeatured ? 1 : 0;
       const finalIsBestSeller = updates.isBestSeller !== void 0 ? updates.isBestSeller ? 1 : 0 : current.isBestSeller ? 1 : 0;
-      await this.executeCloudflareD1Query(
-        `UPDATE products SET name_ar = ?, name_en = ?, category = ?, price = ?, original_price = ?, discount_percent = ?, description_ar = ?, description_en = ?, stock = ?, images = ?, weight_options = ?, specs = ?, is_featured = ?, is_best_seller = ?, updated_at = datetime('now') WHERE id = ?;`,
-        [
-          finalNameAr,
-          finalNameEn,
-          finalCategory,
-          finalPrice,
-          finalOrigPrice,
-          finalDiscount,
-          finalDescAr,
-          finalDescEn,
-          finalStock,
-          JSON.stringify(finalImages),
-          JSON.stringify(finalWeightOptions),
-          JSON.stringify(finalSpecs),
-          finalIsFeatured,
-          finalIsBestSeller,
-          id
-        ]
-      );
-      if (updates.stock !== void 0) {
-        await this.executeCloudflareD1Query(
-          `INSERT INTO inventory (product_id, current_stock, min_threshold, updated_at) VALUES (?, ?, 10, datetime('now')) ON CONFLICT(product_id) DO UPDATE SET current_stock = excluded.current_stock, updated_at = datetime('now');`,
-          [id, finalStock]
-        );
+      const batchResult = await this.executeCloudflareD1BatchRaw([
+        {
+          sql: `UPDATE products SET name_ar = ?, name_en = ?, category = ?, price = ?, original_price = ?, discount_percent = ?, description_ar = ?, description_en = ?, stock = ?, images = ?, weight_options = ?, specs = ?, is_featured = ?, is_best_seller = ?, updated_at = datetime('now') WHERE id = ?;`,
+          params: [
+            finalNameAr,
+            finalNameEn,
+            finalCategory,
+            finalPrice,
+            finalOrigPrice,
+            finalDiscount,
+            finalDescAr,
+            finalDescEn,
+            finalStock,
+            JSON.stringify(finalImages),
+            JSON.stringify(finalWeightOptions),
+            JSON.stringify(finalSpecs),
+            finalIsFeatured,
+            finalIsBestSeller,
+            id
+          ]
+        },
+        {
+          sql: `INSERT INTO inventory (product_id, current_stock, min_threshold, updated_at) SELECT id, stock, 10, datetime('now') FROM products WHERE id = ? ON CONFLICT(product_id) DO UPDATE SET current_stock = excluded.current_stock, updated_at = datetime('now');`,
+          params: [id]
+        }
+      ]);
+      if (!batchResult || !batchResult.success) {
+        const errMsg = sanitizeD1ErrorMessage((batchResult?.errors || []).map((e) => e.message || JSON.stringify(e)).join("; ") || "Batch product update failed");
+        throw new Error(`\u0641\u0634\u0644 \u062A\u062D\u062F\u064A\u062B \u0627\u0644\u0645\u0646\u062A\u062C \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1: ${errMsg}`);
+      }
+      if ((batchResult.result?.[0]?.meta?.changes ?? 0) === 0) {
+        return null;
       }
       const updated = await this.findProductByIdAsync(id);
       if (updated) {
         const idx = this.tables.products.findIndex((p) => p.id === id);
         if (idx !== -1) this.tables.products[idx] = updated;
-        const inv = this.tables.inventory.get(id);
-        if (inv && updates.stock !== void 0) {
-          inv.currentStock = finalStock;
-        }
+        this.tables.inventory.set(id, {
+          currentStock: Number(updated.stock ?? finalStock),
+          reservedStock: this.tables.inventory.get(id)?.reservedStock ?? 0,
+          minThreshold: this.tables.inventory.get(id)?.minThreshold ?? 10,
+          lastCountedAt: (/* @__PURE__ */ new Date()).toISOString()
+        });
         this.saveLocal();
         return updated;
       }
@@ -1562,20 +1729,16 @@ var D1DatabaseAccessLayer = class {
     if (this.isD1Configured()) {
       try {
         const rows = await this.executeCloudflareD1Query("SELECT * FROM categories ORDER BY sort_order ASC;");
-        if (Array.isArray(rows)) {
-          return rows.map((c) => ({
-            id: c.id,
-            nameAr: c.name_ar,
-            nameEn: c.name_en,
-            slug: c.slug,
-            sortOrder: c.sort_order,
-            isActive: Boolean(c.is_active)
-          }));
-        }
+        return Array.isArray(rows) ? rows.map((c) => ({
+          id: c.id,
+          nameAr: c.name_ar,
+          nameEn: c.name_en,
+          slug: c.slug,
+          sortOrder: c.sort_order,
+          isActive: Boolean(c.is_active)
+        })) : [];
       } catch (e) {
-        console.error("D1 getCategoriesAsync error:", e);
-      }
-      if (process.env.NODE_ENV === "production") {
+        console.error("D1 getCategoriesAsync error:", sanitizeD1ErrorMessage(e));
         throw new Error("\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0627\u0644\u0623\u0642\u0633\u0627\u0645 \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1");
       }
     }
@@ -1594,15 +1757,11 @@ var D1DatabaseAccessLayer = class {
     if (this.isD1Configured()) {
       try {
         const rows = await this.executeCloudflareD1Query("SELECT * FROM users;");
-        if (Array.isArray(rows)) {
-          const userAccounts = rows.map((r) => this.mapD1UserToUser(r));
-          this.tables.users = userAccounts;
-          return userAccounts;
-        }
+        const userAccounts = Array.isArray(rows) ? rows.map((r) => this.mapD1UserToUser(r)) : [];
+        this.tables.users = userAccounts;
+        return userAccounts;
       } catch (e) {
-        console.error("D1 getUsersAsync error:", e);
-      }
-      if (process.env.NODE_ENV === "production") {
+        console.error("D1 getUsersAsync error:", sanitizeD1ErrorMessage(e));
         throw new Error("\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645\u064A\u0646 \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1");
       }
     }
@@ -1618,16 +1777,12 @@ var D1DatabaseAccessLayer = class {
     if (this.isD1Configured()) {
       try {
         const rows = await this.executeCloudflareD1Query("SELECT * FROM users WHERE id = ? LIMIT 1;", [id]);
-        if (Array.isArray(rows)) {
-          if (rows.length > 0) {
-            return this.mapD1UserToUser(rows[0]);
-          }
-          return void 0;
+        if (Array.isArray(rows) && rows.length > 0) {
+          return this.mapD1UserToUser(rows[0]);
         }
+        return void 0;
       } catch (e) {
-        console.error("D1 findUserByIdAsync error:", e);
-      }
-      if (process.env.NODE_ENV === "production") {
+        console.error("D1 findUserByIdAsync error:", sanitizeD1ErrorMessage(e));
         throw new Error("\u0641\u0634\u0644 \u0627\u0644\u062A\u062D\u0642\u0642 \u0645\u0646 \u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1");
       }
     }
@@ -1645,16 +1800,12 @@ var D1DatabaseAccessLayer = class {
     if (this.isD1Configured()) {
       try {
         const rows = await this.executeCloudflareD1Query("SELECT * FROM users WHERE phone = ? LIMIT 1;", [clean]);
-        if (Array.isArray(rows)) {
-          if (rows.length > 0) {
-            return this.mapD1UserToUser(rows[0]);
-          }
-          return void 0;
+        if (Array.isArray(rows) && rows.length > 0) {
+          return this.mapD1UserToUser(rows[0]);
         }
+        return void 0;
       } catch (e) {
-        console.error("D1 findUserByPhoneAsync error:", e);
-      }
-      if (process.env.NODE_ENV === "production") {
+        console.error("D1 findUserByPhoneAsync error:", sanitizeD1ErrorMessage(e));
         throw new Error("\u0641\u0634\u0644 \u0627\u0644\u0628\u062D\u062B \u0639\u0646 \u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645 \u0628\u0631\u0642\u0645 \u0627\u0644\u0647\u0627\u062A\u0641 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1");
       }
     }
@@ -1728,15 +1879,11 @@ var D1DatabaseAccessLayer = class {
     if (this.isD1Configured()) {
       try {
         const rows = await this.executeCloudflareD1Query("SELECT * FROM customers ORDER BY total_orders DESC;");
-        if (Array.isArray(rows)) {
-          const custs = rows.map((r) => this.mapD1CustomerToCustomer(r));
-          this.tables.customers = custs;
-          return custs;
-        }
+        const custs = Array.isArray(rows) ? rows.map((r) => this.mapD1CustomerToCustomer(r)) : [];
+        this.tables.customers = custs;
+        return custs;
       } catch (e) {
-        console.error("D1 getCustomersAsync error:", e);
-      }
-      if (process.env.NODE_ENV === "production") {
+        console.error("D1 getCustomersAsync error:", sanitizeD1ErrorMessage(e));
         throw new Error("\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0633\u062C\u0644 \u0627\u0644\u0639\u0645\u0644\u0627\u0621 \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1");
       }
     }
@@ -1827,13 +1974,9 @@ var D1DatabaseAccessLayer = class {
         }
         sql += " ORDER BY created_at DESC;";
         const rows = await this.executeCloudflareD1Query(sql, params);
-        if (Array.isArray(rows)) {
-          return rows.map((r) => this.mapD1OrderToOrder(r));
-        }
+        return Array.isArray(rows) ? rows.map((r) => this.mapD1OrderToOrder(r)) : [];
       } catch (e) {
-        console.error("D1 getOrdersAsync error:", e);
-      }
-      if (process.env.NODE_ENV === "production") {
+        console.error("D1 getOrdersAsync error:", sanitizeD1ErrorMessage(e));
         throw new Error("\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0627\u0644\u0637\u0644\u0628\u0627\u062A \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1");
       }
     }
@@ -1860,16 +2003,12 @@ var D1DatabaseAccessLayer = class {
           "SELECT * FROM orders WHERE id = ? OR order_number = ? LIMIT 1;",
           [id, id]
         );
-        if (Array.isArray(rows)) {
-          if (rows.length > 0) {
-            return this.mapD1OrderToOrder(rows[0]);
-          }
-          return void 0;
+        if (Array.isArray(rows) && rows.length > 0) {
+          return this.mapD1OrderToOrder(rows[0]);
         }
+        return void 0;
       } catch (e) {
-        console.error("D1 findOrderByIdAsync error:", e);
-      }
-      if (process.env.NODE_ENV === "production") {
+        console.error("D1 findOrderByIdAsync error:", sanitizeD1ErrorMessage(e));
         throw new Error("\u0641\u0634\u0644 \u0627\u0644\u0628\u062D\u062B \u0639\u0646 \u0627\u0644\u0637\u0644\u0628 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1");
       }
     }
@@ -1888,24 +2027,20 @@ var D1DatabaseAccessLayer = class {
           "SELECT * FROM order_items WHERE order_id = ?;",
           [orderId]
         );
-        if (Array.isArray(rows)) {
-          return rows.map((r) => ({
-            id: r.id,
-            orderId: r.order_id,
-            productId: r.product_id || r.productId,
-            productNameAr: r.product_name_ar,
-            productNameEn: r.product_name_en,
-            weightOption: r.weight_option,
-            quantity: r.quantity,
-            unitPrice: r.unit_price,
-            totalPrice: r.total_price,
-            createdAt: r.created_at
-          }));
-        }
+        return Array.isArray(rows) ? rows.map((r) => ({
+          id: r.id,
+          orderId: r.order_id,
+          productId: r.product_id || r.productId,
+          productNameAr: r.product_name_ar,
+          productNameEn: r.product_name_en,
+          weightOption: r.weight_option,
+          quantity: r.quantity,
+          unitPrice: r.unit_price,
+          totalPrice: r.total_price,
+          createdAt: r.created_at
+        })) : [];
       } catch (e) {
-        console.error("D1 getOrderItemsAsync error:", e);
-      }
-      if (process.env.NODE_ENV === "production") {
+        console.error("D1 getOrderItemsAsync error:", sanitizeD1ErrorMessage(e));
         throw new Error("\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0639\u0646\u0627\u0635\u0631 \u0627\u0644\u0637\u0644\u0628 \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1");
       }
     }
@@ -1923,58 +2058,25 @@ var D1DatabaseAccessLayer = class {
           [orderData.idempotencyKey]
         );
         if (Array.isArray(existingD1) && existingD1.length > 0) {
-          const row = existingD1[0];
-          const existingOrder = {
-            id: row.id,
-            orderNumber: row.order_number,
-            date: row.created_at,
-            createdAt: row.created_at,
-            status: row.status,
-            items: typeof row.items_json === "string" ? JSON.parse(row.items_json || "[]") : row.items_json || [],
-            subtotal: row.subtotal,
-            shippingFee: row.shipping_fee || 0,
-            discount: row.discount || 0,
-            total: row.total,
-            totalAmount: row.total,
-            district: row.delivery_district,
-            address: {
-              id: `addr-${row.id}`,
-              title: row.delivery_district,
-              district: row.delivery_district,
-              street: row.delivery_address,
-              phone: row.customer_phone,
-              isDefault: true
-            },
-            customerName: row.customer_name,
-            customerPhone: row.customer_phone,
-            paymentMethod: row.payment_method,
-            notes: row.notes || "",
-            driverId: row.driver_id,
-            driverName: row.driver_name,
-            driverPhone: row.driver_phone,
-            timeline: typeof row.timeline_json === "string" ? JSON.parse(row.timeline_json || "[]") : row.timeline_json || [],
-            idempotencyKey: row.idempotency_key
+          return {
+            success: true,
+            order: this.mapD1OrderToOrder(existingD1[0]),
+            isDuplicate: true,
+            message: "\u0637\u0644\u0628 \u0645\u0643\u0631\u0631 \u062A\u0645 \u0625\u0646\u0634\u0627\u0624\u0647 \u0645\u0633\u0628\u0642\u0627\u064B"
           };
-          return { success: true, order: existingOrder, isDuplicate: true, message: "\u0637\u0644\u0628 \u0645\u0643\u0631\u0631 \u062A\u0645 \u0625\u0646\u0634\u0627\u0624\u0647 \u0645\u0633\u0628\u0642\u0627\u064B" };
         }
-      }
-      const existingMem = this.tables.orders.find((o) => o.idempotencyKey === orderData.idempotencyKey);
-      if (existingMem) {
-        return { success: true, order: existingMem, isDuplicate: true, message: "\u0637\u0644\u0628 \u0645\u0643\u0631\u0631 \u062A\u0645 \u0625\u0646\u0634\u0627\u0624\u0647 \u0645\u0633\u0628\u0642\u0627\u064B" };
+      } else {
+        if (process.env.NODE_ENV === "production") {
+          return { success: false, message: "\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u063A\u064A\u0631 \u0645\u0647\u064A\u0623\u0629 \u0641\u064A \u0628\u064A\u0626\u0629 \u0627\u0644\u0625\u0646\u062A\u0627\u062C" };
+        }
+        const existingMem = this.tables.orders.find((o) => o.idempotencyKey === orderData.idempotencyKey);
+        if (existingMem) {
+          return { success: true, order: existingMem, isDuplicate: true, message: "\u0637\u0644\u0628 \u0645\u0643\u0631\u0631 \u062A\u0645 \u0625\u0646\u0634\u0627\u0624\u0647 \u0645\u0633\u0628\u0642\u0627\u064B" };
+        }
       }
     }
     if (this.isD1Configured()) {
       const batchStatements = [];
-      for (const it of orderData.validatedItems) {
-        batchStatements.push({
-          sql: "UPDATE products SET stock = stock - ?, updated_at = datetime('now') WHERE id = ?;",
-          params: [it.quantity, it.productId]
-        });
-        batchStatements.push({
-          sql: "UPDATE inventory SET current_stock = current_stock - ?, updated_at = datetime('now') WHERE product_id = ?;",
-          params: [it.quantity, it.productId]
-        });
-      }
       const customerId = `cust-${cleanPhone}`;
       batchStatements.push({
         sql: `INSERT INTO customers (id, name, phone, district, street, notes, total_orders, total_spent, loyalty_points, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, datetime('now'), datetime('now')) ON CONFLICT(phone) DO UPDATE SET name = CASE   WHEN ? NOT IN ('\u0639\u0645\u064A\u0644', '\u0639\u0645\u064A\u0644 \u0627\u0644\u0645\u062A\u062C\u0631', '\u0639\u0645\u064A\u0644 \u0627\u0644\u0630\u0647\u0628 \u0627\u0644\u0623\u0633\u0648\u062F', '\u0639\u0645\u064A\u0644 \u062C\u062F\u064A\u062F', '\u0639\u0645\u064A\u0644 \u0632\u0627\u0626\u0631', '\u0632\u0628\u0648\u0646', '\u0632\u0627\u0626\u0631', '') THEN ?   WHEN customers.name IN ('\u0639\u0645\u064A\u0644', '\u0639\u0645\u064A\u0644 \u0627\u0644\u0645\u062A\u062C\u0631', '\u0639\u0645\u064A\u0644 \u0627\u0644\u0630\u0647\u0628 \u0627\u0644\u0623\u0633\u0648\u062F', '\u0639\u0645\u064A\u0644 \u062C\u062F\u064A\u062F', '\u0639\u0645\u064A\u0644 \u0632\u0627\u0626\u0631', '\u0632\u0628\u0648\u0646', '\u0632\u0627\u0626\u0631', '') AND ? != '' THEN ?   ELSE customers.name END, district = COALESCE(?, customers.district), total_orders = customers.total_orders + 1, total_spent = customers.total_spent + ?, loyalty_points = customers.loyalty_points + ?, updated_at = datetime('now');`,
@@ -2022,18 +2124,23 @@ var D1DatabaseAccessLayer = class {
         ]
       });
       for (const it of orderData.validatedItems) {
+        batchStatements.push({
+          sql: "UPDATE products SET stock = stock - ?, updated_at = datetime('now') WHERE id = ?;",
+          params: [it.quantity, it.productId]
+        });
+        batchStatements.push({
+          sql: "UPDATE inventory SET current_stock = current_stock - ?, updated_at = datetime('now') WHERE product_id = ?;",
+          params: [it.quantity, it.productId]
+        });
         const itemRowId = `oi-${orderData.orderId}-${it.productId}-${Math.random().toString(36).substring(2, 7)}`;
         batchStatements.push({
           sql: `INSERT INTO order_items (id, order_id, product_id, productId, product_name_ar, product_name_en, weight_option, quantity, unit_price, total_price, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'));`,
           params: [itemRowId, orderData.orderId, it.productId, it.productId, it.productNameAr, it.productNameEn || "", it.weight, it.quantity, it.unitPrice, it.unitPrice * it.quantity]
         });
-        const currentProd = this.findProductById(it.productId);
-        const prevStock = currentProd ? currentProd.stock : 0;
-        const newStock = Math.max(0, prevStock - it.quantity);
         const logId = `tx-sale-${Date.now()}-${it.productId}-${Math.random().toString(36).substring(2, 6)}`;
         batchStatements.push({
-          sql: `INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, order_id, performed_by, created_at) VALUES (?, ?, ?, 'sale', ?, ?, ?, ?, ?, '\u0646\u0638\u0627\u0645 \u0627\u0644\u0637\u0644\u0628\u0627\u062A \u0627\u0644\u0630\u0631\u064A', datetime('now'));`,
-          params: [logId, it.productId, it.productNameAr, -it.quantity, prevStock, newStock, `\u0645\u0628\u064A\u0639\u0627\u062A \u0637\u0644\u0628 \u062C\u062F\u064A\u062F #${orderData.orderNumber}`, orderData.orderId]
+          sql: `INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, order_id, performed_by, created_at) SELECT ?, id, name_ar, 'sale', ?, (stock + ?), stock, ?, ?, '\u0646\u0638\u0627\u0645 \u0627\u0644\u0637\u0644\u0628\u0627\u062A \u0627\u0644\u0630\u0631\u064A', datetime('now') FROM products WHERE id = ?;`,
+          params: [logId, -it.quantity, it.quantity, `\u0645\u0628\u064A\u0639\u0627\u062A \u0637\u0644\u0628 \u062C\u062F\u064A\u062F #${orderData.orderNumber}`, orderData.orderId, it.productId]
         });
       }
       if (orderData.couponCode) {
@@ -2042,9 +2149,39 @@ var D1DatabaseAccessLayer = class {
           params: [orderData.couponCode]
         });
       }
+      const paymentId = `pay-${orderData.orderId}`;
+      const normalizedPayMethod = normalizePaymentMethodForD1(orderData.paymentMethod);
+      batchStatements.push({
+        sql: `INSERT OR IGNORE INTO payments (id, order_id, amount, method, status, notes, created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, datetime('now'), datetime('now'));`,
+        params: [paymentId, orderData.orderId, orderData.total, normalizedPayMethod, `\u0633\u062C\u0644 \u062A\u062D\u0635\u064A\u0644 \u0627\u0644\u0637\u0644\u0628 #${orderData.orderNumber}`]
+      });
+      const orderNotifId = `notif-order-${orderData.orderId}`;
+      batchStatements.push({
+        sql: `INSERT OR IGNORE INTO notifications (id, recipient_role, recipient_id, title, message, type, is_read, link, created_at) VALUES (?, 'admin', NULL, ?, ?, 'order', 0, ?, datetime('now'));`,
+        params: [
+          orderNotifId,
+          "\u0637\u0644\u0628 \u062C\u062F\u064A\u062F \u0648\u0627\u0631\u062F",
+          `\u0637\u0644\u0628 \u062C\u062F\u064A\u062F #${orderData.orderNumber} \u0628\u0642\u064A\u0645\u0629 ${orderData.total.toLocaleString()} \u0631.\u064A \u0641\u064A ${orderData.address.district}`,
+          `/admin/orders/${orderData.orderId}`
+        ]
+      });
       const batchRes = await this.executeCloudflareD1BatchRaw(batchStatements);
       if (!batchRes.success) {
         const errStr = (batchRes.errors || []).map((e) => e.message).join("; ");
+        if (orderData.idempotencyKey && errStr.includes("UNIQUE constraint") && errStr.toLowerCase().includes("idempotency")) {
+          const raceExisting = await this.executeCloudflareD1Query(
+            "SELECT * FROM orders WHERE idempotency_key = ? LIMIT 1;",
+            [orderData.idempotencyKey]
+          ).catch(() => []);
+          if (Array.isArray(raceExisting) && raceExisting.length > 0) {
+            return {
+              success: true,
+              order: this.mapD1OrderToOrder(raceExisting[0]),
+              isDuplicate: true,
+              message: "\u0637\u0644\u0628 \u0645\u0643\u0631\u0631 \u062A\u0645 \u0625\u0646\u0634\u0627\u0624\u0647 \u0645\u0633\u0628\u0642\u0627\u064B"
+            };
+          }
+        }
         let arabicErr = "\u0641\u0634\u0644\u062A \u0639\u0645\u0644\u064A\u0629 \u0625\u0646\u0634\u0627\u0621 \u0627\u0644\u0637\u0644\u0628 \u0644\u0639\u062F\u0645 \u062A\u0648\u0641\u0631 \u0627\u0644\u0645\u062E\u0632\u0648\u0646 \u0627\u0644\u0643\u0627\u0641\u064A \u0644\u0644\u0645\u0646\u062A\u062C\u0627\u062A \u0627\u0644\u0645\u0637\u0644\u0648\u0628\u0629.";
         if (errStr.includes("Insufficient stock") || errStr.includes("prevent_negative_stock") || errStr.includes("CHECK constraint failed")) {
           arabicErr = "\u0639\u0630\u0631\u0627\u064B! \u0627\u0644\u0643\u0645\u064A\u0629 \u0627\u0644\u0645\u0637\u0644\u0648\u0628\u0629 \u062A\u062A\u062C\u0627\u0648\u0632 \u0627\u0644\u0645\u062E\u0632\u0648\u0646 \u0627\u0644\u0645\u062A\u0627\u062D \u062D\u0627\u0644\u064A\u0627\u064B.";
@@ -2056,29 +2193,62 @@ var D1DatabaseAccessLayer = class {
       const createdFromD1 = await this.findOrderByIdAsync(orderData.orderId);
       if (createdFromD1) {
         this.tables.orders.unshift(createdFromD1);
-        for (const it of orderData.validatedItems) {
-          const p = this.findProductById(it.productId);
-          const prev = p ? p.stock : 0;
-          const next = Math.max(0, prev - it.quantity);
-          if (p) p.stock = next;
-          const inv = this.tables.inventory.get(it.productId);
-          if (inv) {
-            inv.currentStock = next;
-            inv.lastCountedAt = (/* @__PURE__ */ new Date()).toISOString();
+        const uniqueIds = Array.from(new Set(orderData.validatedItems.map((it) => it.productId)));
+        if (uniqueIds.length > 0) {
+          const placeholders = uniqueIds.map(() => "?").join(", ");
+          const freshProdRows = await this.executeCloudflareD1Query(
+            `SELECT id, stock FROM products WHERE id IN (${placeholders});`,
+            uniqueIds
+          ).catch(() => []);
+          if (Array.isArray(freshProdRows)) {
+            for (const pr of freshProdRows) {
+              const freshStock = Number(pr.stock ?? 0);
+              const memProd = this.tables.products.find((p) => p.id === pr.id);
+              if (memProd) memProd.stock = freshStock;
+              const inv = this.tables.inventory.get(pr.id);
+              if (inv) {
+                inv.currentStock = freshStock;
+                inv.lastCountedAt = (/* @__PURE__ */ new Date()).toISOString();
+              }
+            }
           }
-          this.tables.inventory_logs.unshift({
-            id: `tx-sale-${Date.now()}-${it.productId}`,
-            productId: it.productId,
-            productName: it.productNameAr,
-            type: "sale",
-            quantity: -it.quantity,
-            previousStock: prev,
-            newStock: next,
-            reason: `\u0645\u0628\u064A\u0639\u0627\u062A \u0637\u0644\u0628 \u062C\u062F\u064A\u062F #${orderData.orderNumber}`,
-            orderId: orderData.orderId,
-            performedBy: "\u0646\u0638\u0627\u0645 \u0627\u0644\u0637\u0644\u0628\u0627\u062A \u0627\u0644\u0630\u0631\u064A",
-            createdAt: (/* @__PURE__ */ new Date()).toISOString()
-          });
+        }
+        const freshLogRows = await this.executeCloudflareD1Query(
+          "SELECT * FROM inventory_logs WHERE order_id = ? ORDER BY created_at DESC;",
+          [orderData.orderId]
+        ).catch(() => []);
+        if (Array.isArray(freshLogRows) && freshLogRows.length > 0) {
+          for (const l of freshLogRows) {
+            if (!this.tables.inventory_logs.some((existing) => existing.id === l.id)) {
+              this.tables.inventory_logs.unshift({
+                id: l.id,
+                productId: l.product_id,
+                productName: l.product_name,
+                type: l.type,
+                quantity: l.quantity,
+                previousStock: l.previous_stock,
+                newStock: l.new_stock,
+                reason: l.reason,
+                orderId: l.order_id || void 0,
+                performedBy: l.performed_by,
+                createdAt: l.created_at
+              });
+            }
+          }
+        }
+        const payRows = await this.executeCloudflareD1Query("SELECT * FROM payments WHERE order_id = ? LIMIT 1;", [orderData.orderId]).catch(() => []);
+        if (Array.isArray(payRows) && payRows.length > 0) {
+          const mappedPay = this.mapD1PaymentToPayment(payRows[0]);
+          if (!this.tables.payments.some((p) => p.id === mappedPay.id)) {
+            this.tables.payments.unshift(mappedPay);
+          }
+        }
+        const notifRows = await this.executeCloudflareD1Query("SELECT * FROM notifications WHERE id = ? LIMIT 1;", [orderNotifId]).catch(() => []);
+        if (Array.isArray(notifRows) && notifRows.length > 0) {
+          const mappedNotif = this.mapD1NotificationToNotification(notifRows[0]);
+          if (!this.tables.notifications.some((n) => n.id === mappedNotif.id)) {
+            this.tables.notifications.unshift(mappedNotif);
+          }
         }
         return { success: true, order: createdFromD1 };
       }
@@ -2106,7 +2276,7 @@ var D1DatabaseAccessLayer = class {
       }
     }
     for (const it of orderData.validatedItems) {
-      const p = this.findProductById(it.productId);
+      const p = this.tables.products.find((prod) => prod.id === it.productId);
       if (p) {
         p.stock = Math.max(0, p.stock - it.quantity);
       }
@@ -2167,6 +2337,26 @@ var D1DatabaseAccessLayer = class {
     cust.totalOrders += 1;
     cust.totalSpent += orderData.total;
     cust.loyaltyPoints += Math.floor(orderData.total / 100);
+    this.tables.payments.unshift({
+      id: `pay-${orderData.orderId}`,
+      orderId: orderData.orderId,
+      amount: orderData.total,
+      method: normalizePaymentMethodForD1(orderData.paymentMethod),
+      status: "pending",
+      notes: `\u0633\u062C\u0644 \u062A\u062D\u0635\u064A\u0644 \u0627\u0644\u0637\u0644\u0628 #${orderData.orderNumber}`,
+      createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    });
+    this.tables.notifications.unshift({
+      id: `notif-order-${orderData.orderId}`,
+      recipientRole: "admin",
+      title: "\u0637\u0644\u0628 \u062C\u062F\u064A\u062F \u0648\u0627\u0631\u062F",
+      message: `\u0637\u0644\u0628 \u062C\u062F\u064A\u062F #${orderData.orderNumber} \u0628\u0642\u064A\u0645\u0629 ${orderData.total.toLocaleString()} \u0631.\u064A \u0641\u064A ${orderData.address.district}`,
+      type: "order",
+      isRead: false,
+      link: `/admin/orders/${orderData.orderId}`,
+      createdAt: (/* @__PURE__ */ new Date()).toISOString()
+    });
     return { success: true, order: newOrder };
   }
   addOrder(order) {
@@ -2229,7 +2419,7 @@ var D1DatabaseAccessLayer = class {
    */
   async executeStockRollback(order, actor = "\u0646\u0638\u0627\u0645 \u0625\u062F\u0627\u0631\u0629 \u0627\u0644\u0637\u0644\u0628\u0627\u062A", driverNotes, timeline) {
     const orderKey = order.id;
-    if (order.isStockRolledBack) {
+    if (!this.isD1Configured() && order.isStockRolledBack) {
       console.log(`[D1 Stock Rollback] Order ${order.id} was already rolled back previously. Skipping.`);
       return false;
     }
@@ -2237,31 +2427,76 @@ var D1DatabaseAccessLayer = class {
     if (existingInFlight) {
       console.log(`[D1 Stock Rollback] Order ${order.id} rollback is already in-flight. Awaiting completion.`);
       await existingInFlight;
+      if (this.isD1Configured()) {
+        const fresh = await this.findOrderByIdAsync(order.id).catch(() => void 0);
+        if (fresh) {
+          order.status = fresh.status;
+          order.isStockRolledBack = Boolean(fresh.isStockRolledBack ?? true);
+          order.cancelledAt = fresh.cancelledAt || order.cancelledAt;
+          order.timeline = fresh.timeline || order.timeline;
+          order.driverNotes = fresh.driverNotes || order.driverNotes;
+        } else {
+          order.status = "cancelled";
+          order.isStockRolledBack = true;
+        }
+      } else {
+        const inMem = this.findOrderById(order.id);
+        order.status = inMem?.status || "cancelled";
+        order.isStockRolledBack = Boolean(inMem?.isStockRolledBack ?? true);
+        if (inMem?.timeline) order.timeline = inMem.timeline;
+        if (inMem?.cancelledAt) order.cancelledAt = inMem.cancelledAt;
+      }
       return false;
     }
-    const alreadyLogged = this.tables.inventory_logs.some(
-      (log) => log.orderId === order.id && log.type === "STOCK_ROLLBACK"
-    );
-    if (alreadyLogged) {
-      order.isStockRolledBack = true;
-      console.log(`[D1 Stock Rollback] Audit log already contains rollback for order ${order.id}. Skipping duplicate.`);
-      return false;
+    if (!this.isD1Configured()) {
+      const alreadyLogged = this.tables.inventory_logs.some(
+        (log) => log.orderId === order.id && log.type === "STOCK_ROLLBACK"
+      );
+      if (alreadyLogged) {
+        order.isStockRolledBack = true;
+        order.status = "cancelled";
+        console.log(`[D1 Stock Rollback] Audit log already contains rollback for order ${order.id}. Skipping duplicate.`);
+        return false;
+      }
     }
     const runExecution = async () => {
       if (this.isD1Configured()) {
         const d1Rows = await this.executeCloudflareD1Query(
-          "SELECT id, status, is_stock_rolled_back FROM orders WHERE id = ? OR order_number = ? LIMIT 1;",
+          "SELECT * FROM orders WHERE id = ? OR order_number = ? LIMIT 1;",
           [order.id, order.orderNumber || order.id]
         );
-        if (d1Rows && d1Rows.length > 0) {
-          const row = d1Rows[0];
-          if (row.is_stock_rolled_back === 1 || row.is_stock_rolled_back === true) {
-            order.isStockRolledBack = true;
-            order.status = "cancelled";
-            console.log(`[D1 Stock Rollback] Order ${order.id} is already rolled back in D1. Skipping duplicate.`);
-            return false;
-          }
+        if (!d1Rows || d1Rows.length === 0) {
+          throw new Error(`\u0627\u0644\u0637\u0644\u0628 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1: ${order.orderNumber || order.id}`);
         }
+        const row = d1Rows[0];
+        if (row.status === "delivered" || row.status === "completed") {
+          throw new Error("\u0644\u0627 \u064A\u0645\u0643\u0646 \u0625\u0644\u063A\u0627\u0621 \u0637\u0644\u0628 \u062A\u0645 \u062A\u0633\u0644\u064A\u0645\u0647 \u0623\u0648 \u0625\u0643\u0645\u0627\u0644\u0647 \u0628\u0627\u0644\u0641\u0639\u0644");
+        }
+        if (row.is_stock_rolled_back === 1 || row.is_stock_rolled_back === true) {
+          const mapped = this.mapD1OrderToOrder(row);
+          order.isStockRolledBack = true;
+          order.status = mapped.status || "cancelled";
+          order.cancelledAt = row.cancelled_at || order.cancelledAt;
+          order.timeline = mapped.timeline || order.timeline;
+          order.driverNotes = mapped.driverNotes || order.driverNotes;
+          console.log(`[D1 Stock Rollback] Order ${order.id} is already rolled back in D1. Skipping duplicate.`);
+          return false;
+        }
+        const d1RollbackLog = await this.executeCloudflareD1Query(
+          "SELECT id FROM inventory_logs WHERE order_id = ? AND type = 'STOCK_ROLLBACK' LIMIT 1;",
+          [row.id]
+        );
+        if (Array.isArray(d1RollbackLog) && d1RollbackLog.length > 0) {
+          const mapped = this.mapD1OrderToOrder(row);
+          order.isStockRolledBack = true;
+          order.status = mapped.status || "cancelled";
+          order.cancelledAt = row.cancelled_at || order.cancelledAt;
+          order.timeline = mapped.timeline || order.timeline;
+          console.log(`[D1 Stock Rollback] Rollback log already exists in D1 for order ${row.id}. Skipping duplicate.`);
+          return false;
+        }
+      } else if (process.env.NODE_ENV === "production") {
+        throw new Error("\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u063A\u064A\u0631 \u0645\u0647\u064A\u0623\u0629 \u0641\u064A \u0628\u064A\u0626\u0629 \u0627\u0644\u0625\u0646\u062A\u0627\u062C");
       }
       let itemsToRollback = order.items;
       if (!itemsToRollback || itemsToRollback.length === 0) {
@@ -2285,48 +2520,50 @@ var D1DatabaseAccessLayer = class {
       }
       const rollbackBatch = [];
       const memoryUpdates = [];
+      const cancellableWhereClause = "(id = ? OR order_number = ?) AND (is_stock_rolled_back = 0 OR is_stock_rolled_back IS NULL) AND status NOT IN ('delivered', 'completed', 'cancelled')";
       for (const it of validItemsToRestore) {
-        const product = await this.findProductByIdAsync(it.productId);
-        const prevStock = product ? product.stock : 0;
         const restoredQty = Number(it.quantity) || 1;
-        const newStock = prevStock + restoredQty;
-        const logId = `tx-rollback-${Date.now()}-${it.productId}-${Math.random().toString(36).substring(2, 6)}`;
+        const logId = `tx-rollback-${Date.now()}-${it.productId}-${crypto2.randomBytes(3).toString("hex")}`;
         if (this.isD1Configured()) {
           rollbackBatch.push({
-            sql: "UPDATE products SET stock = stock + ?, updated_at = datetime('now') WHERE id = ? AND EXISTS (SELECT 1 FROM orders WHERE (id = ? OR order_number = ?) AND (is_stock_rolled_back = 0 OR is_stock_rolled_back IS NULL));",
+            sql: `UPDATE products SET stock = stock + ?, updated_at = datetime('now') WHERE id = ? AND EXISTS (SELECT 1 FROM orders WHERE ${cancellableWhereClause});`,
             params: [restoredQty, it.productId, order.id, order.orderNumber || order.id]
           });
           rollbackBatch.push({
-            sql: "UPDATE inventory SET current_stock = current_stock + ?, updated_at = datetime('now') WHERE product_id = ? AND EXISTS (SELECT 1 FROM orders WHERE (id = ? OR order_number = ?) AND (is_stock_rolled_back = 0 OR is_stock_rolled_back IS NULL));",
-            params: [restoredQty, it.productId, order.id, order.orderNumber || order.id]
+            sql: `INSERT INTO inventory (product_id, current_stock, min_threshold, updated_at) SELECT id, stock, 10, datetime('now') FROM products WHERE id = ? AND EXISTS (SELECT 1 FROM orders WHERE ${cancellableWhereClause}) ON CONFLICT(product_id) DO UPDATE SET current_stock = excluded.current_stock, updated_at = datetime('now');`,
+            params: [it.productId, order.id, order.orderNumber || order.id]
           });
           rollbackBatch.push({
-            sql: "INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, order_id, performed_by, created_at) SELECT ?, ?, ?, 'STOCK_ROLLBACK', ?, ?, ?, ?, ?, ?, datetime('now') WHERE EXISTS (SELECT 1 FROM orders WHERE (id = ? OR order_number = ?) AND (is_stock_rolled_back = 0 OR is_stock_rolled_back IS NULL));",
-            params: [logId, it.productId, it.productNameAr, restoredQty, prevStock, newStock, `\u0627\u0633\u062A\u0631\u062C\u0627\u0639 \u0645\u062E\u0632\u0648\u0646 \u0644\u0625\u0644\u063A\u0627\u0621 \u0627\u0644\u0637\u0644\u0628 #${order.orderNumber || order.id}`, order.id, actor, order.id, order.orderNumber || order.id]
+            sql: `INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, order_id, performed_by, created_at) SELECT ?, ?, ?, 'STOCK_ROLLBACK', ?, COALESCE((SELECT stock - ? FROM products WHERE id = ?), 0), COALESCE((SELECT stock FROM products WHERE id = ?), ?), ?, ?, ?, datetime('now') WHERE EXISTS (SELECT 1 FROM orders WHERE ${cancellableWhereClause});`,
+            params: [logId, it.productId, it.productNameAr, restoredQty, restoredQty, it.productId, it.productId, restoredQty, `\u0627\u0633\u062A\u0631\u062C\u0627\u0639 \u0645\u062E\u0632\u0648\u0646 \u0644\u0625\u0644\u063A\u0627\u0621 \u0627\u0644\u0637\u0644\u0628 #${order.orderNumber || order.id}`, order.id, actor, order.id, order.orderNumber || order.id]
+          });
+        } else {
+          const product = this.findProductById(it.productId);
+          const prevStock = product ? product.stock : 0;
+          const newStock = prevStock + restoredQty;
+          memoryUpdates.push({
+            product,
+            newStock,
+            logRecord: {
+              id: logId,
+              productId: it.productId,
+              productName: it.productNameAr,
+              type: "STOCK_ROLLBACK",
+              quantity: restoredQty,
+              previousStock: prevStock,
+              newStock,
+              reason: `\u0627\u0633\u062A\u0631\u062C\u0627\u0639 \u0645\u062E\u0632\u0648\u0646 \u0644\u0625\u0644\u063A\u0627\u0621 \u0627\u0644\u0637\u0644\u0628 #${order.orderNumber || order.id}`,
+              orderId: order.id,
+              performedBy: actor || "\u0646\u0638\u0627\u0645 \u0625\u062F\u0627\u0631\u0629 \u0627\u0644\u0637\u0644\u0628\u0627\u062A",
+              createdAt: (/* @__PURE__ */ new Date()).toISOString()
+            }
           });
         }
-        memoryUpdates.push({
-          product,
-          newStock,
-          logRecord: {
-            id: logId,
-            productId: it.productId,
-            productName: it.productNameAr,
-            type: "STOCK_ROLLBACK",
-            quantity: restoredQty,
-            previousStock: prevStock,
-            newStock,
-            reason: `\u0627\u0633\u062A\u0631\u062C\u0627\u0639 \u0645\u062E\u0632\u0648\u0646 \u0644\u0625\u0644\u063A\u0627\u0621 \u0627\u0644\u0637\u0644\u0628 #${order.orderNumber || order.id}`,
-            orderId: order.id,
-            performedBy: actor || "\u0646\u0638\u0627\u0645 \u0625\u062F\u0627\u0631\u0629 \u0627\u0644\u0637\u0644\u0628\u0627\u062A",
-            createdAt: (/* @__PURE__ */ new Date()).toISOString()
-          }
-        });
       }
       const appliedCoupon = order.couponCode || order.coupon_code;
       if (appliedCoupon && this.isD1Configured()) {
         rollbackBatch.push({
-          sql: "UPDATE coupons SET usage_count = MAX(0, usage_count - 1) WHERE UPPER(code) = UPPER(?) AND EXISTS (SELECT 1 FROM orders WHERE (id = ? OR order_number = ?) AND (is_stock_rolled_back = 0 OR is_stock_rolled_back IS NULL));",
+          sql: `UPDATE coupons SET usage_count = MAX(0, usage_count - 1) WHERE UPPER(code) = UPPER(?) AND EXISTS (SELECT 1 FROM orders WHERE ${cancellableWhereClause});`,
           params: [appliedCoupon, order.id, order.orderNumber || order.id]
         });
       }
@@ -2341,38 +2578,118 @@ var D1DatabaseAccessLayer = class {
       ];
       if (this.isD1Configured()) {
         rollbackBatch.push({
-          sql: "UPDATE orders SET status = 'cancelled', is_stock_rolled_back = 1, cancelled_at = datetime('now'), driver_notes = COALESCE(?, driver_notes), timeline_json = ?, updated_at = datetime('now') WHERE (id = ? OR order_number = ?) AND (is_stock_rolled_back = 0 OR is_stock_rolled_back IS NULL);",
+          sql: `UPDATE payments SET status = 'failed', updated_at = datetime('now') WHERE order_id = ? AND status = 'pending' AND EXISTS (SELECT 1 FROM orders WHERE ${cancellableWhereClause});`,
+          params: [order.id, order.id, order.orderNumber || order.id]
+        });
+        rollbackBatch.push({
+          sql: `INSERT OR IGNORE INTO notifications (id, recipient_role, recipient_id, title, message, type, is_read, link, created_at) SELECT ?, 'admin', NULL, '\u0627\u0633\u062A\u0631\u062C\u0627\u0639 \u0645\u062E\u0632\u0648\u0646 - \u0625\u0644\u063A\u0627\u0621 \u0637\u0644\u0628', ?, 'stock', 0, ?, datetime('now') WHERE EXISTS (SELECT 1 FROM orders WHERE ${cancellableWhereClause});`,
+          params: [
+            `notif-cancel-${order.id}`,
+            `\u062A\u0645 \u0625\u0644\u063A\u0627\u0621 \u0627\u0644\u0637\u0644\u0628 #${order.orderNumber || order.id} \u0648\u0625\u0639\u0627\u062F\u0629 \u0627\u0644\u0643\u0645\u064A\u0627\u062A \u062A\u0644\u0642\u0627\u0626\u064A\u064B\u0627 \u0644\u0644\u0645\u062E\u0632\u0648\u0646`,
+            `/admin/orders/${order.id}`,
+            order.id,
+            order.orderNumber || order.id
+          ]
+        });
+      }
+      if (this.isD1Configured()) {
+        rollbackBatch.push({
+          sql: `UPDATE orders SET status = 'cancelled', is_stock_rolled_back = 1, payment_status = CASE WHEN payment_status = 'pending' THEN 'failed' ELSE payment_status END, cancelled_at = datetime('now'), driver_notes = COALESCE(?, driver_notes), timeline_json = ?, updated_at = datetime('now') WHERE ${cancellableWhereClause};`,
           params: [driverNotes || null, JSON.stringify(timelineToSave), order.id, order.orderNumber || order.id]
         });
       }
       if (this.isD1Configured()) {
         const batchRes = await this.executeCloudflareD1BatchRaw(rollbackBatch);
         if (!batchRes || batchRes.success === false) {
-          const errStr = (batchRes?.errors || []).map((e) => e.message || JSON.stringify(e)).join("; ") || "D1 Batch execution failed";
+          const errStr = sanitizeD1ErrorMessage((batchRes?.errors || []).map((e) => e.message || JSON.stringify(e)).join("; ") || "D1 Batch execution failed");
           console.error("[D1 Stock Rollback Error] Cloudflare D1 batch rollback failed:", errStr);
           throw new Error(`\u0641\u0634\u0644\u062A \u0639\u0645\u0644\u064A\u0629 \u0627\u0633\u062A\u0631\u062C\u0627\u0639 \u0627\u0644\u0645\u062E\u0632\u0648\u0646 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1: ${errStr}`);
         }
         const orderUpdateResult = batchRes.result?.[batchRes.result.length - 1];
         const changes = orderUpdateResult?.meta?.changes ?? 0;
         if (changes === 0) {
+          const fresh = await this.findOrderByIdAsync(order.id).catch(() => void 0);
+          if (fresh && (fresh.status === "delivered" || fresh.status === "completed")) {
+            throw new Error("\u0644\u0627 \u064A\u0645\u0643\u0646 \u0625\u0644\u063A\u0627\u0621 \u0637\u0644\u0628 \u062A\u0645 \u062A\u0633\u0644\u064A\u0645\u0647 \u0623\u0648 \u0625\u0643\u0645\u0627\u0644\u0647 \u0628\u0627\u0644\u0641\u0639\u0644");
+          }
           console.warn(`[D1 Stock Rollback] Order ${order.id} was already rolled back (concurrent or previous cancellation detected in D1). Zero rows modified in D1.`);
-          order.isStockRolledBack = true;
-          order.status = "cancelled";
+          if (fresh) {
+            order.isStockRolledBack = Boolean(fresh.isStockRolledBack ?? true);
+            order.status = fresh.status || "cancelled";
+            order.cancelledAt = fresh.cancelledAt || order.cancelledAt;
+            order.timeline = fresh.timeline || order.timeline;
+            order.driverNotes = fresh.driverNotes || order.driverNotes;
+            const inMemExisting = this.findOrderById(order.id);
+            if (inMemExisting) {
+              inMemExisting.isStockRolledBack = order.isStockRolledBack;
+              inMemExisting.status = order.status;
+              inMemExisting.cancelledAt = order.cancelledAt;
+              inMemExisting.timeline = order.timeline;
+            }
+          } else {
+            order.isStockRolledBack = true;
+            order.status = "cancelled";
+          }
           return false;
         }
-      } else if (process.env.NODE_ENV === "production") {
-        throw new Error("\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u063A\u064A\u0631 \u0645\u0647\u064A\u0623\u0629 \u0641\u064A \u0628\u064A\u0626\u0629 \u0627\u0644\u0625\u0646\u062A\u0627\u062C");
-      }
-      for (const upd of memoryUpdates) {
-        if (upd.product) {
-          upd.product.stock = upd.newStock;
+        const uniqueIds = Array.from(new Set(validItemsToRestore.map((it) => it.productId)));
+        if (uniqueIds.length > 0) {
+          const placeholders = uniqueIds.map(() => "?").join(", ");
+          const freshProdRows = await this.executeCloudflareD1Query(
+            `SELECT id, stock FROM products WHERE id IN (${placeholders});`,
+            uniqueIds
+          ).catch(() => []);
+          if (Array.isArray(freshProdRows)) {
+            for (const pr of freshProdRows) {
+              const freshStock = Number(pr.stock ?? 0);
+              const memProd = this.tables.products.find((p) => p.id === pr.id);
+              if (memProd) memProd.stock = freshStock;
+              const inv = this.tables.inventory.get(pr.id);
+              if (inv) {
+                inv.currentStock = freshStock;
+                inv.lastCountedAt = (/* @__PURE__ */ new Date()).toISOString();
+              }
+            }
+          }
         }
-        const inv = this.tables.inventory.get(upd.logRecord.productId);
-        if (inv) {
-          inv.currentStock = upd.newStock;
-          inv.lastCountedAt = (/* @__PURE__ */ new Date()).toISOString();
+        const freshLogs = await this.executeCloudflareD1Query(
+          "SELECT * FROM inventory_logs WHERE order_id = ? AND type = 'STOCK_ROLLBACK' ORDER BY created_at DESC;",
+          [order.id]
+        ).catch(() => []);
+        if (Array.isArray(freshLogs)) {
+          for (const l of freshLogs) {
+            if (!this.tables.inventory_logs.some((existing) => existing.id === l.id)) {
+              this.tables.inventory_logs.unshift({
+                id: l.id,
+                productId: l.product_id,
+                productName: l.product_name,
+                type: l.type,
+                quantity: l.quantity,
+                previousStock: l.previous_stock,
+                newStock: l.new_stock,
+                reason: l.reason,
+                orderId: l.order_id || void 0,
+                performedBy: l.performed_by,
+                createdAt: l.created_at
+              });
+            }
+          }
         }
-        this.tables.inventory_logs.unshift(upd.logRecord);
+      } else {
+        if (process.env.NODE_ENV === "production") {
+          throw new Error("\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u063A\u064A\u0631 \u0645\u0647\u064A\u0623\u0629 \u0641\u064A \u0628\u064A\u0626\u0629 \u0627\u0644\u0625\u0646\u062A\u0627\u062C");
+        }
+        for (const upd of memoryUpdates) {
+          if (upd.product) {
+            upd.product.stock = upd.newStock;
+          }
+          const inv = this.tables.inventory.get(upd.logRecord.productId);
+          if (inv) {
+            inv.currentStock = upd.newStock;
+            inv.lastCountedAt = (/* @__PURE__ */ new Date()).toISOString();
+          }
+          this.tables.inventory_logs.unshift(upd.logRecord);
+        }
       }
       if (appliedCoupon) {
         const c = this.tables.coupons.find((cp) => cp.code.toUpperCase() === appliedCoupon.toUpperCase());
@@ -2394,20 +2711,26 @@ var D1DatabaseAccessLayer = class {
         if (driverNotes) inMem.driverNotes = driverNotes;
       }
       const pay = this.tables.payments.find((p) => p.orderId === order.id);
-      if (pay && pay.status !== "confirmed") {
+      if (pay && pay.status === "pending") {
         pay.status = "failed";
         pay.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
       }
-      this.tables.notifications.unshift({
-        id: `notif-cancel-${Date.now()}`,
-        recipientRole: "admin",
-        title: "\u0627\u0633\u062A\u0631\u062C\u0627\u0639 \u0645\u062E\u0632\u0648\u0646 - \u0625\u0644\u063A\u0627\u0621 \u0637\u0644\u0628",
-        message: `\u062A\u0645 \u0625\u0644\u063A\u0627\u0621 \u0627\u0644\u0637\u0644\u0628 #${order.orderNumber || order.id} \u0648\u0625\u0639\u0627\u062F\u0629 \u0627\u0644\u0643\u0645\u064A\u0627\u062A \u062A\u0644\u0642\u0627\u0626\u064A\u064B\u0627 \u0644\u0644\u0645\u062E\u0632\u0648\u0646`,
-        type: "stock",
-        isRead: false,
-        link: `/admin/orders/${order.id}`,
-        createdAt: (/* @__PURE__ */ new Date()).toISOString()
-      });
+      if (!order.paymentStatus || order.paymentStatus === "pending") {
+        order.paymentStatus = "failed";
+      }
+      const cancelNotifId = `notif-cancel-${order.id}`;
+      if (!this.tables.notifications.some((n) => n.id === cancelNotifId)) {
+        this.tables.notifications.unshift({
+          id: cancelNotifId,
+          recipientRole: "admin",
+          title: "\u0627\u0633\u062A\u0631\u062C\u0627\u0639 \u0645\u062E\u0632\u0648\u0646 - \u0625\u0644\u063A\u0627\u0621 \u0637\u0644\u0628",
+          message: `\u062A\u0645 \u0625\u0644\u063A\u0627\u0621 \u0627\u0644\u0637\u0644\u0628 #${order.orderNumber || order.id} \u0648\u0625\u0639\u0627\u062F\u0629 \u0627\u0644\u0643\u0645\u064A\u0627\u062A \u062A\u0644\u0642\u0627\u0626\u064A\u064B\u0627 \u0644\u0644\u0645\u062E\u0632\u0648\u0646`,
+          type: "stock",
+          isRead: false,
+          link: `/admin/orders/${order.id}`,
+          createdAt: (/* @__PURE__ */ new Date()).toISOString()
+        });
+      }
       this.saveLocal();
       console.log(`\u2705 [D1 Stock Rollback] Successfully rolled back stock for Order #${order.orderNumber || order.id} atomically.`);
       return true;
@@ -2421,7 +2744,7 @@ var D1DatabaseAccessLayer = class {
     }
   }
   async updateOrderDriverAsync(orderId, driverId, driverName, driverPhone) {
-    const order = await this.findOrderByIdAsync(orderId) || this.findOrderById(orderId);
+    const order = await this.findOrderByIdAsync(orderId);
     if (!order) return null;
     const agents = await this.getDeliveryAgentsAsync();
     const verifiedAgent = agents.find((a) => a.id === driverId || driverName && a.name.trim() === driverName.trim());
@@ -2432,10 +2755,17 @@ var D1DatabaseAccessLayer = class {
     const finalDriverName = verifiedAgent.name;
     const finalDriverPhone = verifiedAgent.phone;
     if (this.isD1Configured()) {
-      await this.executeCloudflareD1Query(
+      const rawRes = await this.executeCloudflareD1Raw(
         `UPDATE orders SET driver_id = ?, driver_name = ?, driver_phone = ?, updated_at = datetime('now') WHERE id = ? OR order_number = ?;`,
         [finalDriverId, finalDriverName, finalDriverPhone, order.id, order.orderNumber || order.id]
       );
+      if (!rawRes || rawRes.success === false) {
+        const errMsg = sanitizeD1ErrorMessage((rawRes?.errors || []).map((e) => e.message).join("; ") || "D1 update failed");
+        throw new Error(`\u0641\u0634\u0644 \u062A\u0639\u064A\u064A\u0646 \u0627\u0644\u0645\u0646\u062F\u0648\u0628 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1: ${errMsg}`);
+      }
+      if ((rawRes.result?.[0]?.meta?.changes ?? 0) === 0) {
+        return null;
+      }
     } else if (process.env.NODE_ENV === "production") {
       throw new Error("\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u063A\u064A\u0631 \u0645\u0647\u064A\u0623\u0629 \u0641\u064A \u0628\u064A\u0626\u0629 \u0627\u0644\u0625\u0646\u062A\u0627\u062C");
     }
@@ -2449,10 +2779,20 @@ var D1DatabaseAccessLayer = class {
       inMem.driverPhone = finalDriverPhone;
     }
     this.saveLocal();
+    await this.createNotificationAsync({
+      id: `notif-assign-${order.id}-${finalDriverId}`,
+      recipientRole: "delivery",
+      recipientId: finalDriverId,
+      title: "\u062A\u0645 \u062A\u0643\u0644\u064A\u0641\u0643 \u0628\u0634\u062D\u0646\u0629 \u062C\u062F\u064A\u062F\u0629",
+      message: `\u062A\u0645 \u0625\u0633\u0646\u0627\u062F \u0627\u0644\u0637\u0644\u0628 #${order.orderNumber || order.id} (${order.district || "\u0635\u0646\u0639\u0627\u0621"}) \u0625\u0644\u0649 \u0627\u0644\u0643\u0627\u0628\u062A\u0646 ${finalDriverName}`,
+      type: "order",
+      link: `/mandoub/orders/${order.id}`
+    }).catch(() => {
+    });
     return order;
   }
   async updateOrderStatus(orderId, status, driverNotes, actor = "\u0627\u0644\u0625\u062F\u0627\u0631\u0629", driverInfo) {
-    const order = await this.findOrderByIdAsync(orderId) || this.findOrderById(orderId);
+    const order = await this.findOrderByIdAsync(orderId);
     if (!order) return null;
     const previousStatus = order.status;
     if (status !== previousStatus) {
@@ -2463,6 +2803,7 @@ var D1DatabaseAccessLayer = class {
     }
     if (status === "cancelled") {
       if (previousStatus === "cancelled" && order.isStockRolledBack) {
+        Object.defineProperty(order, "_alreadyCancelled", { value: true, enumerable: false, configurable: true });
         return order;
       }
       const now2 = /* @__PURE__ */ new Date();
@@ -2474,7 +2815,10 @@ var D1DatabaseAccessLayer = class {
         titleAr: "\u062A\u0645 \u0625\u0644\u063A\u0627\u0621 \u0627\u0644\u0637\u0644\u0628 \u0648\u0627\u0633\u062A\u0631\u062C\u0627\u0639 \u0627\u0644\u0645\u062E\u0632\u0648\u0646",
         titleEn: "Order Cancelled & Stock Rolled Back"
       });
-      await this.executeStockRollback(order, actor, driverNotes, newTimeline2);
+      const didRollback = await this.executeStockRollback(order, actor, driverNotes, newTimeline2);
+      if (!didRollback) {
+        Object.defineProperty(order, "_alreadyCancelled", { value: true, enumerable: false, configurable: true });
+      }
       return order;
     }
     let finalDriverId = order.driverId;
@@ -2514,11 +2858,22 @@ var D1DatabaseAccessLayer = class {
       titleEn: statusInfo.en
     });
     if (this.isD1Configured()) {
-      const compDateCol = status === "delivered" ? ", completed_at = datetime('now')" : status === "cancelled" ? ", cancelled_at = datetime('now')" : "";
-      await this.executeCloudflareD1Query(
-        `UPDATE orders SET status = ?, driver_notes = COALESCE(?, driver_notes), driver_id = COALESCE(?, driver_id), driver_name = COALESCE(?, driver_name), driver_phone = COALESCE(?, driver_phone), timeline_json = ?${compDateCol}, updated_at = datetime('now') WHERE id = ? OR order_number = ?;`,
-        [status, driverNotes || null, finalDriverId || null, finalDriverName || null, finalDriverPhone || null, JSON.stringify(newTimeline), order.id, order.orderNumber || order.id]
+      const compDateCol = status === "delivered" || status === "completed" ? ", completed_at = COALESCE(completed_at, datetime('now'))" : "";
+      const rawRes = await this.executeCloudflareD1Raw(
+        `UPDATE orders SET status = ?, driver_notes = COALESCE(?, driver_notes), driver_id = COALESCE(?, driver_id), driver_name = COALESCE(?, driver_name), driver_phone = COALESCE(?, driver_phone), timeline_json = ?${compDateCol}, updated_at = datetime('now') WHERE (id = ? OR order_number = ?) AND status = ?;`,
+        [status, driverNotes || null, finalDriverId || null, finalDriverName || null, finalDriverPhone || null, JSON.stringify(newTimeline), order.id, order.orderNumber || order.id, previousStatus]
       );
+      if (!rawRes || rawRes.success === false) {
+        const errMsg = sanitizeD1ErrorMessage((rawRes?.errors || []).map((e) => e.message).join("; ") || "D1 order status update failed");
+        throw new Error(`\u0641\u0634\u0644 \u062A\u062D\u062F\u064A\u062B \u062D\u0627\u0644\u0629 \u0627\u0644\u0637\u0644\u0628 \u0641\u064A Cloudflare D1: ${errMsg}`);
+      }
+      if ((rawRes.result?.[0]?.meta?.changes ?? 0) === 0) {
+        const latest = await this.findOrderByIdAsync(order.id);
+        if (!latest) {
+          return null;
+        }
+        throw new Error(`\u062A\u0639\u0630\u0631 \u062A\u062D\u062F\u064A\u062B \u062D\u0627\u0644\u0629 \u0627\u0644\u0637\u0644\u0628 \u0644\u0623\u0646 \u062D\u0627\u0644\u062A\u0647 \u062A\u063A\u064A\u0631\u062A \u0628\u0627\u0644\u062A\u0632\u0627\u0645\u0646 \u0625\u0644\u0649 (${latest.status}). \u064A\u0631\u062C\u0649 \u062A\u062D\u062F\u064A\u062B \u0627\u0644\u0635\u0641\u062D\u0629 \u0648\u0627\u0644\u0645\u062D\u0627\u0648\u0644\u0629 \u0645\u062C\u062F\u062F\u0627\u064B.`);
+      }
     } else if (process.env.NODE_ENV === "production") {
       throw new Error("\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u063A\u064A\u0631 \u0645\u0647\u064A\u0623\u0629 \u0641\u064A \u0628\u064A\u0626\u0629 \u0627\u0644\u0625\u0646\u062A\u0627\u062C");
     }
@@ -2529,13 +2884,6 @@ var D1DatabaseAccessLayer = class {
     order.driverPhone = finalDriverPhone;
     order.timeline = newTimeline;
     if (status === "cancelled") order.isStockRolledBack = true;
-    if (status === "delivered") {
-      const pay = this.tables.payments.find((p) => p.orderId === order.id);
-      if (pay) {
-        pay.status = "confirmed";
-        pay.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
-      }
-    }
     const inMem = this.findOrderById(orderId);
     if (inMem) {
       inMem.status = status;
@@ -2547,6 +2895,29 @@ var D1DatabaseAccessLayer = class {
       if (status === "cancelled") inMem.isStockRolledBack = true;
     }
     this.saveLocal();
+    if (status !== previousStatus) {
+      await this.createNotificationAsync({
+        id: `notif-status-adm-${order.id}-${status}`,
+        recipientRole: "admin",
+        title: "\u062A\u062D\u062F\u064A\u062B \u062D\u0627\u0644\u0629 \u0637\u0644\u0628",
+        message: `\u062A\u0645 \u062A\u062D\u062F\u064A\u062B \u062D\u0627\u0644\u0629 \u0627\u0644\u0637\u0644\u0628 #${order.orderNumber || order.id} \u0625\u0644\u0649: ${statusInfo.ar}`,
+        type: "order",
+        link: `/admin/orders/${order.id}`
+      }).catch(() => {
+      });
+      if (order.customerPhone) {
+        await this.createNotificationAsync({
+          id: `notif-status-cust-${order.id}-${status}`,
+          recipientRole: "customer",
+          recipientId: order.customerPhone.replace(/\D/g, ""),
+          title: "\u062A\u062D\u062F\u064A\u062B \u062D\u0627\u0644\u0629 \u0637\u0644\u0628\u0643",
+          message: `\u0637\u0644\u0628\u0643 #${order.orderNumber || order.id}: ${statusInfo.ar}`,
+          type: "order",
+          link: `/orders/${order.orderNumber || order.id}`
+        }).catch(() => {
+        });
+      }
+    }
     return order;
   }
   // ==========================================
@@ -2574,69 +2945,113 @@ var D1DatabaseAccessLayer = class {
     });
   }
   async adjustProductStock(params) {
-    const product = await this.findProductByIdAsync(params.productId) || this.findProductById(params.productId);
+    const product = await this.findProductByIdAsync(params.productId);
     if (!product) throw new Error("\u0627\u0644\u0645\u0646\u062A\u062C \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A");
-    const txId = "tx-" + Date.now() + "-" + Math.floor(Math.random() * 1e3);
+    const txId = `tx-${Date.now()}-${crypto2.randomBytes(4).toString("hex")}`;
     const delta = params.quantity;
     const isAbsoluteAdjustment = params.type === "adjustment";
+    if (isAbsoluteAdjustment && (!Number.isFinite(params.newStock) || params.newStock < 0)) {
+      throw new Error("\u0644\u0627 \u064A\u0645\u0643\u0646 \u0623\u0646 \u064A\u0643\u0648\u0646 \u0627\u0644\u0645\u062E\u0632\u0648\u0646 \u0633\u0627\u0644\u0628\u0627\u064B");
+    }
     if (this.isD1Configured()) {
-      let updateSql = "";
-      let updateParams = [];
-      let invSql = "";
-      let invParams = [];
+      let statements;
       if (isAbsoluteAdjustment) {
-        updateSql = "UPDATE products SET stock = ?, updated_at = datetime('now') WHERE id = ? AND stock = ?;";
-        updateParams = [params.newStock, params.productId, params.previousStock];
-        invSql = "UPDATE inventory SET current_stock = ?, updated_at = datetime('now') WHERE product_id = ?;";
-        invParams = [params.newStock, params.productId];
+        statements = [
+          {
+            sql: "INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, order_id, performed_by, created_at) SELECT ?, id, name_ar, ?, ?, stock, ?, ?, ?, ?, datetime('now') FROM products WHERE id = ? AND stock = ?;",
+            params: [txId, params.type, delta, params.newStock, params.reason, params.orderId || null, params.performedBy, params.productId, params.previousStock]
+          },
+          {
+            sql: "INSERT INTO inventory (product_id, current_stock, min_threshold, updated_at) SELECT id, ?, 10, datetime('now') FROM products WHERE id = ? AND stock = ? AND EXISTS (SELECT 1 FROM inventory_logs WHERE id = ?) ON CONFLICT(product_id) DO UPDATE SET current_stock = excluded.current_stock, updated_at = datetime('now');",
+            params: [params.newStock, params.productId, params.previousStock, txId]
+          },
+          {
+            sql: "UPDATE products SET stock = ?, updated_at = datetime('now') WHERE id = ? AND stock = ? AND EXISTS (SELECT 1 FROM inventory_logs WHERE id = ?);",
+            params: [params.newStock, params.productId, params.previousStock, txId]
+          }
+        ];
       } else {
-        updateSql = "UPDATE products SET stock = stock + ?, updated_at = datetime('now') WHERE id = ?;";
-        updateParams = [delta, params.productId];
-        invSql = "UPDATE inventory SET current_stock = current_stock + ?, updated_at = datetime('now') WHERE product_id = ?;";
-        invParams = [delta, params.productId];
+        statements = [
+          {
+            sql: "UPDATE products SET stock = stock + ?, updated_at = datetime('now') WHERE id = ?;",
+            params: [delta, params.productId]
+          },
+          {
+            sql: "INSERT INTO inventory (product_id, current_stock, min_threshold, updated_at) SELECT id, stock, 10, datetime('now') FROM products WHERE id = ? ON CONFLICT(product_id) DO UPDATE SET current_stock = excluded.current_stock, updated_at = datetime('now');",
+            params: [params.productId]
+          },
+          {
+            sql: "INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, order_id, performed_by, created_at) SELECT ?, id, name_ar, ?, ?, (stock - ?), stock, ?, ?, ?, datetime('now') FROM products WHERE id = ?;",
+            params: [txId, params.type, delta, delta, params.reason, params.orderId || null, params.performedBy, params.productId]
+          }
+        ];
       }
-      const logSql = isAbsoluteAdjustment ? "INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, order_id, performed_by, created_at) SELECT ?, id, name_ar, ?, ?, ?, stock, ?, ?, ?, datetime('now') FROM products WHERE id = ?;" : "INSERT INTO inventory_logs (id, product_id, product_name, type, quantity, previous_stock, new_stock, reason, order_id, performed_by, created_at) SELECT ?, id, name_ar, ?, ?, (stock - ?), stock, ?, ?, ?, datetime('now') FROM products WHERE id = ?;";
-      const logParams = isAbsoluteAdjustment ? [txId, params.type, delta, params.previousStock, params.reason, params.orderId || null, params.performedBy, params.productId] : [txId, params.type, delta, delta, params.reason, params.orderId || null, params.performedBy, params.productId];
-      const batchResult = await this.executeCloudflareD1BatchRaw([
-        { sql: updateSql, params: updateParams },
-        { sql: invSql, params: invParams },
-        { sql: logSql, params: logParams }
-      ]);
+      const batchResult = await this.executeCloudflareD1BatchRaw(statements);
       if (!batchResult || !batchResult.success) {
-        const errMsg = (batchResult?.errors || []).map((e) => e.message).join("; ") || "Batch inventory update failed";
+        const errMsg = sanitizeD1ErrorMessage((batchResult?.errors || []).map((e) => e.message || JSON.stringify(e)).join("; ") || "Batch inventory update failed");
         throw new Error(`\u0641\u0634\u0644 \u062A\u062D\u062F\u064A\u062B \u0627\u0644\u0645\u062E\u0632\u0648\u0646 \u0641\u064A Cloudflare D1: ${errMsg}`);
       }
-      if (isAbsoluteAdjustment) {
-        const productUpdateRes = batchResult.result?.[0];
-        if (productUpdateRes?.meta?.changes === 0) {
+      const productUpdateRes = isAbsoluteAdjustment ? batchResult.result?.[2] : batchResult.result?.[0];
+      if ((productUpdateRes?.meta?.changes ?? 0) === 0) {
+        if (isAbsoluteAdjustment) {
           throw new Error("\u062A\u0639\u0630\u0631 \u062A\u0639\u062F\u064A\u0644 \u0627\u0644\u0645\u062E\u0632\u0648\u0646 \u0644\u0623\u0646 \u0631\u0635\u064A\u062F \u0627\u0644\u0645\u0646\u062A\u062C \u062A\u063A\u064A\u0651\u0631 \u0628\u0627\u0644\u062A\u0632\u0627\u0645\u0646 \u0645\u0646 \u0642\u0628\u0644 \u0645\u0633\u062A\u062E\u062F\u0645 \u0622\u062E\u0631. \u064A\u0631\u062C\u0649 \u062A\u062D\u062F\u064A\u062B \u0627\u0644\u0635\u0641\u062D\u0629 \u0648\u0627\u0644\u0645\u062D\u0627\u0648\u0644\u0629 \u0645\u062C\u062F\u062F\u0627\u064B.");
         }
+        throw new Error("\u0627\u0644\u0645\u0646\u062A\u062C \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A");
       }
     } else if (process.env.NODE_ENV === "production") {
       throw new Error("\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u063A\u064A\u0631 \u0645\u0647\u064A\u0623\u0629 \u0641\u064A \u0628\u064A\u0626\u0629 \u0627\u0644\u0625\u0646\u062A\u0627\u062C");
     }
     let freshStock = params.newStock;
+    let recordedPrevStock = params.previousStock;
+    let recordedNewStock = params.newStock;
     if (this.isD1Configured()) {
       const freshRows = await this.executeCloudflareD1Query("SELECT stock FROM products WHERE id = ? LIMIT 1;", [params.productId]);
       if (freshRows && freshRows.length > 0) {
         freshStock = Number(freshRows[0].stock ?? params.newStock);
+        recordedNewStock = freshStock;
+        recordedPrevStock = isAbsoluteAdjustment ? params.previousStock : freshStock - delta;
       }
+      const logRows = await this.executeCloudflareD1Query(
+        "SELECT previous_stock, new_stock FROM inventory_logs WHERE id = ? LIMIT 1;",
+        [txId]
+      ).catch(() => []);
+      if (Array.isArray(logRows) && logRows.length > 0) {
+        recordedPrevStock = Number(logRows[0].previous_stock ?? recordedPrevStock);
+        recordedNewStock = Number(logRows[0].new_stock ?? recordedNewStock);
+      }
+    } else {
+      if (isAbsoluteAdjustment && product.stock !== params.previousStock) {
+        throw new Error("\u062A\u0639\u0630\u0631 \u062A\u0639\u062F\u064A\u0644 \u0627\u0644\u0645\u062E\u0632\u0648\u0646 \u0644\u0623\u0646 \u0631\u0635\u064A\u062F \u0627\u0644\u0645\u0646\u062A\u062C \u062A\u063A\u064A\u0651\u0631 \u0628\u0627\u0644\u062A\u0632\u0627\u0645\u0646 \u0645\u0646 \u0642\u0628\u0644 \u0645\u0633\u062A\u062E\u062F\u0645 \u0622\u062E\u0631. \u064A\u0631\u062C\u0649 \u062A\u062D\u062F\u064A\u062B \u0627\u0644\u0635\u0641\u062D\u0629 \u0648\u0627\u0644\u0645\u062D\u0627\u0648\u0644\u0629 \u0645\u062C\u062F\u062F\u0627\u064B.");
+      }
+      const nextLocalStock = isAbsoluteAdjustment ? params.newStock : product.stock + delta;
+      if (nextLocalStock < 0) {
+        throw new Error("prevent_negative_stock: Insufficient stock: product stock cannot be negative");
+      }
+      freshStock = nextLocalStock;
+      recordedPrevStock = product.stock;
+      recordedNewStock = nextLocalStock;
     }
     product.stock = freshStock;
     product.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
-    const inv = this.tables.inventory.get(params.productId);
-    if (inv) {
-      inv.currentStock = freshStock;
-      inv.lastCountedAt = (/* @__PURE__ */ new Date()).toISOString();
+    const cachedProd = this.tables.products.find((p) => p.id === params.productId);
+    if (cachedProd) {
+      cachedProd.stock = freshStock;
+      cachedProd.updatedAt = product.updatedAt;
     }
+    this.tables.inventory.set(params.productId, {
+      currentStock: freshStock,
+      reservedStock: this.tables.inventory.get(params.productId)?.reservedStock ?? 0,
+      minThreshold: this.tables.inventory.get(params.productId)?.minThreshold ?? 10,
+      lastCountedAt: (/* @__PURE__ */ new Date()).toISOString()
+    });
     const logRecord = {
       id: txId,
       productId: params.productId,
       productName: product.nameAr,
       type: params.type,
       quantity: params.quantity,
-      previousStock: params.previousStock,
-      newStock: params.newStock,
+      previousStock: recordedPrevStock,
+      newStock: recordedNewStock,
       reason: params.reason,
       orderId: params.orderId,
       performedBy: params.performedBy,
@@ -2644,31 +3059,47 @@ var D1DatabaseAccessLayer = class {
     };
     this.tables.inventory_logs.unshift(logRecord);
     this.saveLocal();
+    await this.createNotificationAsync({
+      id: `notif-stock-${txId}`,
+      recipientRole: "admin",
+      title: "\u062A\u062D\u062F\u064A\u062B \u062D\u0631\u0643\u0629 \u0627\u0644\u0645\u062E\u0632\u0648\u0646",
+      message: `\u062A\u0645 \u062A\u0639\u062F\u064A\u0644 \u0645\u062E\u0632\u0648\u0646 (${product.nameAr}) \u0645\u0646 ${recordedPrevStock} \u0625\u0644\u0649 ${recordedNewStock} (${params.reason})`,
+      type: "stock",
+      link: `/admin/inventory`
+    }).catch(() => {
+    });
+    if (recordedNewStock <= 15) {
+      await this.createNotificationAsync({
+        id: `notif-lowstock-${params.productId}-${recordedNewStock}`,
+        recipientRole: "admin",
+        title: "\u062A\u0646\u0628\u064A\u0647 \u0627\u0646\u062E\u0641\u0627\u0636 \u0627\u0644\u0645\u062E\u0632\u0648\u0646",
+        message: `\u062A\u0646\u0628\u064A\u0647: \u0645\u062E\u0632\u0648\u0646 "${product.nameAr}" \u0648\u0635\u0644 \u0625\u0644\u0649 ${recordedNewStock} \u0639\u0628\u0648\u0629 \u0641\u0642\u0637`,
+        type: "alert",
+        link: `/admin/inventory`
+      }).catch(() => {
+      });
+    }
     return { product, transaction: logRecord };
   }
   async getInventoryTransactionsAsync() {
     if (this.isD1Configured()) {
       try {
         const rows = await this.executeCloudflareD1Query("SELECT * FROM inventory_logs ORDER BY created_at DESC LIMIT 500;");
-        if (Array.isArray(rows)) {
-          return rows.map((l) => ({
-            id: l.id,
-            productId: l.product_id,
-            productName: l.product_name,
-            type: l.type,
-            quantity: l.quantity,
-            previousStock: l.previous_stock,
-            newStock: l.new_stock,
-            reason: l.reason,
-            orderId: l.order_id || void 0,
-            performedBy: l.performed_by,
-            createdAt: l.created_at
-          }));
-        }
+        return Array.isArray(rows) ? rows.map((l) => ({
+          id: l.id,
+          productId: l.product_id,
+          productName: l.product_name,
+          type: l.type,
+          quantity: l.quantity,
+          previousStock: l.previous_stock,
+          newStock: l.new_stock,
+          reason: l.reason,
+          orderId: l.order_id || void 0,
+          performedBy: l.performed_by,
+          createdAt: l.created_at
+        })) : [];
       } catch (err) {
-        console.error("Error fetching inventory_logs from D1:", err);
-      }
-      if (process.env.NODE_ENV === "production") {
+        console.error("Error fetching inventory_logs from D1:", sanitizeD1ErrorMessage(err));
         throw new Error("\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u062D\u0631\u0643\u0627\u062A \u0627\u0644\u0645\u062E\u0632\u0648\u0646 \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1");
       }
     }
@@ -2687,24 +3118,11 @@ var D1DatabaseAccessLayer = class {
     if (this.isD1Configured()) {
       try {
         const rows = await this.executeCloudflareD1Query("SELECT * FROM delivery_agents;");
-        if (Array.isArray(rows)) {
-          const agents = rows.map((da) => ({
-            id: da.id,
-            name: da.name,
-            phone: da.phone,
-            vehicleType: da.vehicle_type || da.vehicle || "motorcycle",
-            assignedDistricts: typeof da.assigned_districts === "string" ? JSON.parse(da.assigned_districts || "[]") : da.assigned_districts || [],
-            completedOrdersCount: da.total_delivered_count || da.completed_orders_count || 0,
-            rating: da.rating || 5,
-            isActive: da.is_available !== void 0 ? Boolean(da.is_available) : da.is_active !== void 0 ? Boolean(da.is_active) : true
-          }));
-          this.tables.delivery_agents = agents;
-          return agents;
-        }
+        const agents = Array.isArray(rows) ? rows.map((da) => this.mapD1DeliveryAgentToAgent(da)) : [];
+        this.tables.delivery_agents = agents;
+        return agents;
       } catch (err) {
-        console.error("Error fetching delivery_agents from D1:", err);
-      }
-      if (process.env.NODE_ENV === "production") {
+        console.error("Error fetching delivery_agents from D1:", sanitizeD1ErrorMessage(err));
         throw new Error("\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0645\u0646\u0627\u062F\u064A\u0628 \u0627\u0644\u062A\u0648\u0635\u064A\u0644 \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1");
       }
     }
@@ -2715,21 +3133,39 @@ var D1DatabaseAccessLayer = class {
   }
   async updateDeliveryAgentsAsync(agents) {
     if (this.isD1Configured()) {
+      const batchStatements = [];
+      if (agents.length === 0) {
+        batchStatements.push({ sql: "DELETE FROM delivery_agents;" });
+      } else {
+        const placeholders = agents.map(() => "?").join(", ");
+        batchStatements.push({
+          sql: `DELETE FROM delivery_agents WHERE id NOT IN (${placeholders});`,
+          params: agents.map((da) => da.id)
+        });
+      }
       for (const da of agents) {
-        await this.executeCloudflareD1Query(
-          `INSERT INTO delivery_agents (id, name, phone, vehicle_type, total_deliveries, rating, is_active, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now')) ON CONFLICT(id) DO UPDATE SET name = excluded.name, phone = excluded.phone, vehicle_type = excluded.vehicle_type, total_deliveries = excluded.total_deliveries, rating = excluded.rating, is_active = excluded.is_active;`,
-          [
+        const cleanPhone = String(da.phone || "").replace(/\D/g, "");
+        batchStatements.push({
+          sql: `INSERT INTO delivery_agents (id, name, phone, vehicle_type, total_deliveries, rating, is_active, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now')) ON CONFLICT(id) DO UPDATE SET name = excluded.name, phone = excluded.phone, vehicle_type = excluded.vehicle_type, total_deliveries = excluded.total_deliveries, rating = excluded.rating, is_active = excluded.is_active;`,
+          params: [
             da.id,
             da.name,
-            da.phone,
-            da.vehicleType,
+            cleanPhone,
+            da.vehicleType || "motorcycle",
             da.completedOrdersCount || 0,
             da.rating || 5,
-            da.isActive ? 1 : 0
+            da.isActive !== false ? 1 : 0
           ]
-        );
+        });
       }
-    } else if (process.env.NODE_ENV === "production") {
+      const batchRes = await this.executeCloudflareD1BatchRaw(batchStatements);
+      if (!batchRes || !batchRes.success) {
+        const errMsg = sanitizeD1ErrorMessage((batchRes?.errors || []).map((e) => e.message || JSON.stringify(e)).join("; ") || "Batch delivery agents sync failed");
+        throw new Error(`\u0641\u0634\u0644 \u0645\u0632\u0627\u0645\u0646\u0629 \u0645\u0646\u0627\u062F\u064A\u0628 \u0627\u0644\u062A\u0648\u0635\u064A\u0644 \u0641\u064A Cloudflare D1: ${errMsg}`);
+      }
+      return await this.getDeliveryAgentsAsync();
+    }
+    if (process.env.NODE_ENV === "production") {
       throw new Error("\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u063A\u064A\u0631 \u0645\u0647\u064A\u0623\u0629 \u0641\u064A \u0628\u064A\u0626\u0629 \u0627\u0644\u0625\u0646\u062A\u0627\u062C");
     }
     this.tables.delivery_agents = agents;
@@ -2740,35 +3176,35 @@ var D1DatabaseAccessLayer = class {
     if (this.isD1Configured()) {
       const rows = await this.executeCloudflareD1Query("SELECT * FROM delivery_agents WHERE id = ? LIMIT 1;", [id]);
       if (Array.isArray(rows) && rows.length > 0) {
-        const da = rows[0];
-        return {
-          id: da.id,
-          name: da.name,
-          phone: da.phone,
-          vehicleType: da.vehicle_type || da.vehicle || "motorcycle",
-          assignedDistricts: typeof da.assigned_districts === "string" ? JSON.parse(da.assigned_districts || "[]") : da.assigned_districts || [],
-          completedOrdersCount: da.total_deliveries || da.total_delivered_count || 0,
-          rating: da.rating || 5,
-          isActive: da.is_active !== void 0 ? Boolean(da.is_active) : da.is_available !== void 0 ? Boolean(da.is_available) : true
-        };
+        return this.mapD1DeliveryAgentToAgent(rows[0]);
       }
       return void 0;
+    }
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u063A\u064A\u0631 \u0645\u0647\u064A\u0623\u0629 \u0641\u064A \u0628\u064A\u0626\u0629 \u0627\u0644\u0625\u0646\u062A\u0627\u062C");
     }
     return this.tables.delivery_agents.find((d) => d.id === id);
   }
   async addDeliveryAgentAsync(agent, pin) {
     const cleanPhone = agent.phone.replace(/\D/g, "");
     if (this.isD1Configured()) {
-      await this.executeCloudflareD1Query(
-        `INSERT INTO delivery_agents (id, name, phone, vehicle_type, is_active, rating, total_deliveries, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now')) ON CONFLICT(id) DO UPDATE SET name = excluded.name, phone = excluded.phone, vehicle_type = excluded.vehicle_type, is_active = excluded.is_active, rating = excluded.rating;`,
-        [agent.id, agent.name, cleanPhone, agent.vehicleType || "motorcycle", agent.isActive ? 1 : 0, agent.rating || 5, agent.completedOrdersCount || 0]
-      );
+      const batchStatements = [
+        {
+          sql: `INSERT INTO delivery_agents (id, name, phone, vehicle_type, is_active, rating, total_deliveries, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now')) ON CONFLICT(id) DO UPDATE SET name = excluded.name, phone = excluded.phone, vehicle_type = excluded.vehicle_type, is_active = excluded.is_active, rating = excluded.rating;`,
+          params: [agent.id, agent.name, cleanPhone, agent.vehicleType || "motorcycle", agent.isActive ? 1 : 0, agent.rating || 5, agent.completedOrdersCount || 0]
+        }
+      ];
       if (pin) {
         const hashed = hashSecret(normalizeDigits(pin).trim());
-        await this.executeCloudflareD1Query(
-          `INSERT INTO users (id, name, phone, role, pin_hash, created_at, last_login) VALUES (?, ?, ?, 'delivery', ?, datetime('now'), datetime('now')) ON CONFLICT(phone) DO UPDATE SET name = excluded.name, role = 'delivery', pin_hash = excluded.pin_hash;`,
-          [agent.id, agent.name, cleanPhone, hashed]
-        );
+        batchStatements.push({
+          sql: `INSERT INTO users (id, name, phone, role, pin_hash, created_at, last_login) VALUES (?, ?, ?, 'delivery', ?, datetime('now'), datetime('now')) ON CONFLICT(phone) DO UPDATE SET name = excluded.name, role = 'delivery', pin_hash = excluded.pin_hash;`,
+          params: [agent.id, agent.name, cleanPhone, hashed]
+        });
+      }
+      const batchRes = await this.executeCloudflareD1BatchRaw(batchStatements);
+      if (!batchRes || !batchRes.success) {
+        const errMsg = sanitizeD1ErrorMessage((batchRes?.errors || []).map((e) => e.message || JSON.stringify(e)).join("; ") || "Batch add delivery agent failed");
+        throw new Error(`\u0641\u0634\u0644 \u0625\u0636\u0627\u0641\u0629 \u0627\u0644\u0645\u0646\u062F\u0648\u0628 \u0641\u064A Cloudflare D1: ${errMsg}`);
       }
     } else if (process.env.NODE_ENV === "production") {
       throw new Error("\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u063A\u064A\u0631 \u0645\u0647\u064A\u0623\u0629 \u0641\u064A \u0628\u064A\u0626\u0629 \u0627\u0644\u0625\u0646\u062A\u0627\u062C");
@@ -2782,23 +3218,33 @@ var D1DatabaseAccessLayer = class {
   async updateDeliveryAgentAsync(id, updates, pin) {
     if (this.isD1Configured()) {
       const cleanPhone = updates.phone ? updates.phone.replace(/\D/g, "") : null;
-      await this.executeCloudflareD1Query(
-        `UPDATE delivery_agents SET name = COALESCE(?, name), phone = COALESCE(?, phone), vehicle_type = COALESCE(?, vehicle_type), is_active = CASE WHEN ? IS NOT NULL THEN ? ELSE is_active END WHERE id = ?;`,
-        [
-          updates.name ?? null,
-          cleanPhone,
-          updates.vehicleType ?? null,
-          updates.isActive !== void 0 ? updates.isActive ? 1 : 0 : null,
-          updates.isActive !== void 0 ? updates.isActive ? 1 : 0 : null,
-          id
-        ]
-      );
-      if (pin && cleanPhone) {
+      const batchStatements = [
+        {
+          sql: `UPDATE delivery_agents SET name = COALESCE(?, name), phone = COALESCE(?, phone), vehicle_type = COALESCE(?, vehicle_type), is_active = CASE WHEN ? IS NOT NULL THEN ? ELSE is_active END WHERE id = ?;`,
+          params: [
+            updates.name ?? null,
+            cleanPhone,
+            updates.vehicleType ?? null,
+            updates.isActive !== void 0 ? updates.isActive ? 1 : 0 : null,
+            updates.isActive !== void 0 ? updates.isActive ? 1 : 0 : null,
+            id
+          ]
+        }
+      ];
+      if (pin) {
         const hashed = hashSecret(normalizeDigits(pin).trim());
-        await this.executeCloudflareD1Query(
-          `UPDATE users SET pin_hash = ? WHERE phone = ?;`,
-          [hashed, cleanPhone]
-        );
+        batchStatements.push({
+          sql: `UPDATE users SET pin_hash = ? WHERE phone = COALESCE(?, (SELECT phone FROM delivery_agents WHERE id = ? LIMIT 1));`,
+          params: [hashed, cleanPhone, id]
+        });
+      }
+      const batchRes = await this.executeCloudflareD1BatchRaw(batchStatements);
+      if (!batchRes || !batchRes.success) {
+        const errMsg = sanitizeD1ErrorMessage((batchRes?.errors || []).map((e) => e.message || JSON.stringify(e)).join("; ") || "Batch update delivery agent failed");
+        throw new Error(`\u0641\u0634\u0644 \u062A\u062D\u062F\u064A\u062B \u0628\u064A\u0627\u0646\u0627\u062A \u0627\u0644\u0645\u0646\u062F\u0648\u0628 \u0641\u064A Cloudflare D1: ${errMsg}`);
+      }
+      if ((batchRes.result?.[0]?.meta?.changes ?? 0) === 0) {
+        return null;
       }
       const readBack = await this.findDeliveryAgentByIdAsync(id);
       if (readBack) {
@@ -2818,7 +3264,14 @@ var D1DatabaseAccessLayer = class {
   }
   async deleteDeliveryAgentAsync(id) {
     if (this.isD1Configured()) {
-      await this.executeCloudflareD1Query("DELETE FROM delivery_agents WHERE id = ?;", [id]);
+      const rawRes = await this.executeCloudflareD1Raw("DELETE FROM delivery_agents WHERE id = ?;", [id]);
+      if (!rawRes || !rawRes.success) {
+        const errMsg = sanitizeD1ErrorMessage((rawRes?.errors || []).map((e) => e.message || JSON.stringify(e)).join("; ") || "Delete delivery agent failed");
+        throw new Error(`\u0641\u0634\u0644 \u062D\u0630\u0641 \u0627\u0644\u0645\u0646\u062F\u0648\u0628 \u0641\u064A Cloudflare D1: ${errMsg}`);
+      }
+      if ((rawRes.result?.[0]?.meta?.changes ?? 0) === 0) {
+        return false;
+      }
     } else if (process.env.NODE_ENV === "production") {
       throw new Error("\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u063A\u064A\u0631 \u0645\u0647\u064A\u0623\u0629 \u0641\u064A \u0628\u064A\u0626\u0629 \u0627\u0644\u0625\u0646\u062A\u0627\u062C");
     }
@@ -2836,22 +3289,18 @@ var D1DatabaseAccessLayer = class {
     if (this.isD1Configured()) {
       try {
         const rows = await this.executeCloudflareD1Query("SELECT * FROM reviews ORDER BY created_at DESC;");
-        if (Array.isArray(rows)) {
-          return rows.map((rv) => ({
-            id: rv.id,
-            productId: rv.product_id,
-            userName: rv.customer_name || rv.user_name || "\u0639\u0645\u064A\u0644",
-            userPhone: rv.customer_phone || rv.user_phone || void 0,
-            rating: rv.rating,
-            comment: rv.comment,
-            verifiedPurchase: Boolean(rv.is_verified ?? rv.verified_purchase),
-            date: rv.created_at
-          }));
-        }
+        return Array.isArray(rows) ? rows.map((rv) => ({
+          id: rv.id,
+          productId: rv.product_id,
+          userName: rv.customer_name || rv.user_name || "\u0639\u0645\u064A\u0644",
+          userPhone: rv.customer_phone || rv.user_phone || void 0,
+          rating: rv.rating,
+          comment: rv.comment,
+          verifiedPurchase: Boolean(rv.is_verified ?? rv.verified_purchase),
+          date: rv.created_at
+        })) : [];
       } catch (err) {
-        console.error("Error fetching reviews from D1:", err);
-      }
-      if (process.env.NODE_ENV === "production") {
+        console.error("Error fetching reviews from D1:", sanitizeD1ErrorMessage(err));
         throw new Error("\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u062A\u0642\u064A\u064A\u0645\u0627\u062A \u0627\u0644\u0645\u0646\u062A\u062C\u0627\u062A \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1");
       }
     }
@@ -2875,22 +3324,33 @@ var D1DatabaseAccessLayer = class {
   }
   async addReviewAsync(review) {
     if (this.isD1Configured()) {
-      await this.executeCloudflareD1Query(
-        `INSERT INTO reviews (id, product_id, customer_name, customer_phone, rating, comment, is_verified, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'));`,
-        [review.id, review.productId, review.userName, review.userPhone || null, review.rating, review.comment, review.verifiedPurchase ? 1 : 0]
-      );
-      const stats = await this.executeCloudflareD1Query(
-        "SELECT COUNT(*) as cnt, AVG(rating) as avg_rating FROM reviews WHERE product_id = ?;",
-        [review.productId]
-      );
-      if (stats && stats.length > 0) {
-        const revCount = Number(stats[0].cnt || 1);
-        const avgRating = Number(Number(stats[0].avg_rating || review.rating).toFixed(1));
-        await this.executeCloudflareD1Query(
-          "UPDATE products SET rating = ?, review_count = ?, updated_at = datetime('now') WHERE id = ?;",
-          [avgRating, revCount, review.productId]
-        );
+      const batchRes = await this.executeCloudflareD1BatchRaw([
+        {
+          sql: `INSERT INTO reviews (id, product_id, customer_name, customer_phone, rating, comment, is_verified, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'));`,
+          params: [review.id, review.productId, review.userName, review.userPhone || null, review.rating, review.comment, review.verifiedPurchase ? 1 : 0]
+        },
+        {
+          sql: `UPDATE products SET rating = ROUND(COALESCE((SELECT AVG(rating) FROM reviews WHERE product_id = ?), ?), 1), review_count = (SELECT COUNT(*) FROM reviews WHERE product_id = ?), updated_at = datetime('now') WHERE id = ?;`,
+          params: [review.productId, review.rating, review.productId, review.productId]
+        }
+      ]);
+      if (!batchRes || !batchRes.success) {
+        const errMsg = sanitizeD1ErrorMessage((batchRes?.errors || []).map((e) => e.message || JSON.stringify(e)).join("; ") || "Batch add review failed");
+        throw new Error(`\u0641\u0634\u0644 \u062D\u0641\u0638 \u0627\u0644\u062A\u0642\u064A\u064A\u0645 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1: ${errMsg}`);
       }
+      const stats = await this.executeCloudflareD1Query(
+        "SELECT rating, review_count FROM products WHERE id = ? LIMIT 1;",
+        [review.productId]
+      ).catch(() => []);
+      const avgRating = Array.isArray(stats) && stats.length > 0 ? Number(Number(stats[0].rating ?? review.rating).toFixed(1)) : Number(Number(review.rating).toFixed(1));
+      const revCount = Array.isArray(stats) && stats.length > 0 ? Number(stats[0].review_count ?? 1) : 1;
+      this.tables.reviews.unshift(review);
+      const prod = this.tables.products.find((p) => p.id === review.productId);
+      if (prod) {
+        prod.rating = avgRating;
+        prod.reviewCount = revCount;
+      }
+      return review;
     } else if (process.env.NODE_ENV === "production") {
       throw new Error("\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u063A\u064A\u0631 \u0645\u0647\u064A\u0623\u0629 \u0641\u064A \u0628\u064A\u0626\u0629 \u0627\u0644\u0625\u0646\u062A\u0627\u062C");
     }
@@ -2904,24 +3364,20 @@ var D1DatabaseAccessLayer = class {
     if (this.isD1Configured()) {
       try {
         const rows = await this.executeCloudflareD1Query("SELECT * FROM coupons;");
-        if (Array.isArray(rows)) {
-          const coupons = rows.map((cp) => ({
-            code: cp.code,
-            discountPercent: cp.discount_percent,
-            maxDiscount: cp.max_discount,
-            minOrderAmount: cp.min_order_amount,
-            isActive: Boolean(cp.is_active),
-            validUntil: cp.valid_until || cp.expiry_date || void 0,
-            usageCount: cp.usage_count || 0,
-            maxUses: cp.max_uses !== void 0 && cp.max_uses !== null ? Number(cp.max_uses) : void 0
-          }));
-          this.tables.coupons = coupons;
-          return coupons;
-        }
+        const coupons = Array.isArray(rows) ? rows.map((cp) => ({
+          code: cp.code,
+          discountPercent: cp.discount_percent,
+          maxDiscount: cp.max_discount,
+          minOrderAmount: cp.min_order_amount,
+          isActive: Boolean(cp.is_active),
+          validUntil: cp.valid_until || cp.expiry_date || void 0,
+          usageCount: cp.usage_count || 0,
+          maxUses: cp.max_uses !== void 0 && cp.max_uses !== null ? Number(cp.max_uses) : void 0
+        })) : [];
+        this.tables.coupons = coupons;
+        return coupons;
       } catch (err) {
-        console.error("Error fetching coupons from D1:", err);
-      }
-      if (process.env.NODE_ENV === "production") {
+        console.error("Error fetching coupons from D1:", sanitizeD1ErrorMessage(err));
         throw new Error("\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0627\u0644\u0643\u0648\u0628\u0648\u0646\u0627\u062A \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1");
       }
     }
@@ -2938,26 +3394,22 @@ var D1DatabaseAccessLayer = class {
     if (this.isD1Configured()) {
       try {
         const rows = await this.executeCloudflareD1Query("SELECT * FROM coupons WHERE UPPER(code) = ? AND is_active = 1 LIMIT 1;", [cleanCode]);
-        if (Array.isArray(rows)) {
-          if (rows.length > 0) {
-            const cp = rows[0];
-            return {
-              code: cp.code,
-              discountPercent: cp.discount_percent,
-              maxDiscount: cp.max_discount,
-              minOrderAmount: cp.min_order_amount,
-              isActive: Boolean(cp.is_active),
-              validUntil: cp.valid_until || cp.expiry_date || void 0,
-              usageCount: cp.usage_count || 0,
-              maxUses: cp.max_uses !== void 0 && cp.max_uses !== null ? Number(cp.max_uses) : void 0
-            };
-          }
-          return void 0;
+        if (Array.isArray(rows) && rows.length > 0) {
+          const cp = rows[0];
+          return {
+            code: cp.code,
+            discountPercent: cp.discount_percent,
+            maxDiscount: cp.max_discount,
+            minOrderAmount: cp.min_order_amount,
+            isActive: Boolean(cp.is_active),
+            validUntil: cp.valid_until || cp.expiry_date || void 0,
+            usageCount: cp.usage_count || 0,
+            maxUses: cp.max_uses !== void 0 && cp.max_uses !== null ? Number(cp.max_uses) : void 0
+          };
         }
+        return void 0;
       } catch (err) {
-        console.error("Error finding coupon in D1:", err);
-      }
-      if (process.env.NODE_ENV === "production") {
+        console.error("Error finding coupon in D1:", sanitizeD1ErrorMessage(err));
         throw new Error("\u0641\u0634\u0644 \u0627\u0644\u062A\u062D\u0642\u0642 \u0645\u0646 \u0627\u0644\u0643\u0648\u0628\u0648\u0646 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1");
       }
     }
@@ -3041,13 +3493,24 @@ var D1DatabaseAccessLayer = class {
   async deleteCouponAsync(code) {
     const cleanCode = code.trim().toUpperCase();
     if (this.isD1Configured()) {
-      await this.executeCloudflareD1Query("DELETE FROM coupons WHERE UPPER(code) = ?;", [cleanCode]);
+      const rawRes = await this.executeCloudflareD1Raw("DELETE FROM coupons WHERE UPPER(code) = ?;", [cleanCode]);
+      if (!rawRes || rawRes.success === false) {
+        const errMsg = sanitizeD1ErrorMessage((rawRes?.errors || []).map((e) => e.message || JSON.stringify(e)).join("; ") || "Delete coupon failed");
+        throw new Error(`\u0641\u0634\u0644 \u062D\u0630\u0641 \u0627\u0644\u0643\u0648\u0628\u0648\u0646 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1: ${errMsg}`);
+      }
+      if ((rawRes.result?.[0]?.meta?.changes ?? 0) === 0) {
+        return false;
+      }
+      this.tables.coupons = this.tables.coupons.filter((c) => c.code.toUpperCase() !== cleanCode);
+      this.saveLocal();
+      return true;
     } else if (process.env.NODE_ENV === "production") {
       throw new Error("\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u063A\u064A\u0631 \u0645\u0647\u064A\u0623\u0629 \u0641\u064A \u0628\u064A\u0626\u0629 \u0627\u0644\u0625\u0646\u062A\u0627\u062C");
     }
+    const prevLen = this.tables.coupons.length;
     this.tables.coupons = this.tables.coupons.filter((c) => c.code.toUpperCase() !== cleanCode);
     this.saveLocal();
-    return true;
+    return this.tables.coupons.length < prevLen;
   }
   // ==========================================
   // 7. STORE SETTINGS & GALLERY
@@ -3060,34 +3523,15 @@ var D1DatabaseAccessLayer = class {
       try {
         const rows = await this.executeCloudflareD1Query("SELECT * FROM store_settings WHERE id = 'default_settings';");
         if (Array.isArray(rows) && rows.length > 0) {
-          const st = rows[0];
-          const districts = typeof st.delivery_districts === "string" ? JSON.parse(st.delivery_districts || "[]") : st.delivery_districts || this.tables.store_settings.deliveryDistricts;
-          const mapped = {
-            ...this.tables.store_settings,
-            storeNameAr: st.store_name_ar || this.tables.store_settings.storeNameAr,
-            storeNameEn: st.store_name_en || this.tables.store_settings.storeNameEn,
-            sloganAr: st.slogan_ar || this.tables.store_settings.sloganAr,
-            logoText: st.logo_text || this.tables.store_settings.logoText,
-            customLogoUrl: st.custom_logo_url || this.tables.store_settings.customLogoUrl,
-            topBannerNoticeAr: st.top_banner_notice_ar || this.tables.store_settings.topBannerNoticeAr,
-            topBannerNoticeEn: st.top_banner_notice_en || this.tables.store_settings.topBannerNoticeEn,
-            whatsappPhone: st.whatsapp_phone || this.tables.store_settings.whatsappPhone,
-            whatsappNumber: st.whatsapp_phone || this.tables.store_settings.whatsappNumber,
-            supportPhone: st.call_phone || this.tables.store_settings.supportPhone,
-            supportEmail: st.contact_email || this.tables.store_settings.supportEmail,
-            freeDeliveryThreshold: Number(st.free_delivery_threshold || this.tables.store_settings.freeDeliveryThreshold),
-            freeShippingThreshold: Number(st.free_delivery_threshold || this.tables.store_settings.freeShippingThreshold),
-            defaultShippingFee: st.default_delivery_fee || this.tables.store_settings.defaultShippingFee,
-            isOrderingEnabled: st.is_store_open !== void 0 ? Boolean(st.is_store_open) : true,
-            deliveryDistricts: districts
-          };
+          const mapped = this.mapD1SettingsToStoreSettings(rows[0]);
           this.tables.store_settings = mapped;
           return mapped;
         }
+        const defaults = this.getSafeCodeDefaultStoreSettings();
+        this.tables.store_settings = defaults;
+        return defaults;
       } catch (err) {
-        console.error("Error fetching store_settings from D1:", err);
-      }
-      if (process.env.NODE_ENV === "production") {
+        console.error("Error fetching store_settings from D1:", sanitizeD1ErrorMessage(err));
         throw new Error("\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0625\u0639\u062F\u0627\u062F\u0627\u062A \u0627\u0644\u0645\u062A\u062C\u0631 \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1");
       }
     }
@@ -3106,18 +3550,18 @@ var D1DatabaseAccessLayer = class {
       const current = await this.getSettingsAsync();
       const merged = { ...current, ...newSettings };
       const storeNameAr = merged.storeNameAr || current.storeNameAr;
-      const storeNameEn = merged.storeNameEn || current.storeNameEn;
-      const sloganAr = merged.sloganAr || current.sloganAr || "";
-      const logoText = merged.logoText || current.logoText || "";
-      const customLogoUrl = merged.customLogoUrl || current.customLogoUrl || "";
-      const topBannerNoticeAr = merged.topBannerNoticeAr || current.topBannerNoticeAr || "";
-      const topBannerNoticeEn = merged.topBannerNoticeEn || current.topBannerNoticeEn || "";
-      const whatsappPhone = merged.whatsappPhone || merged.whatsappNumber || current.whatsappPhone;
+      const storeNameEn = merged.storeNameEn ?? current.storeNameEn ?? "";
+      const sloganAr = merged.sloganAr ?? current.sloganAr ?? "";
+      const logoText = merged.logoText ?? current.logoText ?? "";
+      const customLogoUrl = merged.customLogoUrl ?? current.customLogoUrl ?? "";
+      const topBannerNoticeAr = merged.topBannerNoticeAr ?? current.topBannerNoticeAr ?? "";
+      const topBannerNoticeEn = merged.topBannerNoticeEn ?? current.topBannerNoticeEn ?? "";
+      const whatsappPhone = newSettings.whatsappPhone ?? newSettings.whatsappNumber ?? current.whatsappPhone ?? current.whatsappNumber;
       const callPhone = merged.supportPhone || current.supportPhone;
-      const contactEmail = merged.supportEmail || current.supportEmail || "";
+      const contactEmail = merged.supportEmail ?? current.supportEmail ?? "";
       const freeDeliveryThreshold = Number(merged.freeDeliveryThreshold ?? merged.freeShippingThreshold ?? current.freeDeliveryThreshold ?? 8e3);
       const isStoreOpen = merged.isOrderingEnabled !== void 0 ? merged.isOrderingEnabled ? 1 : 0 : 1;
-      const districtsJson = JSON.stringify(merged.deliveryDistricts || current.deliveryDistricts || []);
+      const districtsJson = JSON.stringify(merged.deliveryDistricts ?? current.deliveryDistricts ?? []);
       await this.executeCloudflareD1Query(
         `INSERT INTO store_settings (id, store_name_ar, store_name_en, slogan_ar, logo_text, custom_logo_url, top_banner_notice_ar, top_banner_notice_en, whatsapp_phone, call_phone, contact_email, free_delivery_threshold, is_store_open, delivery_districts, updated_at) VALUES ('default_settings', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now')) ON CONFLICT(id) DO UPDATE SET store_name_ar = excluded.store_name_ar, store_name_en = excluded.store_name_en, slogan_ar = excluded.slogan_ar, logo_text = excluded.logo_text, custom_logo_url = excluded.custom_logo_url, top_banner_notice_ar = excluded.top_banner_notice_ar, top_banner_notice_en = excluded.top_banner_notice_en, whatsapp_phone = excluded.whatsapp_phone, call_phone = excluded.call_phone, contact_email = excluded.contact_email, free_delivery_threshold = excluded.free_delivery_threshold, is_store_open = excluded.is_store_open, delivery_districts = excluded.delivery_districts, updated_at = datetime('now');`,
         [
@@ -3136,9 +3580,9 @@ var D1DatabaseAccessLayer = class {
           districtsJson
         ]
       );
-      this.tables.store_settings = merged;
+      const freshSettings = await this.getSettingsAsync();
       this.saveLocal();
-      return merged;
+      return freshSettings;
     } else if (process.env.NODE_ENV === "production") {
       throw new Error("\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u063A\u064A\u0631 \u0645\u0647\u064A\u0623\u0629 \u0641\u064A \u0628\u064A\u0626\u0629 \u0627\u0644\u0625\u0646\u062A\u0627\u062C");
     }
@@ -3152,26 +3596,22 @@ var D1DatabaseAccessLayer = class {
     if (this.isD1Configured()) {
       try {
         const rows = await this.executeCloudflareD1Query("SELECT * FROM gallery_items ORDER BY sort_order ASC, created_at DESC;");
-        if (Array.isArray(rows)) {
-          const items = rows.map((g) => ({
-            id: g.id,
-            titleAr: g.title_ar,
-            titleEn: g.title_en || void 0,
-            image: g.image_url || "",
-            imageUrl: g.image_url,
-            category: g.category || "factory",
-            caption: g.caption || void 0,
-            sortOrder: g.sort_order || 0,
-            isActive: g.is_active !== void 0 ? Boolean(g.is_active) : true,
-            createdAt: g.created_at
-          }));
-          this.tables.gallery_items = items;
-          return items;
-        }
+        const items = Array.isArray(rows) ? rows.map((g) => ({
+          id: g.id,
+          titleAr: g.title_ar,
+          titleEn: g.title_en || void 0,
+          image: g.image_url || "",
+          imageUrl: g.image_url,
+          category: g.category || "factory",
+          caption: g.caption || void 0,
+          sortOrder: g.sort_order || 0,
+          isActive: g.is_active !== void 0 ? Boolean(g.is_active) : true,
+          createdAt: g.created_at
+        })) : [];
+        this.tables.gallery_items = items;
+        return items;
       } catch (err) {
-        console.error("Error fetching gallery_items from D1:", err);
-      }
-      if (process.env.NODE_ENV === "production") {
+        console.error("Error fetching gallery_items from D1:", sanitizeD1ErrorMessage(err));
         throw new Error("\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0635\u0648\u0631 \u0627\u0644\u0645\u0639\u0631\u0636 \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1");
       }
     }
@@ -3259,16 +3699,376 @@ var D1DatabaseAccessLayer = class {
   }
   async deleteGalleryItemAsync(id) {
     if (this.isD1Configured()) {
-      await this.executeCloudflareD1Query("DELETE FROM gallery_items WHERE id = ?;", [id]);
+      const rawRes = await this.executeCloudflareD1Raw("DELETE FROM gallery_items WHERE id = ?;", [id]);
+      if (!rawRes || rawRes.success === false) {
+        const errMsg = sanitizeD1ErrorMessage((rawRes?.errors || []).map((e) => e.message || JSON.stringify(e)).join("; ") || "Delete gallery item failed");
+        throw new Error(`\u0641\u0634\u0644 \u062D\u0630\u0641 \u0635\u0648\u0631\u0629 \u0627\u0644\u0645\u0639\u0631\u0636 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1: ${errMsg}`);
+      }
+      if ((rawRes.result?.[0]?.meta?.changes ?? 0) === 0) {
+        return false;
+      }
+      this.tables.gallery_items = this.tables.gallery_items.filter((g) => g.id !== id);
+      this.saveLocal();
+      return true;
     } else if (process.env.NODE_ENV === "production") {
       throw new Error("\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u063A\u064A\u0631 \u0645\u0647\u064A\u0623\u0629 \u0641\u064A \u0628\u064A\u0626\u0629 \u0627\u0644\u0625\u0646\u062A\u0627\u062C");
     }
+    const prevLen = this.tables.gallery_items.length;
     this.tables.gallery_items = this.tables.gallery_items.filter((g) => g.id !== id);
     this.saveLocal();
-    return true;
+    return this.tables.gallery_items.length < prevLen;
   }
+  // ==========================================
+  // 8. PAYMENTS (Authoritative Cloudflare D1)
+  // ==========================================
+  async getPaymentsAsync(orderId) {
+    if (this.isD1Configured()) {
+      try {
+        const sql = orderId ? "SELECT * FROM payments WHERE order_id = ? ORDER BY created_at DESC;" : "SELECT * FROM payments ORDER BY created_at DESC LIMIT 500;";
+        const rows = await this.executeCloudflareD1Query(sql, orderId ? [orderId] : []);
+        const mapped = Array.isArray(rows) ? rows.map((p) => this.mapD1PaymentToPayment(p)) : [];
+        if (!orderId) {
+          this.tables.payments = mapped;
+        }
+        return mapped;
+      } catch (err) {
+        console.error("Error fetching payments from D1:", sanitizeD1ErrorMessage(err));
+        throw new Error("\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0633\u062C\u0644 \u0627\u0644\u062F\u0641\u0639\u0627\u062A \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1");
+      }
+    }
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u063A\u064A\u0631 \u0645\u0647\u064A\u0623\u0629 \u0641\u064A \u0628\u064A\u0626\u0629 \u0627\u0644\u0625\u0646\u062A\u0627\u062C");
+    }
+    return orderId ? this.tables.payments.filter((p) => p.orderId === orderId) : this.tables.payments;
+  }
+  async confirmOrderPaymentAsync(params) {
+    const order = await this.findOrderByIdAsync(params.orderId);
+    if (!order) {
+      throw new Error("\u0627\u0644\u0637\u0644\u0628 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F");
+    }
+    if (order.status === "cancelled") {
+      throw new Error("\u0644\u0627 \u064A\u0645\u0643\u0646 \u062A\u0623\u0643\u064A\u062F \u0627\u0644\u062F\u0641\u0639 \u0644\u0637\u0644\u0628 \u0645\u0644\u063A\u064A");
+    }
+    const expectedTotal = Number(order.total ?? order.totalAmount ?? 0);
+    if (!Number.isFinite(expectedTotal) || expectedTotal <= 0) {
+      throw new Error("\u0642\u064A\u0645\u0629 \u0627\u0644\u0637\u0644\u0628 \u0627\u0644\u0625\u062C\u0645\u0627\u0644\u064A\u0629 \u063A\u064A\u0631 \u0635\u0627\u0644\u062D\u0629 \u0644\u062A\u0623\u0643\u064A\u062F \u0627\u0644\u062F\u0641\u0639");
+    }
+    if (params.amount !== void 0 && params.amount !== null) {
+      const provided = Number(params.amount);
+      if (!Number.isFinite(provided) || Math.abs(provided - expectedTotal) > 0.01) {
+        throw new Error(`\u0642\u064A\u0645\u0629 \u0627\u0644\u062F\u0641\u0639\u0629 (${provided}) \u0644\u0627 \u062A\u0637\u0627\u0628\u0642 \u0625\u062C\u0645\u0627\u0644\u064A \u0627\u0644\u0637\u0644\u0628 \u0627\u0644\u0645\u0639\u062A\u0645\u062F (${expectedTotal})`);
+      }
+    }
+    const existingPayments = await this.getPaymentsAsync(order.id);
+    const currentPay = existingPayments[0];
+    if (order.paymentStatus === "paid" || order.paymentStatus === "confirmed" || currentPay && (currentPay.status === "confirmed" || currentPay.status === "paid")) {
+      throw new Error("\u062A\u0645 \u062A\u0623\u0643\u064A\u062F \u062A\u062D\u0635\u064A\u0644 \u0627\u0644\u062F\u0641\u0639\u0629 \u0644\u0647\u0630\u0627 \u0627\u0644\u0637\u0644\u0628 \u0645\u0633\u0628\u0642\u0627\u064B (DUP_PAYMENT)");
+    }
+    if (currentPay && currentPay.status === "refunded") {
+      throw new Error("\u0644\u0627 \u064A\u0645\u0643\u0646 \u062A\u0623\u0643\u064A\u062F \u062F\u0641\u0639\u0629 \u062A\u0645 \u0627\u0633\u062A\u0631\u062F\u0627\u062F\u0647\u0627 \u0645\u0633\u0628\u0642\u0627\u064B");
+    }
+    const paymentId = currentPay?.id || `pay-${order.id}`;
+    const normalizedMethod = normalizePaymentMethodForD1(params.method || order.paymentMethod);
+    const refNum = params.referenceNumber ? String(params.referenceNumber).trim().slice(0, 100) : null;
+    const proofUrl = params.proofImageUrl ? String(params.proofImageUrl).trim().slice(0, 500) : null;
+    const notes = params.notes ? String(params.notes).trim().slice(0, 300) : `\u062A\u0623\u0643\u064A\u062F \u062A\u062D\u0635\u064A\u0644 \u0627\u0644\u0637\u0644\u0628 #${order.orderNumber || order.id}`;
+    if (this.isD1Configured()) {
+      const batchStatements = [
+        {
+          sql: `INSERT INTO payments (id, order_id, amount, method, status, reference_number, proof_image_url, notes, confirmed_by, created_at, updated_at) VALUES (?, ?, ?, ?, 'confirmed', ?, ?, ?, ?, datetime('now'), datetime('now')) ON CONFLICT(id) DO UPDATE SET amount = excluded.amount, method = excluded.method, status = 'confirmed', reference_number = COALESCE(excluded.reference_number, payments.reference_number), proof_image_url = COALESCE(excluded.proof_image_url, payments.proof_image_url), notes = excluded.notes, confirmed_by = excluded.confirmed_by, updated_at = datetime('now') WHERE payments.status NOT IN ('confirmed', 'paid', 'refunded');`,
+          params: [paymentId, order.id, expectedTotal, normalizedMethod, refNum, proofUrl, notes, params.actor]
+        },
+        {
+          sql: `UPDATE orders SET payment_status = 'paid', updated_at = datetime('now') WHERE id = ? AND status != 'cancelled' AND payment_status NOT IN ('paid', 'confirmed', 'refunded');`,
+          params: [order.id]
+        }
+      ];
+      const batchRes = await this.executeCloudflareD1BatchRaw(batchStatements);
+      if (!batchRes || !batchRes.success) {
+        const errMsg = sanitizeD1ErrorMessage((batchRes?.errors || []).map((e) => e.message || JSON.stringify(e)).join("; ") || "Payment confirm failed");
+        throw new Error(`\u0641\u0634\u0644 \u062A\u0623\u0643\u064A\u062F \u0627\u0644\u062F\u0641\u0639 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1: ${errMsg}`);
+      }
+      if ((batchRes.result?.[1]?.meta?.changes ?? 0) === 0) {
+        throw new Error("\u062A\u0645 \u062A\u0623\u0643\u064A\u062F \u062A\u062D\u0635\u064A\u0644 \u0627\u0644\u062F\u0641\u0639\u0629 \u0644\u0647\u0630\u0627 \u0627\u0644\u0637\u0644\u0628 \u0645\u0633\u0628\u0642\u0627\u064B (DUP_PAYMENT)");
+      }
+      const freshPayments = await this.getPaymentsAsync(order.id);
+      const freshOrder = await this.findOrderByIdAsync(order.id);
+      const confirmedPay = freshPayments[0] || {
+        id: paymentId,
+        orderId: order.id,
+        amount: expectedTotal,
+        method: normalizedMethod,
+        status: "confirmed",
+        referenceNumber: refNum || void 0,
+        proofImageUrl: proofUrl || void 0,
+        notes,
+        confirmedBy: params.actor,
+        createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      this.syncPaymentToMemory(confirmedPay);
+      if (freshOrder) {
+        const idx = this.tables.orders.findIndex((o) => o.id === freshOrder.id);
+        if (idx >= 0) this.tables.orders[idx] = freshOrder;
+      }
+      await this.createNotificationAsync({
+        id: `notif-pay-conf-${order.id}`,
+        recipientRole: "admin",
+        title: "\u062A\u0645 \u062A\u0623\u0643\u064A\u062F \u062A\u062D\u0635\u064A\u0644 \u0627\u0644\u062F\u0641\u0639\u0629",
+        message: `\u062A\u0645 \u062A\u0623\u0643\u064A\u062F \u062A\u062D\u0635\u064A\u0644 ${expectedTotal.toLocaleString()} \u0631.\u064A \u0644\u0644\u0637\u0644\u0628 #${order.orderNumber || order.id}`,
+        type: "order",
+        link: `/admin/orders/${order.id}`
+      }).catch(() => {
+      });
+      return { payment: confirmedPay, order: freshOrder || { ...order, paymentStatus: "paid" } };
+    }
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u063A\u064A\u0631 \u0645\u0647\u064A\u0623\u0629 \u0641\u064A \u0628\u064A\u0626\u0629 \u0627\u0644\u0625\u0646\u062A\u0627\u062C");
+    }
+    const updatedPay = {
+      id: paymentId,
+      orderId: order.id,
+      amount: expectedTotal,
+      method: normalizedMethod,
+      status: "confirmed",
+      referenceNumber: refNum || void 0,
+      proofImageUrl: proofUrl || void 0,
+      notes,
+      confirmedBy: params.actor,
+      createdAt: currentPay?.createdAt || (/* @__PURE__ */ new Date()).toISOString(),
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    this.syncPaymentToMemory(updatedPay);
+    order.paymentStatus = "paid";
+    const inMem = this.findOrderById(order.id);
+    if (inMem) inMem.paymentStatus = "paid";
+    this.saveLocal();
+    return { payment: updatedPay, order };
+  }
+  async refundOrderPaymentAsync(params) {
+    const order = await this.findOrderByIdAsync(params.orderId);
+    if (!order) {
+      throw new Error("\u0627\u0644\u0637\u0644\u0628 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F");
+    }
+    const existingPayments = await this.getPaymentsAsync(order.id);
+    const currentPay = existingPayments[0];
+    if (currentPay && currentPay.status === "refunded" || order.paymentStatus === "refunded") {
+      throw new Error("\u062A\u0645 \u0627\u0633\u062A\u0631\u062F\u0627\u062F \u0647\u0630\u0647 \u0627\u0644\u062F\u0641\u0639\u0629 \u0645\u0633\u0628\u0642\u0627\u064B (DUP_REFUND)");
+    }
+    const isPaid = order.paymentStatus === "paid" || order.paymentStatus === "confirmed" || currentPay && (currentPay.status === "confirmed" || currentPay.status === "paid");
+    if (!isPaid || !currentPay) {
+      throw new Error("\u0644\u0627 \u064A\u0645\u0643\u0646 \u062A\u0646\u0641\u064A\u0630 \u0627\u0644\u0627\u0633\u062A\u0631\u062F\u0627\u062F \u0625\u0644\u0627 \u0644\u0637\u0644\u0628 \u0645\u0624\u0643\u062F \u0633\u062F\u0627\u062F\u0647 \u0645\u0633\u0628\u0642\u0627\u064B");
+    }
+    const safeReason = params.reason ? String(params.reason).trim().slice(0, 300) : `\u0627\u0633\u062A\u0631\u062F\u0627\u062F \u0645\u0628\u0644\u063A \u0627\u0644\u0637\u0644\u0628 #${order.orderNumber || order.id}`;
+    if (this.isD1Configured()) {
+      const batchRes = await this.executeCloudflareD1BatchRaw([
+        {
+          sql: `UPDATE payments SET status = 'refunded', notes = ?, confirmed_by = ?, updated_at = datetime('now') WHERE id = ? AND status IN ('confirmed', 'paid');`,
+          params: [safeReason, params.actor, currentPay.id]
+        },
+        {
+          sql: `UPDATE orders SET payment_status = 'refunded', updated_at = datetime('now') WHERE id = ? AND payment_status IN ('paid', 'confirmed');`,
+          params: [order.id]
+        }
+      ]);
+      if (!batchRes || !batchRes.success) {
+        const errMsg = sanitizeD1ErrorMessage((batchRes?.errors || []).map((e) => e.message || JSON.stringify(e)).join("; ") || "Refund failed");
+        throw new Error(`\u0641\u0634\u0644 \u062A\u0646\u0641\u064A\u0630 \u0627\u0644\u0627\u0633\u062A\u0631\u062F\u0627\u062F \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1: ${errMsg}`);
+      }
+      if ((batchRes.result?.[0]?.meta?.changes ?? 0) === 0) {
+        throw new Error("\u062A\u0645 \u0627\u0633\u062A\u0631\u062F\u0627\u062F \u0647\u0630\u0647 \u0627\u0644\u062F\u0641\u0639\u0629 \u0645\u0633\u0628\u0642\u0627\u064B (DUP_REFUND)");
+      }
+      const freshPayments = await this.getPaymentsAsync(order.id);
+      const freshOrder = await this.findOrderByIdAsync(order.id);
+      const refundedPay = freshPayments[0] || { ...currentPay, status: "refunded", notes: safeReason, updatedAt: (/* @__PURE__ */ new Date()).toISOString() };
+      this.syncPaymentToMemory(refundedPay);
+      if (freshOrder) {
+        const idx = this.tables.orders.findIndex((o) => o.id === freshOrder.id);
+        if (idx >= 0) this.tables.orders[idx] = freshOrder;
+      }
+      await this.createNotificationAsync({
+        id: `notif-pay-refund-${order.id}`,
+        recipientRole: "admin",
+        title: "\u0627\u0633\u062A\u0631\u062F\u0627\u062F \u062F\u0641\u0639\u0629 \u0645\u0627\u0644\u064A\u0629",
+        message: `\u062A\u0645 \u062A\u0633\u062C\u064A\u0644 \u0627\u0633\u062A\u0631\u062F\u0627\u062F ${refundedPay.amount.toLocaleString()} \u0631.\u064A \u0644\u0644\u0637\u0644\u0628 #${order.orderNumber || order.id}`,
+        type: "alert",
+        link: `/admin/orders/${order.id}`
+      }).catch(() => {
+      });
+      return { payment: refundedPay, order: freshOrder || { ...order, paymentStatus: "refunded" } };
+    }
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u063A\u064A\u0631 \u0645\u0647\u064A\u0623\u0629 \u0641\u064A \u0628\u064A\u0626\u0629 \u0627\u0644\u0625\u0646\u062A\u0627\u062C");
+    }
+    currentPay.status = "refunded";
+    currentPay.notes = safeReason;
+    currentPay.confirmedBy = params.actor;
+    currentPay.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+    this.syncPaymentToMemory(currentPay);
+    order.paymentStatus = "refunded";
+    const inMem = this.findOrderById(order.id);
+    if (inMem) inMem.paymentStatus = "refunded";
+    this.saveLocal();
+    return { payment: currentPay, order };
+  }
+  syncPaymentToMemory(pay) {
+    const idx = this.tables.payments.findIndex((p) => p.id === pay.id || p.orderId === pay.orderId);
+    if (idx >= 0) this.tables.payments[idx] = pay;
+    else this.tables.payments.unshift(pay);
+  }
+  // ==========================================
+  // 9. NOTIFICATIONS (Authoritative Cloudflare D1)
+  // ==========================================
   getNotifications() {
     return this.tables.notifications;
+  }
+  async createNotificationAsync(input) {
+    const notifId = input.id || `notif-${Date.now()}-${crypto2.randomBytes(3).toString("hex")}`;
+    const record = {
+      id: notifId,
+      recipientRole: input.recipientRole || "admin",
+      recipientId: input.recipientId || void 0,
+      title: String(input.title || "").slice(0, 120),
+      message: String(input.message || "").slice(0, 500),
+      type: input.type || "system",
+      isRead: false,
+      link: input.link || void 0,
+      createdAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    if (this.isD1Configured()) {
+      await this.executeCloudflareD1Query(
+        `INSERT OR IGNORE INTO notifications (id, recipient_role, recipient_id, title, message, type, is_read, link, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?, datetime('now'));`,
+        [record.id, record.recipientRole, record.recipientId || null, record.title, record.message, record.type, record.link || null]
+      );
+      if (!this.tables.notifications.some((n) => n.id === record.id)) {
+        this.tables.notifications.unshift(record);
+      }
+      return record;
+    }
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u063A\u064A\u0631 \u0645\u0647\u064A\u0623\u0629 \u0641\u064A \u0628\u064A\u0626\u0629 \u0627\u0644\u0625\u0646\u062A\u0627\u062C");
+    }
+    if (!this.tables.notifications.some((n) => n.id === record.id)) {
+      this.tables.notifications.unshift(record);
+      this.saveLocal();
+    }
+    return record;
+  }
+  async getNotificationsAsync(filter) {
+    const role = filter.role;
+    const isMgmt = ["owner", "admin", "employee"].includes(role);
+    const cleanPhone = filter.phone ? filter.phone.replace(/\D/g, "") : "";
+    const limit = Math.min(200, Math.max(1, Number(filter.limit) || 50));
+    if (this.isD1Configured()) {
+      try {
+        let rows = [];
+        if (isMgmt) {
+          rows = await this.executeCloudflareD1Query(
+            `SELECT * FROM notifications WHERE recipient_role IN ('admin', 'all') ORDER BY created_at DESC LIMIT ?;`,
+            [limit]
+          );
+        } else if (role === "delivery" || role === "mandoub") {
+          rows = await this.executeCloudflareD1Query(
+            `SELECT * FROM notifications WHERE (recipient_role = 'delivery' AND (recipient_id = ? OR recipient_id = ?)) OR recipient_role = 'all' ORDER BY created_at DESC LIMIT ?;`,
+            [filter.userId || "", cleanPhone || "", limit]
+          );
+        } else if (role === "customer" && cleanPhone) {
+          rows = await this.executeCloudflareD1Query(
+            `SELECT * FROM notifications WHERE (recipient_role = 'customer' AND recipient_id = ?) OR recipient_role = 'all' ORDER BY created_at DESC LIMIT ?;`,
+            [cleanPhone, limit]
+          );
+        } else {
+          return [];
+        }
+        return Array.isArray(rows) ? rows.map((r) => this.mapD1NotificationToNotification(r)) : [];
+      } catch (err) {
+        console.error("Error fetching notifications from D1:", sanitizeD1ErrorMessage(err));
+        throw new Error("\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0627\u0644\u0625\u0634\u0639\u0627\u0631\u0627\u062A \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1");
+      }
+    }
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u063A\u064A\u0631 \u0645\u0647\u064A\u0623\u0629 \u0641\u064A \u0628\u064A\u0626\u0629 \u0627\u0644\u0625\u0646\u062A\u0627\u062C");
+    }
+    return this.tables.notifications.filter((n) => {
+      if (isMgmt) return n.recipientRole === "admin" || n.recipientRole === "all";
+      if (role === "delivery" || role === "mandoub") {
+        return n.recipientRole === "all" || n.recipientRole === "delivery" && (n.recipientId === filter.userId || cleanPhone && n.recipientId === cleanPhone);
+      }
+      if (role === "customer" && cleanPhone) {
+        return n.recipientRole === "all" || n.recipientRole === "customer" && n.recipientId === cleanPhone;
+      }
+      return false;
+    }).slice(0, limit);
+  }
+  async markNotificationReadAsync(id, user) {
+    const isMgmt = ["owner", "admin", "employee"].includes(user.role);
+    const cleanPhone = user.phone ? user.phone.replace(/\D/g, "") : "";
+    if (this.isD1Configured()) {
+      const rows = await this.executeCloudflareD1Query("SELECT * FROM notifications WHERE id = ? LIMIT 1;", [id]);
+      if (!Array.isArray(rows) || rows.length === 0) return null;
+      const notif2 = this.mapD1NotificationToNotification(rows[0]);
+      const canAccess2 = notif2.recipientRole === "all" || isMgmt && notif2.recipientRole === "admin" || (user.role === "delivery" || user.role === "mandoub") && notif2.recipientRole === "delivery" && (notif2.recipientId === user.userId || cleanPhone && notif2.recipientId === cleanPhone) || user.role === "customer" && notif2.recipientRole === "customer" && cleanPhone && notif2.recipientId === cleanPhone;
+      if (!canAccess2) {
+        throw new Error("FORBIDDEN_NOTIFICATION");
+      }
+      await this.executeCloudflareD1Query("UPDATE notifications SET is_read = 1 WHERE id = ?;", [id]);
+      notif2.isRead = true;
+      const mem = this.tables.notifications.find((n) => n.id === id);
+      if (mem) mem.isRead = true;
+      return notif2;
+    }
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u063A\u064A\u0631 \u0645\u0647\u064A\u0623\u0629 \u0641\u064A \u0628\u064A\u0626\u0629 \u0627\u0644\u0625\u0646\u062A\u0627\u062C");
+    }
+    const notif = this.tables.notifications.find((n) => n.id === id);
+    if (!notif) return null;
+    const canAccess = notif.recipientRole === "all" || isMgmt && notif.recipientRole === "admin" || (user.role === "delivery" || user.role === "mandoub") && notif.recipientRole === "delivery" && (notif.recipientId === user.userId || cleanPhone && notif.recipientId === cleanPhone) || user.role === "customer" && notif.recipientRole === "customer" && cleanPhone && notif.recipientId === cleanPhone;
+    if (!canAccess) {
+      throw new Error("FORBIDDEN_NOTIFICATION");
+    }
+    notif.isRead = true;
+    this.saveLocal();
+    return notif;
+  }
+  async markAllNotificationsReadAsync(user) {
+    const isMgmt = ["owner", "admin", "employee"].includes(user.role);
+    const cleanPhone = user.phone ? user.phone.replace(/\D/g, "") : "";
+    if (this.isD1Configured()) {
+      let rawRes;
+      if (isMgmt) {
+        rawRes = await this.executeCloudflareD1Raw("UPDATE notifications SET is_read = 1 WHERE is_read = 0 AND recipient_role IN ('admin', 'all');");
+      } else if (user.role === "delivery" || user.role === "mandoub") {
+        rawRes = await this.executeCloudflareD1Raw(
+          "UPDATE notifications SET is_read = 1 WHERE is_read = 0 AND ((recipient_role = 'delivery' AND (recipient_id = ? OR recipient_id = ?)) OR recipient_role = 'all');",
+          [user.userId || "", cleanPhone || ""]
+        );
+      } else if (user.role === "customer" && cleanPhone) {
+        rawRes = await this.executeCloudflareD1Raw(
+          "UPDATE notifications SET is_read = 1 WHERE is_read = 0 AND ((recipient_role = 'customer' AND recipient_id = ?) OR recipient_role = 'all');",
+          [cleanPhone]
+        );
+      } else {
+        return 0;
+      }
+      const changed = Number(rawRes?.result?.[0]?.meta?.changes ?? 0);
+      for (const n of this.tables.notifications) {
+        if (isMgmt && (n.recipientRole === "admin" || n.recipientRole === "all")) n.isRead = true;
+      }
+      return changed;
+    }
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u063A\u064A\u0631 \u0645\u0647\u064A\u0623\u0629 \u0641\u064A \u0628\u064A\u0626\u0629 \u0627\u0644\u0625\u0646\u062A\u0627\u062C");
+    }
+    let count = 0;
+    for (const n of this.tables.notifications) {
+      const canAccess = n.recipientRole === "all" || isMgmt && n.recipientRole === "admin" || (user.role === "delivery" || user.role === "mandoub") && n.recipientRole === "delivery" && (n.recipientId === user.userId || cleanPhone && n.recipientId === cleanPhone) || user.role === "customer" && n.recipientRole === "customer" && cleanPhone && n.recipientId === cleanPhone;
+      if (canAccess && !n.isRead) {
+        n.isRead = true;
+        count++;
+      }
+    }
+    this.saveLocal();
+    return count;
   }
 };
 var d1 = new D1DatabaseAccessLayer();
@@ -3344,7 +4144,7 @@ var DatabaseProxy = class {
     return user;
   }
   async updateUserAsync(id, updates) {
-    return this.updateUser(id, updates);
+    return d1.updateUserAsync(id, updates);
   }
   // Customers (CRM)
   getCustomers() {
@@ -3602,6 +4402,29 @@ var DatabaseProxy = class {
       return isMatchPhone && isDelivered && hasProduct;
     });
   }
+  // Payments
+  async getPaymentsAsync(orderId) {
+    return d1.getPaymentsAsync(orderId);
+  }
+  async confirmOrderPaymentAsync(params) {
+    return d1.confirmOrderPaymentAsync(params);
+  }
+  async refundOrderPaymentAsync(params) {
+    return d1.refundOrderPaymentAsync(params);
+  }
+  // Notifications
+  async getNotificationsAsync(filter) {
+    return d1.getNotificationsAsync(filter);
+  }
+  async createNotificationAsync(input) {
+    return d1.createNotificationAsync(input);
+  }
+  async markNotificationReadAsync(id, user) {
+    return d1.markNotificationReadAsync(id, user);
+  }
+  async markAllNotificationsReadAsync(user) {
+    return d1.markAllNotificationsReadAsync(user);
+  }
   async init() {
     await d1.init();
   }
@@ -3609,7 +4432,22 @@ var DatabaseProxy = class {
 var db = new DatabaseProxy();
 
 // server.ts
+function isDatabaseConnectivityError(err) {
+  const msg = String(err?.message || "");
+  return msg.includes("Cloudflare D1") || msg.includes("\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A") || msg.includes("\u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A") || msg.includes("Network error") || msg.includes("fetch failed");
+}
+function respondSafeError(res, status, publicMessage, err, logContext = "Server Error") {
+  if (err) {
+    console.error(`[${logContext}]`, sanitizeD1ErrorMessage(err));
+  }
+  const finalStatus = status === 500 && err && isDatabaseConnectivityError(err) ? 503 : status;
+  return res.status(finalStatus).json({
+    success: false,
+    message: publicMessage
+  });
+}
 var app = express();
+app.set("trust proxy", process.env.VERCEL ? 1 : process.env.NODE_ENV === "production" ? 1 : false);
 var PORT = 3e3;
 var UPLOADS_DIR = path2.join(process.cwd(), "public", "uploads");
 if (!fs2.existsSync(UPLOADS_DIR)) {
@@ -3624,10 +4462,37 @@ app.use("/src/assets/images", express.static(path2.join(process.cwd(), "src", "a
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 app.use((req, res, next) => {
-  if (!req.url.startsWith("/api") && (req.url.startsWith("/auth") || req.url.startsWith("/products") || req.url.startsWith("/orders") || req.url.startsWith("/coupons") || req.url.startsWith("/delivery-agents") || req.url.startsWith("/reviews") || req.url.startsWith("/settings") || req.url.startsWith("/d1") || req.url.startsWith("/inventory") || req.url.startsWith("/crm") || req.url.startsWith("/gallery") || req.url.startsWith("/gemini") || req.url.startsWith("/health"))) {
+  if (!req.url.startsWith("/api") && (req.url.startsWith("/auth") || req.url.startsWith("/products") || req.url.startsWith("/orders") || req.url.startsWith("/my-orders") || req.url.startsWith("/coupons") || req.url.startsWith("/validate-coupon") || req.url.startsWith("/delivery-agents") || req.url.startsWith("/reviews") || req.url.startsWith("/settings") || req.url.startsWith("/d1") || req.url.startsWith("/inventory") || req.url.startsWith("/crm") || req.url.startsWith("/gallery") || req.url.startsWith("/payments") || req.url.startsWith("/notifications") || req.url.startsWith("/gemini") || req.url.startsWith("/health"))) {
     req.url = `/api${req.url}`;
   }
   next();
+});
+var d1InitializationPromise = null;
+app.use(async (req, res, next) => {
+  const requiresD1 = req.path.startsWith("/api") || req.path === "/health" || req.path === "/sitemap.xml";
+  if (!requiresD1) {
+    return next();
+  }
+  if (!d1.isD1Initialized()) {
+    if (!d1InitializationPromise) {
+      d1InitializationPromise = db.init();
+    }
+    const activePromise = d1InitializationPromise;
+    try {
+      await activePromise;
+    } catch (err) {
+      console.error("\u274C [D1 Middleware Init] Fail-closed: D1 initialization failed:", sanitizeD1ErrorMessage(err));
+      return res.status(503).json({
+        success: false,
+        message: "\u062E\u062F\u0645\u0629 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A \u063A\u064A\u0631 \u0645\u062A\u0627\u062D\u0629 \u0645\u0624\u0642\u062A\u0627\u064B. \u064A\u0631\u062C\u0649 \u0627\u0644\u0645\u062D\u0627\u0648\u0644\u0629 \u0644\u0627\u062D\u0642\u0627\u064B."
+      });
+    } finally {
+      if (d1InitializationPromise === activePromise) {
+        d1InitializationPromise = null;
+      }
+    }
+  }
+  return next();
 });
 app.get(["/api", "/api/index"], (req, res) => {
   res.json({
@@ -3681,30 +4546,6 @@ function requireRoles(allowedRoles) {
     return next();
   };
 }
-var d1InitializationPromise = null;
-app.use(async (req, res, next) => {
-  if (req.path.startsWith("/assets/") || req.path.endsWith(".js") || req.path.endsWith(".css") || req.path.endsWith(".ico")) {
-    return next();
-  }
-  if (!d1InitializationPromise) {
-    d1InitializationPromise = db.init().catch((err) => {
-      console.warn("\u26A0\uFE0F [D1 Middleware Init] Warning during lazy database initialization:", err.message);
-      d1InitializationPromise = null;
-      throw err;
-    });
-  }
-  try {
-    await d1InitializationPromise;
-  } catch (err) {
-    if (process.env.NODE_ENV === "production" && !d1.isD1Configured()) {
-      return res.status(503).json({
-        success: false,
-        message: "\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u063A\u064A\u0631 \u0645\u0647\u064A\u0623\u0629 \u0623\u0648 \u063A\u064A\u0631 \u0645\u062A\u0635\u0644\u0629 \u0641\u064A \u0628\u064A\u0626\u0629 \u0627\u0644\u0625\u0646\u062A\u0627\u062C"
-      });
-    }
-  }
-  next();
-});
 app.use(authenticateUser);
 var authRateLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1e3,
@@ -3776,11 +4617,7 @@ app.post("/api/auth/quick-customer", authRateLimiter, async (req, res) => {
       }
     });
   } catch (err) {
-    console.error("Quick customer login error:", err);
-    res.status(500).json({
-      success: false,
-      message: err.message || "\u062D\u062F\u062B \u062E\u0637\u0623 \u0623\u062B\u0646\u0627\u0621 \u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u062F\u062E\u0648\u0644 \u0627\u0644\u0633\u0631\u064A\u0639"
-    });
+    return respondSafeError(res, 503, "\u062D\u062F\u062B \u062E\u0637\u0623 \u0623\u062B\u0646\u0627\u0621 \u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u062F\u062E\u0648\u0644 \u0627\u0644\u0633\u0631\u064A\u0639", err, "QuickCustomerLogin");
   }
 });
 app.post("/api/auth/admin-login", authRateLimiter, async (req, res) => {
@@ -3795,12 +4632,7 @@ app.post("/api/auth/admin-login", authRateLimiter, async (req, res) => {
     }
     const cleanPhone = phone ? normalizeDigits(phone).replace(/\D/g, "") : "";
     const hashedInput = hashSecret(rawSecret);
-    let allUsers = [];
-    try {
-      allUsers = await db.getUsersAsync();
-    } catch (e) {
-      console.warn("Could not fetch users directly from D1:", e?.message);
-    }
+    const allUsers = await db.getUsersAsync();
     const users = allUsers.filter((u) => ["owner", "admin", "employee"].includes(u.role));
     let matchedUser = users.find((u) => {
       if (cleanPhone && u.phone.replace(/\D/g, "") !== cleanPhone) {
@@ -3845,12 +4677,6 @@ app.post("/api/auth/admin-login", authRateLimiter, async (req, res) => {
       }
     }
     if (!matchedUser) {
-      if (!d1.isD1Configured() && !process.env.ADMIN_PIN) {
-        return res.status(401).json({
-          success: false,
-          message: "\u0645\u062A\u063A\u064A\u0631\u0627\u062A \u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u0648\u0631\u0645\u0632 \u0627\u0644\u0625\u062F\u0627\u0631\u0629 \u063A\u064A\u0631 \u0645\u0643\u062A\u0645\u0644\u0629 \u0641\u064A \u0628\u064A\u0626\u0629 Vercel. \u064A\u0631\u062C\u0649 \u0625\u0636\u0627\u0641\u062A\u0647\u0627 \u0641\u064A Vercel Project Settings."
-        });
-      }
       return res.status(401).json({ success: false, message: "\u0631\u0645\u0632 \u0627\u0644\u062F\u062E\u0648\u0644 \u0623\u0648 \u0643\u0644\u0645\u0629 \u0627\u0644\u0645\u0631\u0648\u0631 \u063A\u064A\u0631 \u0635\u062D\u064A\u062D\u0629" });
     }
     const token = generateToken({
@@ -3870,11 +4696,7 @@ app.post("/api/auth/admin-login", authRateLimiter, async (req, res) => {
       }
     });
   } catch (err) {
-    console.error("Admin login error:", err);
-    res.status(500).json({
-      success: false,
-      message: err.message || "\u062D\u062F\u062B \u062E\u0637\u0623 \u0623\u062B\u0646\u0627\u0621 \u0645\u0639\u0627\u0644\u062C\u0629 \u062A\u0633\u062C\u064A\u0644 \u062F\u062E\u0648\u0644 \u0627\u0644\u0625\u062F\u0627\u0631\u0629"
-    });
+    return respondSafeError(res, 503, "\u062D\u062F\u062B \u062E\u0637\u0623 \u0623\u062B\u0646\u0627\u0621 \u0645\u0639\u0627\u0644\u062C\u0629 \u062A\u0633\u062C\u064A\u0644 \u062F\u062E\u0648\u0644 \u0627\u0644\u0625\u062F\u0627\u0631\u0629", err, "AdminLogin");
   }
 });
 app.post("/api/auth/driver-login", authRateLimiter, async (req, res) => {
@@ -3947,11 +4769,7 @@ app.post("/api/auth/driver-login", authRateLimiter, async (req, res) => {
       }
     });
   } catch (err) {
-    console.error("Driver login error:", err);
-    res.status(500).json({
-      success: false,
-      message: err.message || "\u062D\u062F\u062B \u062E\u0637\u0623 \u0623\u062B\u0646\u0627\u0621 \u0645\u0639\u0627\u0644\u062C\u0629 \u062A\u0633\u062C\u064A\u0644 \u062F\u062E\u0648\u0644 \u0627\u0644\u0645\u0646\u062F\u0648\u0628"
-    });
+    return respondSafeError(res, 503, "\u062D\u062F\u062B \u062E\u0637\u0623 \u0623\u062B\u0646\u0627\u0621 \u0645\u0639\u0627\u0644\u062C\u0629 \u062A\u0633\u062C\u064A\u0644 \u062F\u062E\u0648\u0644 \u0627\u0644\u0645\u0646\u062F\u0648\u0628", err, "DriverLogin");
   }
 });
 app.get("/api/auth/me", (req, res) => {
@@ -3981,12 +4799,13 @@ async function handleD1HealthAndStatus(req, res) {
       schemaValid: health.schemaValid,
       remoteCloudflareConnected: health.reachable,
       engine: "Cloudflare D1 Serverless (SQLite Dialect)",
-      databaseId: CLOUDFLARE_CONFIG.databaseId,
-      error: health.error || "\u062A\u0639\u0630\u0631 \u0627\u0644\u062A\u062D\u0642\u0642 \u0645\u0646 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0627\u0644\u0645\u0628\u0627\u0634\u0631 \u0628\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1",
+      error: health.error ? sanitizeD1ErrorMessage(health.error) : "\u062A\u0639\u0630\u0631 \u0627\u0644\u062A\u062D\u0642\u0642 \u0645\u0646 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0627\u0644\u0645\u0628\u0627\u0634\u0631 \u0628\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1",
       message: "\u0641\u0634\u0644 \u0627\u0644\u062A\u062D\u0642\u0642 \u0645\u0646 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1."
     });
   }
   if (isHealthCheck && req.query?.full !== "true") {
+    const isolationNonce = typeof req.headers?.["x-test-isolation-nonce"] === "string" ? req.headers["x-test-isolation-nonce"].trim() : "";
+    const isolationProof = isolationNonce.length >= 16 ? crypto3.createHmac("sha256", CLOUDFLARE_CONFIG.databaseId || "UNCONFIGURED").update(isolationNonce).digest("hex") : void 0;
     return res.json({
       success: true,
       status: "healthy",
@@ -3997,10 +4816,12 @@ async function handleD1HealthAndStatus(req, res) {
       schemaValid: health.schemaValid,
       remoteCloudflareConnected: true,
       engine: "Cloudflare D1 Serverless (SQLite Dialect)",
-      databaseId: CLOUDFLARE_CONFIG.databaseId,
-      accountId: CLOUDFLARE_CONFIG.accountId ? `${CLOUDFLARE_CONFIG.accountId.substring(0, 6)}...` : "",
       remoteTablesCount: health.remoteTablesCount,
       timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      ...isolationProof ? {
+        isolationProof,
+        isProductionRuntime: process.env.NODE_ENV === "production"
+      } : {},
       message: "\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u0645\u062A\u0635\u0644\u0629 \u0648\u062A\u0639\u0645\u0644 \u0628\u0643\u0641\u0627\u0621\u0629 \u0639\u0627\u0644\u064A\u0629 \u0648\u0628\u0645\u062E\u0637\u0637 \u0633\u0644\u064A\u0645."
     });
   }
@@ -4030,29 +4851,29 @@ async function handleD1HealthAndStatus(req, res) {
     ]);
     let storeSettingsCount = 0;
     let inventoryRowsCount = 0;
-    try {
-      const stRows = await d1.executeCloudflareD1Query("SELECT count(*) as count FROM store_settings;");
-      if (stRows && stRows.length > 0) {
-        storeSettingsCount = Number(stRows[0].count) || 1;
-      } else {
-        storeSettingsCount = 1;
-      }
-      const invRows = await d1.executeCloudflareD1Query("SELECT count(*) as count FROM inventory;");
-      if (invRows && invRows.length > 0) {
-        inventoryRowsCount = Number(invRows[0].count);
-      } else {
-        inventoryRowsCount = products.length;
-      }
-    } catch {
+    let paymentsRowsCount = 0;
+    let notificationsRowsCount = 0;
+    if (d1.isD1Configured()) {
+      const [stRows, invRows, payRows, notifRows] = await Promise.all([
+        d1.executeCloudflareD1Query("SELECT count(*) as count FROM store_settings;"),
+        d1.executeCloudflareD1Query("SELECT count(*) as count FROM inventory;"),
+        d1.executeCloudflareD1Query("SELECT count(*) as count FROM payments;"),
+        d1.executeCloudflareD1Query("SELECT count(*) as count FROM notifications;")
+      ]);
+      storeSettingsCount = stRows && stRows.length > 0 ? Number(stRows[0].count) || 0 : 0;
+      inventoryRowsCount = invRows && invRows.length > 0 ? Number(invRows[0].count) || 0 : 0;
+      paymentsRowsCount = payRows && payRows.length > 0 ? Number(payRows[0].count) || 0 : 0;
+      notificationsRowsCount = notifRows && notifRows.length > 0 ? Number(notifRows[0].count) || 0 : 0;
+    } else {
       storeSettingsCount = 1;
       inventoryRowsCount = products.length;
+      paymentsRowsCount = (await db.getPaymentsAsync()).length;
+      notificationsRowsCount = d1.getNotifications().length;
     }
     return res.json({
       success: true,
       status: "healthy",
       engine: "Cloudflare D1 Serverless (SQLite Dialect)",
-      databaseId: CLOUDFLARE_CONFIG.databaseId,
-      accountId: CLOUDFLARE_CONFIG.accountId ? `${CLOUDFLARE_CONFIG.accountId.substring(0, 6)}...` : "",
       isConnected: true,
       configured: health.configured,
       reachable: health.reachable,
@@ -4074,14 +4895,14 @@ async function handleD1HealthAndStatus(req, res) {
         coupons: coupons.length,
         gallery_items: galleryItems.length,
         store_settings: storeSettingsCount,
-        payments: orders.length,
-        notifications: d1.getNotifications().length
+        payments: paymentsRowsCount,
+        notifications: notificationsRowsCount
       },
       message: "\u0642\u0627\u0639\u062F\u0629 \u0628\u064A\u0627\u0646\u0627\u062A Cloudflare D1 \u062A\u0639\u0645\u0644 \u0628\u0643\u0641\u0627\u0621\u0629 \u0639\u0627\u0644\u064A\u0629 \u0648\u0628\u0627\u062A\u0635\u0627\u0644 \u0645\u0628\u0627\u0634\u0631 \u0648\u0645\u0624\u0643\u062F."
     });
   } catch (dataErr) {
-    console.error("D1 table count query error:", dataErr);
-    return res.status(500).json({
+    console.error("D1 table count query error:", sanitizeD1ErrorMessage(dataErr));
+    return res.status(503).json({
       success: false,
       isConnected: false,
       configured: health.configured,
@@ -4089,7 +4910,7 @@ async function handleD1HealthAndStatus(req, res) {
       initialized: health.initialized,
       schemaValid: health.schemaValid,
       remoteCloudflareConnected: false,
-      error: dataErr?.message || "\u0641\u0634\u0644 \u0642\u0631\u0627\u0621\u0629 \u062C\u062F\u0627\u0648\u0644 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A",
+      error: "\u0641\u0634\u0644 \u0642\u0631\u0627\u0621\u0629 \u062C\u062F\u0627\u0648\u0644 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A",
       message: "\u062D\u062F\u062B \u062E\u0637\u0623 \u0623\u062B\u0646\u0627\u0621 \u0642\u0631\u0627\u0621\u0629 \u0625\u062D\u0635\u0627\u0626\u064A\u0627\u062A \u0627\u0644\u062C\u062F\u0627\u0648\u0644 \u0645\u0646 Cloudflare D1"
     });
   }
@@ -4100,8 +4921,7 @@ app.get("/api/categories", async (req, res) => {
     const categories = await db.getCategoriesAsync();
     res.json({ success: true, data: categories });
   } catch (err) {
-    console.error("Categories query error:", err);
-    res.status(503).json({ success: false, message: "\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0627\u0644\u0623\u0642\u0633\u0627\u0645 \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", error: err.message });
+    return respondSafeError(res, 503, "\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0627\u0644\u0623\u0642\u0633\u0627\u0645 \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "Categories");
   }
 });
 app.get("/api/products", async (req, res) => {
@@ -4109,8 +4929,7 @@ app.get("/api/products", async (req, res) => {
     const products = await db.getProductsAsync();
     res.json({ success: true, data: products });
   } catch (err) {
-    console.error("Products query error:", err);
-    res.status(503).json({ success: false, message: "\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0627\u0644\u0645\u0646\u062A\u062C\u0627\u062A \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", error: err.message });
+    return respondSafeError(res, 503, "\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0627\u0644\u0645\u0646\u062A\u062C\u0627\u062A \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "Products");
   }
 });
 app.get("/api/products/:id", async (req, res) => {
@@ -4121,8 +4940,7 @@ app.get("/api/products/:id", async (req, res) => {
     }
     res.json({ success: true, data: p });
   } catch (err) {
-    console.error("Product find error:", err);
-    res.status(503).json({ success: false, message: "\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0627\u0644\u0645\u0646\u062A\u062C \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", error: err.message });
+    return respondSafeError(res, 503, "\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0627\u0644\u0645\u0646\u062A\u062C \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "ProductFind");
   }
 });
 app.post("/api/products", requireRoles(["owner", "admin"]), async (req, res) => {
@@ -4164,8 +4982,7 @@ app.post("/api/products", requireRoles(["owner", "admin"]), async (req, res) => 
     const added = await db.addProductAsync(newProduct);
     res.json({ success: true, data: added });
   } catch (err) {
-    console.error("Add product error:", err);
-    res.status(500).json({ success: false, message: "\u0641\u0634\u0644 \u062D\u0641\u0638 \u0627\u0644\u0645\u0646\u062A\u062C \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", error: err.message });
+    return respondSafeError(res, 500, "\u0641\u0634\u0644 \u062D\u0641\u0638 \u0627\u0644\u0645\u0646\u062A\u062C \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "AddProduct");
   }
 });
 app.put("/api/products/:id", requireRoles(["owner", "admin", "employee"]), async (req, res) => {
@@ -4183,8 +5000,7 @@ app.put("/api/products/:id", requireRoles(["owner", "admin", "employee"]), async
     }
     res.json({ success: true, data: updated });
   } catch (err) {
-    console.error("Update product error:", err);
-    res.status(500).json({ success: false, message: "\u0641\u0634\u0644 \u062A\u062D\u062F\u064A\u062B \u0627\u0644\u0645\u0646\u062A\u062C \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", error: err.message });
+    return respondSafeError(res, 500, "\u0641\u0634\u0644 \u062A\u062D\u062F\u064A\u062B \u0627\u0644\u0645\u0646\u062A\u062C \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "UpdateProduct");
   }
 });
 app.delete("/api/products/:id", requireRoles(["owner", "admin"]), async (req, res) => {
@@ -4193,8 +5009,7 @@ app.delete("/api/products/:id", requireRoles(["owner", "admin"]), async (req, re
     await db.deleteProductAsync(id);
     res.json({ success: true, message: "\u062A\u0645 \u062D\u0630\u0641 \u0627\u0644\u0645\u0646\u062A\u062C \u0628\u0646\u062C\u0627\u062D" });
   } catch (err) {
-    console.error("Delete product error:", err);
-    res.status(500).json({ success: false, message: "\u0641\u0634\u0644 \u062D\u0630\u0641 \u0627\u0644\u0645\u0646\u062A\u062C \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", error: err.message });
+    return respondSafeError(res, 500, "\u0641\u0634\u0644 \u062D\u0630\u0641 \u0627\u0644\u0645\u0646\u062A\u062C \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "DeleteProduct");
   }
 });
 app.post("/api/upload", requireRoles(["owner", "admin", "employee"]), async (req, res) => {
@@ -4273,8 +5088,7 @@ app.post("/api/upload", requireRoles(["owner", "admin", "employee"]), async (req
         console.error("CRITICAL: Failed to write upload to permanent disk storage in production:", fsErr?.message);
         return res.status(500).json({
           success: false,
-          message: "\u0641\u0634\u0644 \u062D\u0641\u0638 \u0627\u0644\u0635\u0648\u0631\u0629 \u0639\u0644\u0649 \u0648\u062D\u062F\u0629 \u0627\u0644\u062A\u062E\u0632\u064A\u0646 \u0627\u0644\u062F\u0627\u0626\u0645\u0629 \u0628\u0627\u0644\u0633\u064A\u0631\u0641\u0631",
-          error: fsErr?.message
+          message: "\u0641\u0634\u0644 \u062D\u0641\u0638 \u0627\u0644\u0635\u0648\u0631\u0629 \u0639\u0644\u0649 \u0648\u062D\u062F\u0629 \u0627\u0644\u062A\u062E\u0632\u064A\u0646 \u0627\u0644\u062F\u0627\u0626\u0645\u0629 \u0628\u0627\u0644\u0633\u064A\u0631\u0641\u0631"
         });
       }
       console.warn("Could not write to disk uploads in development, falling back to data URI preview:", fsErr?.message);
@@ -4282,8 +5096,7 @@ app.post("/api/upload", requireRoles(["owner", "admin", "employee"]), async (req
       return res.json({ success: true, url: fallbackUrl, filename, storage: "data-url", fallback: true });
     }
   } catch (error) {
-    console.error("Upload error:", error);
-    res.status(500).json({ success: false, message: "\u0641\u0634\u0644 \u062D\u0641\u0638 \u0627\u0644\u0635\u0648\u0631\u0629 \u0639\u0644\u0649 \u0627\u0644\u062E\u0627\u062F\u0645: " + (error?.message || "") });
+    return respondSafeError(res, 500, "\u0641\u0634\u0644 \u062D\u0641\u0638 \u0627\u0644\u0635\u0648\u0631\u0629 \u0639\u0644\u0649 \u0627\u0644\u062E\u0627\u062F\u0645", error, "Upload");
   }
 });
 app.get("/api/inventory/transactions", requireRoles(["owner", "admin", "employee"]), async (req, res) => {
@@ -4291,49 +5104,48 @@ app.get("/api/inventory/transactions", requireRoles(["owner", "admin", "employee
     const transactions = await db.getInventoryTransactionsAsync();
     res.json({ success: true, data: transactions });
   } catch (err) {
-    console.error("Inventory transactions query error:", err);
-    res.status(503).json({ success: false, message: "\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u062D\u0631\u0643\u0627\u062A \u0627\u0644\u0645\u062E\u0632\u0648\u0646 \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", error: err.message });
+    return respondSafeError(res, 503, "\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u062D\u0631\u0643\u0627\u062A \u0627\u0644\u0645\u062E\u0632\u0648\u0646 \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "InventoryTransactions");
   }
 });
 app.post("/api/inventory/adjust", requireRoles(["owner", "admin", "employee"]), async (req, res) => {
-  const { productId, type, quantity, reason } = req.body;
-  if (!productId || typeof productId !== "string") {
-    return res.status(400).json({ success: false, message: "\u064A\u0631\u062C\u0649 \u062A\u062D\u062F\u064A\u062F \u0627\u0644\u0645\u0646\u062A\u062C \u0627\u0644\u0645\u0631\u0627\u062F \u062A\u0639\u062F\u064A\u0644 \u0645\u062E\u0632\u0648\u0646\u0647" });
-  }
-  const allowedTypes = ["purchase", "sale", "adjustment", "damage", "return", "STOCK_IN", "STOCK_OUT"];
-  if (!type || !allowedTypes.includes(type)) {
-    return res.status(400).json({ success: false, message: "\u0646\u0648\u0639 \u0639\u0645\u0644\u064A\u0629 \u0627\u0644\u062A\u0639\u062F\u064A\u0644 \u063A\u064A\u0631 \u0635\u0627\u0644\u062D" });
-  }
-  const qty = Number(quantity);
-  if (isNaN(qty) || !isFinite(qty)) {
-    return res.status(400).json({ success: false, message: "\u064A\u0631\u062C\u0649 \u0625\u062F\u062E\u0627\u0644 \u0643\u0645\u064A\u0629 \u0631\u0642\u0645\u064A\u0629 \u0635\u062D\u064A\u062D\u0629" });
-  }
-  const product = await db.findProductByIdAsync(productId);
-  if (!product) {
-    return res.status(404).json({ success: false, message: "\u0627\u0644\u0645\u0646\u062A\u062C \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F" });
-  }
-  const prevStock = product.stock;
-  let newStock = prevStock;
-  if (type === "purchase" || type === "return" || type === "STOCK_IN") {
-    newStock = prevStock + Math.abs(qty);
-  } else if (type === "sale" || type === "damage" || type === "STOCK_OUT") {
-    if (prevStock < Math.abs(qty)) {
-      return res.status(400).json({
-        success: false,
-        message: `\u0627\u0644\u0645\u062E\u0632\u0648\u0646 \u0627\u0644\u062D\u0627\u0644\u064A (${prevStock}) \u063A\u064A\u0631 \u0643\u0627\u0641\u064D \u0644\u062E\u0635\u0645 (${Math.abs(qty)}). \u0644\u0627 \u064A\u0645\u0643\u0646 \u0623\u0646 \u064A\u0635\u0628\u062D \u0627\u0644\u0645\u062E\u0632\u0648\u0646 \u0633\u0627\u0644\u0628\u0627\u064B.`
-      });
-    }
-    newStock = prevStock - Math.abs(qty);
-  } else if (type === "adjustment") {
-    if (qty < 0) {
-      return res.status(400).json({ success: false, message: "\u0644\u0627 \u064A\u0645\u0643\u0646 \u0623\u0646 \u064A\u0643\u0648\u0646 \u0627\u0644\u0645\u062E\u0632\u0648\u0646 \u0633\u0627\u0644\u0628\u0627\u064B" });
-    }
-    newStock = Math.floor(qty);
-  }
-  const diff = newStock - prevStock;
-  const safeReason = sanitizeInputString(reason || "", 200) || "\u062A\u0639\u062F\u064A\u0644 \u062C\u0631\u062F \u064A\u062F\u0648\u064A \u0645\u0646 \u0644\u0648\u062D\u0629 \u0627\u0644\u062A\u062D\u0643\u0645";
-  const actor = req.user ? `${req.user.name || req.user.role} (${req.user.userId})` : "\u0627\u0644\u0625\u062F\u0627\u0631\u0629";
   try {
+    const { productId, type, quantity, reason } = req.body;
+    if (!productId || typeof productId !== "string") {
+      return res.status(400).json({ success: false, message: "\u064A\u0631\u062C\u0649 \u062A\u062D\u062F\u064A\u062F \u0627\u0644\u0645\u0646\u062A\u062C \u0627\u0644\u0645\u0631\u0627\u062F \u062A\u0639\u062F\u064A\u0644 \u0645\u062E\u0632\u0648\u0646\u0647" });
+    }
+    const allowedTypes = ["purchase", "sale", "adjustment", "damage", "return", "STOCK_IN", "STOCK_OUT"];
+    if (!type || !allowedTypes.includes(type)) {
+      return res.status(400).json({ success: false, message: "\u0646\u0648\u0639 \u0639\u0645\u0644\u064A\u0629 \u0627\u0644\u062A\u0639\u062F\u064A\u0644 \u063A\u064A\u0631 \u0635\u0627\u0644\u062D" });
+    }
+    const qty = Number(quantity);
+    if (isNaN(qty) || !isFinite(qty)) {
+      return res.status(400).json({ success: false, message: "\u064A\u0631\u062C\u0649 \u0625\u062F\u062E\u0627\u0644 \u0643\u0645\u064A\u0629 \u0631\u0642\u0645\u064A\u0629 \u0635\u062D\u064A\u062D\u0629" });
+    }
+    const product = await db.findProductByIdAsync(productId);
+    if (!product) {
+      return res.status(404).json({ success: false, message: "\u0627\u0644\u0645\u0646\u062A\u062C \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F" });
+    }
+    const prevStock = product.stock;
+    let newStock = prevStock;
+    if (type === "purchase" || type === "return" || type === "STOCK_IN") {
+      newStock = prevStock + Math.abs(qty);
+    } else if (type === "sale" || type === "damage" || type === "STOCK_OUT") {
+      if (prevStock < Math.abs(qty)) {
+        return res.status(400).json({
+          success: false,
+          message: `\u0627\u0644\u0645\u062E\u0632\u0648\u0646 \u0627\u0644\u062D\u0627\u0644\u064A (${prevStock}) \u063A\u064A\u0631 \u0643\u0627\u0641\u064D \u0644\u062E\u0635\u0645 (${Math.abs(qty)}). \u0644\u0627 \u064A\u0645\u0643\u0646 \u0623\u0646 \u064A\u0635\u0628\u062D \u0627\u0644\u0645\u062E\u0632\u0648\u0646 \u0633\u0627\u0644\u0628\u0627\u064B.`
+        });
+      }
+      newStock = prevStock - Math.abs(qty);
+    } else if (type === "adjustment") {
+      if (qty < 0) {
+        return res.status(400).json({ success: false, message: "\u0644\u0627 \u064A\u0645\u0643\u0646 \u0623\u0646 \u064A\u0643\u0648\u0646 \u0627\u0644\u0645\u062E\u0632\u0648\u0646 \u0633\u0627\u0644\u0628\u0627\u064B" });
+      }
+      newStock = Math.floor(qty);
+    }
+    const diff = newStock - prevStock;
+    const safeReason = sanitizeInputString(reason || "", 200) || "\u062A\u0639\u062F\u064A\u0644 \u062C\u0631\u062F \u064A\u062F\u0648\u064A \u0645\u0646 \u0644\u0648\u062D\u0629 \u0627\u0644\u062A\u062D\u0643\u0645";
+    const actor = req.user ? `${req.user.name || req.user.role} (${req.user.userId})` : "\u0627\u0644\u0625\u062F\u0627\u0631\u0629";
     const result = await db.adjustProductStock({
       productId,
       type,
@@ -4343,378 +5155,474 @@ app.post("/api/inventory/adjust", requireRoles(["owner", "admin", "employee"]), 
       reason: safeReason,
       performedBy: actor
     });
-    res.json({ success: true, data: result });
+    return res.json({ success: true, data: result });
   } catch (err) {
-    console.error("Stock adjustment failed:", err);
-    res.status(400).json({
-      success: false,
-      message: err.message?.includes("prevent_negative_stock") ? "\u0641\u0634\u0644\u062A \u0627\u0644\u0639\u0645\u0644\u064A\u0629: \u062A\u0645 \u0631\u0641\u0636 \u062A\u0639\u062F\u064A\u0644 \u0627\u0644\u0645\u062E\u0632\u0648\u0646 \u0644\u0645\u0646\u0639 \u0627\u0644\u0642\u064A\u0645\u0629 \u0627\u0644\u0633\u0627\u0644\u0628\u0629" : err.message || "\u062D\u062F\u062B \u062E\u0637\u0623 \u0623\u062B\u0646\u0627\u0621 \u062A\u0639\u062F\u064A\u0644 \u0627\u0644\u0645\u062E\u0632\u0648\u0646"
-    });
+    console.error("Stock adjustment failed:", sanitizeD1ErrorMessage(err));
+    const msg = String(err?.message || "");
+    if (msg.includes("prevent_negative_stock")) {
+      return res.status(400).json({ success: false, message: "\u0641\u0634\u0644\u062A \u0627\u0644\u0639\u0645\u0644\u064A\u0629: \u062A\u0645 \u0631\u0641\u0636 \u062A\u0639\u062F\u064A\u0644 \u0627\u0644\u0645\u062E\u0632\u0648\u0646 \u0644\u0645\u0646\u0639 \u0627\u0644\u0642\u064A\u0645\u0629 \u0627\u0644\u0633\u0627\u0644\u0628\u0629" });
+    }
+    if (msg.includes("\u062A\u063A\u064A\u0651\u0631 \u0628\u0627\u0644\u062A\u0632\u0627\u0645\u0646")) {
+      return res.status(409).json({ success: false, message: msg });
+    }
+    return respondSafeError(res, 503, "\u062D\u062F\u062B \u062E\u0637\u0623 \u0623\u062B\u0646\u0627\u0621 \u062A\u0639\u062F\u064A\u0644 \u0627\u0644\u0645\u062E\u0632\u0648\u0646", err, "StockAdjust");
   }
 });
 app.post("/api/orders", orderRateLimiter, async (req, res) => {
-  const { items, address, customerName, customerPhone, paymentMethod, notes, couponCode } = req.body;
-  if (!items || !Array.isArray(items) || items.length === 0) {
-    return res.status(400).json({ success: false, message: "\u0627\u0644\u0633\u0644\u0629 \u0641\u0627\u0631\u063A\u0629\u060C \u064A\u0631\u062C\u0649 \u0625\u0636\u0627\u0641\u0629 \u0645\u0646\u062A\u062C\u0627\u062A \u0623\u0648\u0644\u0627\u064B" });
-  }
-  let resolvedPhone = customerPhone && String(customerPhone).trim() || req.user?.phone || "";
-  let resolvedName = "";
-  if (isRealValidCustomerName(customerName)) {
-    resolvedName = String(customerName).trim();
-  } else if (isRealValidCustomerName(req.user?.name)) {
-    resolvedName = String(req.user.name).trim();
-  } else if (customerName && String(customerName).trim().length > 0) {
-    resolvedName = String(customerName).trim();
-  } else if (req.user?.name && String(req.user.name).trim().length > 0) {
-    resolvedName = String(req.user.name).trim();
-  } else {
-    resolvedName = "\u0639\u0645\u064A\u0644 \u0627\u0644\u0645\u062A\u062C\u0631";
-  }
-  if (!resolvedPhone) {
-    return res.status(400).json({ success: false, message: "\u064A\u0631\u062C\u0649 \u062A\u0648\u0641\u064A\u0631 \u0631\u0642\u0645 \u0647\u0627\u062A\u0641 \u0627\u0644\u0639\u0645\u064A\u0644 \u0644\u062A\u0623\u0643\u064A\u062F \u0627\u0644\u062A\u0648\u0635\u064A\u0644" });
-  }
-  const phoneValidation = validateYemeniPhone(resolvedPhone);
-  if (!phoneValidation.isValid) {
-    return res.status(400).json({ success: false, message: "\u064A\u0631\u062C\u0649 \u0625\u062F\u062E\u0627\u0644 \u0631\u0642\u0645 \u0647\u0627\u062A\u0641 \u064A\u0645\u0646\u064A \u0635\u062D\u064A\u062D (\u0645\u062B\u0627\u0644: 77XXXXXXX \u0623\u0648 73XXXXXXX)" });
-  }
-  const cleanPhone = phoneValidation.normalized;
-  const safeCustomerName = sanitizeInputString(resolvedName, 80);
-  const rawAddress = address || req.body.deliveryAddress || req.body.shippingAddress;
-  const resolvedDistrict = typeof rawAddress === "object" && rawAddress?.district ? rawAddress.district : req.body.district || (typeof rawAddress === "string" ? rawAddress : "");
-  const resolvedStreet = typeof rawAddress === "object" && rawAddress?.street ? rawAddress.street : req.body.street || typeof rawAddress === "object" && (rawAddress?.streetAddress || rawAddress?.details) || (typeof rawAddress === "string" ? rawAddress : req.body.addressDetails || "");
-  const resolvedLandmark = typeof rawAddress === "object" && rawAddress?.landmark ? rawAddress.landmark : req.body.landmark || req.body.addressDetails || "";
-  if (!resolvedDistrict) {
-    return res.status(400).json({ success: false, message: "\u064A\u0631\u062C\u0649 \u062A\u062D\u062F\u064A\u062F \u0639\u0646\u0648\u0627\u0646 \u0627\u0644\u062A\u0648\u0635\u064A\u0644 \u062F\u0627\u062E\u0644 \u0635\u0646\u0639\u0627\u0621" });
-  }
-  const safeAddress = {
-    district: sanitizeInputString(resolvedDistrict, 80),
-    street: sanitizeInputString(resolvedStreet || resolvedDistrict, 120),
-    landmark: sanitizeInputString(resolvedLandmark, 120),
-    city: "\u0635\u0646\u0639\u0627\u0621"
-  };
-  const allProducts = await db.getProductsAsync();
-  const validatedItems = [];
-  let calculatedSubtotal = 0;
-  for (const item of items) {
-    const targetId = item.productId || item.product?.id || item.id;
-    const product = allProducts.find((p) => p.id === targetId);
-    if (!product) {
-      return res.status(400).json({ success: false, message: `\u0627\u0644\u0645\u0646\u062A\u062C (${item.productNameAr || item.nameAr || targetId}) \u063A\u064A\u0631 \u0645\u062A\u0648\u0641\u0631 \u0641\u064A \u0627\u0644\u0645\u062A\u062C\u0631` });
+  try {
+    const { items, address, customerName, customerPhone, paymentMethod, notes, couponCode } = req.body;
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ success: false, message: "\u0627\u0644\u0633\u0644\u0629 \u0641\u0627\u0631\u063A\u0629\u060C \u064A\u0631\u062C\u0649 \u0625\u0636\u0627\u0641\u0629 \u0645\u0646\u062A\u062C\u0627\u062A \u0623\u0648\u0644\u0627\u064B" });
     }
-    const orderQty = Math.max(1, parseInt(item.quantity, 10) || 1);
-    if (product.stock < orderQty) {
-      return res.status(400).json({
-        success: false,
-        message: `\u0639\u0630\u0631\u0627\u064B! \u0627\u0644\u0643\u0645\u064A\u0629 \u0627\u0644\u0645\u0637\u0644\u0648\u0628\u0629 \u0645\u0646 "${product.nameAr}" (${orderQty}) \u062A\u062A\u062C\u0627\u0648\u0632 \u0627\u0644\u0645\u062E\u0632\u0648\u0646 \u0627\u0644\u0645\u062A\u0627\u062D \u062D\u0627\u0644\u064A\u0627\u064B (${product.stock} \u0639\u0628\u0648\u0629).`
+    let resolvedPhone = customerPhone && String(customerPhone).trim() || req.user?.phone || "";
+    let resolvedName = "";
+    if (isRealValidCustomerName(customerName)) {
+      resolvedName = String(customerName).trim();
+    } else if (isRealValidCustomerName(req.user?.name)) {
+      resolvedName = String(req.user.name).trim();
+    } else if (customerName && String(customerName).trim().length > 0) {
+      resolvedName = String(customerName).trim();
+    } else if (req.user?.name && String(req.user.name).trim().length > 0) {
+      resolvedName = String(req.user.name).trim();
+    } else {
+      resolvedName = "\u0639\u0645\u064A\u0644 \u0627\u0644\u0645\u062A\u062C\u0631";
+    }
+    if (!resolvedPhone) {
+      return res.status(400).json({ success: false, message: "\u064A\u0631\u062C\u0649 \u062A\u0648\u0641\u064A\u0631 \u0631\u0642\u0645 \u0647\u0627\u062A\u0641 \u0627\u0644\u0639\u0645\u064A\u0644 \u0644\u062A\u0623\u0643\u064A\u062F \u0627\u0644\u062A\u0648\u0635\u064A\u0644" });
+    }
+    const phoneValidation = validateYemeniPhone(resolvedPhone);
+    if (!phoneValidation.isValid) {
+      return res.status(400).json({ success: false, message: "\u064A\u0631\u062C\u0649 \u0625\u062F\u062E\u0627\u0644 \u0631\u0642\u0645 \u0647\u0627\u062A\u0641 \u064A\u0645\u0646\u064A \u0635\u062D\u064A\u062D (\u0645\u062B\u0627\u0644: 77XXXXXXX \u0623\u0648 73XXXXXXX)" });
+    }
+    const cleanPhone = phoneValidation.normalized;
+    const safeCustomerName = sanitizeInputString(resolvedName, 80);
+    const rawAddress = address || req.body.deliveryAddress || req.body.shippingAddress;
+    const resolvedDistrict = typeof rawAddress === "object" && rawAddress?.district ? rawAddress.district : req.body.district || (typeof rawAddress === "string" ? rawAddress : "");
+    const resolvedStreet = typeof rawAddress === "object" && rawAddress?.street ? rawAddress.street : req.body.street || typeof rawAddress === "object" && (rawAddress?.streetAddress || rawAddress?.details) || (typeof rawAddress === "string" ? rawAddress : req.body.addressDetails || "");
+    const resolvedLandmark = typeof rawAddress === "object" && rawAddress?.landmark ? rawAddress.landmark : req.body.landmark || req.body.addressDetails || "";
+    if (!resolvedDistrict) {
+      return res.status(400).json({ success: false, message: "\u064A\u0631\u062C\u0649 \u062A\u062D\u062F\u064A\u062F \u0639\u0646\u0648\u0627\u0646 \u0627\u0644\u062A\u0648\u0635\u064A\u0644 \u062F\u0627\u062E\u0644 \u0635\u0646\u0639\u0627\u0621" });
+    }
+    const safeAddress = {
+      district: sanitizeInputString(resolvedDistrict, 80),
+      street: sanitizeInputString(resolvedStreet || resolvedDistrict, 120),
+      landmark: sanitizeInputString(resolvedLandmark, 120),
+      city: "\u0635\u0646\u0639\u0627\u0621"
+    };
+    const allProducts = await db.getProductsAsync();
+    const validatedItems = [];
+    let calculatedSubtotal = 0;
+    const resolveAuthoritativeItemPrice = (product, itemWeight) => {
+      if (itemWeight && product.weightOptions && product.weightOptions.length > 0) {
+        const cleanReqWeight = String(itemWeight).trim().toLowerCase();
+        const exactMatch = product.weightOptions.find((w) => String(w.weight || "").trim().toLowerCase() === cleanReqWeight);
+        if (exactMatch) return Number(exactMatch.price);
+        const prefixMatch = product.weightOptions.find((w) => {
+          const opt = String(w.weight || "").trim().toLowerCase();
+          return opt.startsWith(cleanReqWeight) || cleanReqWeight.startsWith(opt.split(" ")[0]);
+        });
+        if (prefixMatch) return Number(prefixMatch.price);
+      }
+      return Number(product.price);
+    };
+    const isCouponExpired = (validUntil) => {
+      if (!validUntil) return false;
+      const trimmed = String(validUntil).trim();
+      const targetTs = /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? (/* @__PURE__ */ new Date(`${trimmed}T23:59:59.999Z`)).getTime() : new Date(trimmed).getTime();
+      return !isNaN(targetTs) && targetTs < Date.now();
+    };
+    for (const item of items) {
+      const targetId = item.productId || item.product?.id || item.id;
+      const product = allProducts.find((p) => p.id === targetId);
+      if (!product) {
+        return res.status(400).json({ success: false, message: `\u0627\u0644\u0645\u0646\u062A\u062C (${item.productNameAr || item.nameAr || targetId}) \u063A\u064A\u0631 \u0645\u062A\u0648\u0641\u0631 \u0641\u064A \u0627\u0644\u0645\u062A\u062C\u0631` });
+      }
+      const rawQty = Number(item.quantity);
+      if (!Number.isInteger(rawQty) || rawQty <= 0 || rawQty > 1e4) {
+        return res.status(400).json({
+          success: false,
+          message: `\u0627\u0644\u0643\u0645\u064A\u0629 \u0627\u0644\u0645\u0637\u0644\u0648\u0628\u0629 \u0644\u0644\u0645\u0646\u062A\u062C "${product.nameAr}" \u063A\u064A\u0631 \u0635\u0627\u0644\u062D\u0629. \u064A\u062C\u0628 \u0623\u0646 \u062A\u0643\u0648\u0646 \u0631\u0642\u0645\u0627\u064B \u0635\u062D\u064A\u062D\u0627\u064B \u0645\u0648\u062C\u0628\u0627\u064B.`
+        });
+      }
+      const orderQty = rawQty;
+      if (product.stock < orderQty) {
+        return res.status(400).json({
+          success: false,
+          message: `\u0639\u0630\u0631\u0627\u064B! \u0627\u0644\u0643\u0645\u064A\u0629 \u0627\u0644\u0645\u0637\u0644\u0648\u0628\u0629 \u0645\u0646 "${product.nameAr}" (${orderQty}) \u062A\u062A\u062C\u0627\u0648\u0632 \u0627\u0644\u0645\u062E\u0632\u0648\u0646 \u0627\u0644\u0645\u062A\u0627\u062D \u062D\u0627\u0644\u064A\u0627\u064B (${product.stock} \u0639\u0628\u0648\u0629).`
+        });
+      }
+      const itemWeight = item.weight || item.selectedWeight || item.product && item.product.weight;
+      const itemPrice = resolveAuthoritativeItemPrice(product, itemWeight);
+      calculatedSubtotal += itemPrice * orderQty;
+      validatedItems.push({
+        productId: product.id,
+        productNameAr: product.nameAr,
+        productNameEn: product.nameEn,
+        weight: itemWeight || (product.weightOptions?.[0]?.weight || "250g"),
+        quantity: orderQty,
+        unitPrice: itemPrice,
+        totalPrice: itemPrice * orderQty
       });
     }
-    const itemWeight = item.weight || item.selectedWeight || item.product && item.product.weight;
-    let itemPrice = product.price;
-    if (itemWeight && product.weightOptions && product.weightOptions.length > 0) {
-      const matchOpt = product.weightOptions.find((w) => w.weight === itemWeight);
-      if (matchOpt) {
-        itemPrice = matchOpt.price;
+    let calculatedDiscount = 0;
+    if (couponCode) {
+      const coupon = await db.findCouponAsync(couponCode);
+      const isCouponValid = coupon && coupon.isActive && !isCouponExpired(coupon.validUntil) && (!coupon.maxUses || !coupon.usageCount || coupon.usageCount < coupon.maxUses);
+      if (isCouponValid && calculatedSubtotal >= coupon.minOrderAmount) {
+        const rawDiscount = calculatedSubtotal * coupon.discountPercent / 100;
+        calculatedDiscount = coupon.maxDiscount && coupon.maxDiscount > 0 ? Math.min(rawDiscount, coupon.maxDiscount) : rawDiscount;
       }
     }
-    calculatedSubtotal += itemPrice * orderQty;
-    validatedItems.push({
-      productId: product.id,
-      productNameAr: product.nameAr,
-      productNameEn: product.nameEn,
-      weight: itemWeight || (product.weightOptions?.[0]?.weight || "250g"),
-      quantity: orderQty,
-      unitPrice: itemPrice,
-      totalPrice: itemPrice * orderQty
-    });
-  }
-  let calculatedDiscount = 0;
-  if (couponCode) {
-    const coupon = await db.findCouponAsync(couponCode);
-    const isCouponValid = coupon && coupon.isActive && (!coupon.validUntil || new Date(coupon.validUntil).getTime() >= Date.now()) && (!coupon.maxUses || !coupon.usageCount || coupon.usageCount < coupon.maxUses);
-    if (isCouponValid && calculatedSubtotal >= coupon.minOrderAmount) {
-      const rawDiscount = calculatedSubtotal * coupon.discountPercent / 100;
-      calculatedDiscount = coupon.maxDiscount && coupon.maxDiscount > 0 ? Math.min(rawDiscount, coupon.maxDiscount) : rawDiscount;
-    }
-  }
-  const settings = await db.getSettingsAsync();
-  let calculatedShipping = 800;
-  if (safeAddress.district && settings.deliveryDistricts) {
-    const matchedDistrict = settings.deliveryDistricts.find(
-      (d) => safeAddress.district.includes(d.nameAr) || d.nameAr.includes(safeAddress.district)
-    );
-    if (matchedDistrict) {
-      calculatedShipping = matchedDistrict.fee;
-    }
-  }
-  if (calculatedSubtotal >= (settings.freeDeliveryThreshold || 8e3)) {
-    calculatedShipping = 0;
-  }
-  const calculatedTotal = calculatedSubtotal + calculatedShipping - calculatedDiscount;
-  const idempotencyKey = String(
-    req.headers["x-idempotency-key"] || req.headers["idempotency-key"] || req.body.idempotencyKey || req.body.clientRequestId || ""
-  ).trim();
-  const drivers = await db.getDeliveryAgentsAsync();
-  const activeDrivers = drivers.filter((d) => d.isActive !== false && d.is_active !== 0);
-  const assignedDriver = activeDrivers.length > 0 ? {
-    id: activeDrivers[0].id,
-    name: activeDrivers[0].name,
-    phone: activeDrivers[0].phone
-  } : void 0;
-  let orderId = `ORD-${Date.now().toString(36).toUpperCase()}-${crypto2.randomBytes(3).toString("hex").toUpperCase()}`;
-  let orderNum = `BG-2026-${Date.now().toString().slice(-4)}${crypto2.randomInt(1e3, 9999)}`;
-  const existingOrders = await db.getOrdersAsync();
-  while (existingOrders.some((o) => o.id === orderId || o.orderNumber === orderNum)) {
-    orderId = `ORD-${Date.now().toString(36).toUpperCase()}-${crypto2.randomBytes(4).toString("hex").toUpperCase()}`;
-    orderNum = `BG-2026-${Date.now().toString().slice(-4)}${crypto2.randomInt(1e3, 9999)}`;
-  }
-  const now = /* @__PURE__ */ new Date();
-  const timeFormatted = now.toLocaleTimeString("ar-YE", { hour: "2-digit", minute: "2-digit" });
-  const atomicResult = await db.createOrderAtomic({
-    orderId,
-    orderNumber: orderNum,
-    customerName: safeCustomerName,
-    customerPhone: cleanPhone,
-    address: safeAddress,
-    validatedItems,
-    subtotal: calculatedSubtotal,
-    shippingFee: calculatedShipping,
-    discount: calculatedDiscount,
-    total: calculatedTotal,
-    paymentMethod: paymentMethod || "cod",
-    notes: sanitizeInputString(notes || "", 200),
-    couponCode: calculatedDiscount > 0 && couponCode ? String(couponCode).trim() : void 0,
-    idempotencyKey: idempotencyKey || void 0,
-    assignedDriver,
-    timeline: [
-      {
-        status: "received",
-        time: timeFormatted,
-        titleAr: "\u062A\u0645 \u0627\u0633\u062A\u0644\u0627\u0645 \u0627\u0644\u0637\u0644\u0628 \u0648\u062A\u0623\u0643\u064A\u062F\u0647 \u0628\u0627\u0644\u0646\u0638\u0627\u0645",
-        titleEn: "Order Received & Verified"
+    const settings = await db.getSettingsAsync();
+    let calculatedShipping = Number(settings.defaultShippingFee || 800);
+    if (safeAddress.district && settings.deliveryDistricts) {
+      const matchedDistrict = settings.deliveryDistricts.find(
+        (d) => safeAddress.district.includes(d.nameAr) || d.nameAr.includes(safeAddress.district)
+      );
+      if (matchedDistrict) {
+        calculatedShipping = matchedDistrict.fee;
       }
-    ],
-    date: now.toISOString().replace("T", " ").substring(0, 16)
-  });
-  if (!atomicResult.success || !atomicResult.order) {
-    return res.status(400).json({
-      success: false,
-      message: atomicResult.message || "\u0641\u0634\u0644\u062A \u0639\u0645\u0644\u064A\u0629 \u0625\u0646\u0634\u0627\u0621 \u0627\u0644\u0637\u0644\u0628 \u0644\u0639\u062F\u0645 \u062A\u0648\u0641\u0631 \u0627\u0644\u0645\u062E\u0632\u0648\u0646 \u0627\u0644\u0643\u0627\u0641\u064A"
+    }
+    if (calculatedSubtotal >= (settings.freeDeliveryThreshold || 8e3)) {
+      calculatedShipping = 0;
+    }
+    const calculatedTotal = calculatedSubtotal + calculatedShipping - calculatedDiscount;
+    const idempotencyKey = String(
+      req.headers["x-idempotency-key"] || req.headers["idempotency-key"] || req.body.idempotencyKey || req.body.clientRequestId || ""
+    ).trim();
+    const verifyIdempotentOrderOwnership = (existingOrder) => {
+      const existingPhone = (existingOrder.customerPhone || "").replace(/\D/g, "");
+      const isManagement = req.user && ["owner", "admin", "employee"].includes(req.user.role);
+      if (isManagement) return true;
+      if (req.user?.role === "customer") {
+        const jwtPhone = (req.user.phone || "").replace(/\D/g, "");
+        return Boolean(jwtPhone && existingPhone === jwtPhone && cleanPhone === jwtPhone);
+      }
+      if (req.user?.role === "guest") {
+        const jwtPhone = (req.user.phone || "").replace(/\D/g, "");
+        const tokenOrderIds = Array.isArray(req.user.orderIds) ? req.user.orderIds : [];
+        return existingPhone === cleanPhone && (!jwtPhone || jwtPhone === cleanPhone) && (tokenOrderIds.length === 0 || tokenOrderIds.includes(existingOrder.id) || (existingOrder.orderNumber ? tokenOrderIds.includes(existingOrder.orderNumber) : false));
+      }
+      return existingPhone === cleanPhone;
+    };
+    if (idempotencyKey) {
+      let preExisting;
+      if (d1.isD1Configured()) {
+        const rows = await d1.executeCloudflareD1Query("SELECT * FROM orders WHERE idempotency_key = ? LIMIT 1;", [idempotencyKey]).catch(() => []);
+        if (Array.isArray(rows) && rows.length > 0) {
+          preExisting = d1.mapD1OrderToOrder(rows[0]);
+        }
+      } else {
+        preExisting = d1.getOrders().find((o) => o.idempotencyKey === idempotencyKey);
+      }
+      if (preExisting && !verifyIdempotentOrderOwnership(preExisting)) {
+        return res.status(409).json({
+          success: false,
+          message: "\u0645\u0641\u062A\u0627\u062D \u0627\u0644\u0637\u0644\u0628 (Idempotency Key) \u0645\u0633\u062A\u062E\u062F\u0645 \u0645\u0633\u0628\u0642\u0627\u064B \u0644\u0637\u0644\u0628 \u0622\u062E\u0631 \u0648\u0644\u0627 \u064A\u0645\u0643\u0646 \u0645\u0634\u0627\u0631\u0643\u062A\u0647."
+        });
+      }
+    }
+    const drivers = await db.getDeliveryAgentsAsync();
+    const activeDrivers = drivers.filter((d) => d.isActive !== false && d.is_active !== 0);
+    const assignedDriver = activeDrivers.length > 0 ? {
+      id: activeDrivers[0].id,
+      name: activeDrivers[0].name,
+      phone: activeDrivers[0].phone
+    } : void 0;
+    let orderId = `ORD-${Date.now().toString(36).toUpperCase()}-${crypto3.randomBytes(3).toString("hex").toUpperCase()}`;
+    let orderNum = `BG-2026-${Date.now().toString().slice(-4)}${crypto3.randomInt(1e3, 9999)}`;
+    const existingOrders = await db.getOrdersAsync();
+    while (existingOrders.some((o) => o.id === orderId || o.orderNumber === orderNum)) {
+      orderId = `ORD-${Date.now().toString(36).toUpperCase()}-${crypto3.randomBytes(4).toString("hex").toUpperCase()}`;
+      orderNum = `BG-2026-${Date.now().toString().slice(-4)}${crypto3.randomInt(1e3, 9999)}`;
+    }
+    const now = /* @__PURE__ */ new Date();
+    const timeFormatted = now.toLocaleTimeString("ar-YE", { hour: "2-digit", minute: "2-digit" });
+    const atomicResult = await db.createOrderAtomic({
+      orderId,
+      orderNumber: orderNum,
+      customerName: safeCustomerName,
+      customerPhone: cleanPhone,
+      address: safeAddress,
+      validatedItems,
+      subtotal: calculatedSubtotal,
+      shippingFee: calculatedShipping,
+      discount: calculatedDiscount,
+      total: calculatedTotal,
+      paymentMethod: paymentMethod || "cod",
+      notes: sanitizeInputString(notes || "", 200),
+      couponCode: calculatedDiscount > 0 && couponCode ? String(couponCode).trim() : void 0,
+      idempotencyKey: idempotencyKey || void 0,
+      assignedDriver,
+      timeline: [
+        {
+          status: "received",
+          time: timeFormatted,
+          titleAr: "\u062A\u0645 \u0627\u0633\u062A\u0644\u0627\u0645 \u0627\u0644\u0637\u0644\u0628 \u0648\u062A\u0623\u0643\u064A\u062F\u0647 \u0628\u0627\u0644\u0646\u0638\u0627\u0645",
+          titleEn: "Order Received & Verified"
+        }
+      ],
+      date: now.toISOString().replace("T", " ").substring(0, 16)
     });
-  }
-  const createdOrder = atomicResult.order;
-  let guestToken;
-  if (!req.user || req.user.role === "guest") {
-    const existingOrderIds = req.user?.orderIds || [];
-    const mergedOrderIds = Array.from(new Set([
-      ...existingOrderIds,
-      createdOrder.id,
-      createdOrder.orderNumber
-    ].filter(Boolean)));
-    guestToken = generateToken({
-      userId: req.user?.userId || `guest-${cleanPhone}`,
-      role: "guest",
-      phone: cleanPhone,
-      name: safeCustomerName,
-      orderIds: mergedOrderIds,
-      isGuest: true
+    if (!atomicResult.success || !atomicResult.order) {
+      return res.status(400).json({
+        success: false,
+        message: atomicResult.message || "\u0641\u0634\u0644\u062A \u0639\u0645\u0644\u064A\u0629 \u0625\u0646\u0634\u0627\u0621 \u0627\u0644\u0637\u0644\u0628 \u0644\u0639\u062F\u0645 \u062A\u0648\u0641\u0631 \u0627\u0644\u0645\u062E\u0632\u0648\u0646 \u0627\u0644\u0643\u0627\u0641\u064A"
+      });
+    }
+    const createdOrder = atomicResult.order;
+    if (atomicResult.isDuplicate && !verifyIdempotentOrderOwnership(createdOrder)) {
+      return res.status(409).json({
+        success: false,
+        message: "\u0645\u0641\u062A\u0627\u062D \u0627\u0644\u0637\u0644\u0628 (Idempotency Key) \u0645\u0633\u062A\u062E\u062F\u0645 \u0645\u0633\u0628\u0642\u0627\u064B \u0644\u0637\u0644\u0628 \u0622\u062E\u0631 \u0648\u0644\u0627 \u064A\u0645\u0643\u0646 \u0645\u0634\u0627\u0631\u0643\u062A\u0647."
+      });
+    }
+    let guestToken;
+    if (!req.user || req.user.role === "guest") {
+      const existingOrderIds = req.user?.orderIds || [];
+      const mergedOrderIds = Array.from(new Set([
+        ...existingOrderIds,
+        createdOrder.id,
+        createdOrder.orderNumber
+      ].filter(Boolean)));
+      guestToken = generateToken({
+        userId: req.user?.userId || `guest-${cleanPhone}`,
+        role: "guest",
+        phone: cleanPhone,
+        name: safeCustomerName,
+        orderIds: mergedOrderIds,
+        isGuest: true
+      });
+    }
+    db.logAnalyticsEvent("purchase", {
+      orderId: createdOrder.id,
+      orderNumber: createdOrder.orderNumber,
+      total: createdOrder.total,
+      itemsCount: validatedItems.length
+    }, req.user?.userId);
+    return res.json({
+      success: true,
+      data: createdOrder,
+      guestToken,
+      isDuplicate: atomicResult.isDuplicate || false,
+      message: atomicResult.isDuplicate ? "\u062A\u0645 \u0627\u0633\u062A\u0631\u062C\u0627\u0639 \u0627\u0644\u0637\u0644\u0628 \u0627\u0644\u0645\u0633\u062C\u0644 \u0645\u0633\u0628\u0642\u0627\u064B" : "\u062A\u0645 \u0625\u0646\u0634\u0627\u0621 \u0627\u0644\u0637\u0644\u0628 \u0648\u062A\u0633\u062C\u064A\u0644\u0647 \u0628\u0646\u062C\u0627\u062D!"
     });
+  } catch (err) {
+    return respondSafeError(res, 503, "\u062A\u0639\u0630\u0631 \u0625\u0646\u0634\u0627\u0621 \u0627\u0644\u0637\u0644\u0628 \u0628\u0633\u0628\u0628 \u062E\u0637\u0623 \u0641\u064A \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A. \u064A\u0631\u062C\u0649 \u0627\u0644\u0645\u062D\u0627\u0648\u0644\u0629 \u0644\u0627\u062D\u0642\u0627\u064B.", err, "CreateOrder");
   }
-  db.logAnalyticsEvent("purchase", {
-    orderId: createdOrder.id,
-    orderNumber: createdOrder.orderNumber,
-    total: createdOrder.total,
-    itemsCount: validatedItems.length
-  }, req.user?.userId);
-  res.json({
-    success: true,
-    data: createdOrder,
-    guestToken,
-    isDuplicate: atomicResult.isDuplicate || false,
-    message: atomicResult.isDuplicate ? "\u062A\u0645 \u0627\u0633\u062A\u0631\u062C\u0627\u0639 \u0627\u0644\u0637\u0644\u0628 \u0627\u0644\u0645\u0633\u062C\u0644 \u0645\u0633\u0628\u0642\u0627\u064B" : "\u062A\u0645 \u0625\u0646\u0634\u0627\u0621 \u0627\u0644\u0637\u0644\u0628 \u0648\u062A\u0633\u062C\u064A\u0644\u0647 \u0628\u0646\u062C\u0627\u062D!"
-  });
 });
 app.get("/api/orders", async (req, res) => {
   if (!req.user) {
     return res.status(401).json({ success: false, message: "\u064A\u062A\u0637\u0644\u0628 \u0627\u0644\u0648\u0635\u0648\u0644 \u0625\u0644\u0649 \u0642\u0627\u0626\u0645\u0629 \u0627\u0644\u0637\u0644\u0628\u0627\u062A \u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u062F\u062E\u0648\u0644" });
   }
-  const allOrders = await db.getOrdersAsync();
-  if (["delivery", "mandoub"].includes(req.user.role)) {
-    const cleanPhone = req.user.phone ? req.user.phone.replace(/\D/g, "") : "";
-    const driverOrders = allOrders.filter(
-      (o) => o.driverId === req.user?.userId || cleanPhone && o.driverPhone && o.driverPhone.replace(/\D/g, "") === cleanPhone
-    );
-    return res.json({ success: true, data: driverOrders });
+  try {
+    const allOrders = await db.getOrdersAsync();
+    if (["delivery", "mandoub"].includes(req.user.role)) {
+      const cleanPhone = req.user.phone ? req.user.phone.replace(/\D/g, "") : "";
+      const driverOrders = allOrders.filter(
+        (o) => o.driverId === req.user?.userId || cleanPhone && o.driverPhone && o.driverPhone.replace(/\D/g, "") === cleanPhone
+      );
+      return res.json({ success: true, data: driverOrders });
+    }
+    if (["owner", "admin", "employee"].includes(req.user.role)) {
+      return res.json({ success: true, data: allOrders });
+    }
+    if (req.user.role === "customer" && req.user.phone) {
+      const cleanPhone = req.user.phone.replace(/\D/g, "");
+      const customerOrders = allOrders.filter((o) => o.customerPhone && o.customerPhone.replace(/\D/g, "") === cleanPhone);
+      return res.json({ success: true, data: customerOrders });
+    }
+    if (req.user.role === "guest") {
+      const authorizedOrderIds = req.user.orderIds || [];
+      const guestOrders = allOrders.filter(
+        (o) => authorizedOrderIds.includes(o.id) || o.orderNumber && authorizedOrderIds.includes(o.orderNumber)
+      );
+      return res.json({ success: true, data: guestOrders });
+    }
+    return res.status(403).json({ success: false, message: "\u0644\u064A\u0633 \u0644\u062F\u064A\u0643 \u0635\u0644\u0627\u062D\u064A\u0629 \u0644\u0639\u0631\u0636 \u0642\u0627\u0626\u0645\u0629 \u0627\u0644\u0637\u0644\u0628\u0627\u062A" });
+  } catch (err) {
+    return respondSafeError(res, 503, "\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0627\u0644\u0637\u0644\u0628\u0627\u062A \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "GetOrders");
   }
-  if (["owner", "admin", "employee"].includes(req.user.role)) {
-    return res.json({ success: true, data: allOrders });
-  }
-  if (req.user.role === "customer" && req.user.phone) {
-    const cleanPhone = req.user.phone.replace(/\D/g, "");
-    const customerOrders = allOrders.filter((o) => o.customerPhone && o.customerPhone.replace(/\D/g, "") === cleanPhone);
-    return res.json({ success: true, data: customerOrders });
-  }
-  if (req.user.role === "guest") {
-    const authorizedOrderIds = req.user.orderIds || [];
-    const guestOrders = allOrders.filter(
-      (o) => authorizedOrderIds.includes(o.id) || o.orderNumber && authorizedOrderIds.includes(o.orderNumber)
-    );
-    return res.json({ success: true, data: guestOrders });
-  }
-  return res.status(403).json({ success: false, message: "\u0644\u064A\u0633 \u0644\u062F\u064A\u0643 \u0635\u0644\u0627\u062D\u064A\u0629 \u0644\u0639\u0631\u0636 \u0642\u0627\u0626\u0645\u0629 \u0627\u0644\u0637\u0644\u0628\u0627\u062A" });
 });
 app.get("/api/my-orders", async (req, res) => {
   if (!req.user) {
     return res.status(401).json({ success: false, message: "\u064A\u062A\u0637\u0644\u0628 \u0639\u0631\u0636 \u0637\u0644\u0628\u0627\u062A\u064A \u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u062F\u062E\u0648\u0644 \u0623\u0648 \u062C\u0644\u0633\u0629 \u0632\u0627\u0626\u0631 \u0645\u0648\u062B\u0642\u0629" });
   }
-  if (["owner", "admin", "employee"].includes(req.user.role)) {
-    const phone = req.query.phone;
-    if (phone) {
-      const clean = phone.replace(/\D/g, "");
-      const filtered = await db.getOrdersAsync({ phone: clean });
-      return res.json({ success: true, data: filtered });
+  try {
+    if (["owner", "admin", "employee"].includes(req.user.role)) {
+      const phone = req.query.phone;
+      if (phone) {
+        const clean = phone.replace(/\D/g, "");
+        const filtered = await db.getOrdersAsync({ phone: clean });
+        return res.json({ success: true, data: filtered });
+      }
+      const allOrders = await db.getOrdersAsync();
+      return res.json({ success: true, data: allOrders });
     }
-    const allOrders = await db.getOrdersAsync();
-    return res.json({ success: true, data: allOrders });
-  }
-  if (req.user.role === "guest") {
-    const authorizedOrderIds = req.user.orderIds || [];
-    if (!Array.isArray(authorizedOrderIds) || authorizedOrderIds.length === 0) {
-      return res.json({ success: true, data: [] });
+    if (req.user.role === "guest") {
+      const authorizedOrderIds = req.user.orderIds || [];
+      if (!Array.isArray(authorizedOrderIds) || authorizedOrderIds.length === 0) {
+        return res.json({ success: true, data: [] });
+      }
+      const allOrders = await db.getOrdersAsync();
+      const myOrders = allOrders.filter(
+        (o) => authorizedOrderIds.includes(o.id) || o.orderNumber && authorizedOrderIds.includes(o.orderNumber)
+      );
+      return res.json({ success: true, data: myOrders });
     }
-    const allOrders = await db.getOrdersAsync();
-    const myOrders = allOrders.filter(
-      (o) => authorizedOrderIds.includes(o.id) || o.orderNumber && authorizedOrderIds.includes(o.orderNumber)
-    );
-    return res.json({ success: true, data: myOrders });
+    if (req.user.role === "customer" && req.user.phone) {
+      const clean = req.user.phone.replace(/\D/g, "");
+      const myOrders = await db.getOrdersAsync({ phone: clean });
+      return res.json({ success: true, data: myOrders });
+    }
+    if (["delivery", "mandoub"].includes(req.user.role)) {
+      const allOrders = await db.getOrdersAsync();
+      const cleanPhone = req.user.phone ? req.user.phone.replace(/\D/g, "") : "";
+      const driverOrders = allOrders.filter((o) => {
+        const isMine = o.driverId === req.user?.userId || cleanPhone && o.driverPhone && o.driverPhone.replace(/\D/g, "") === cleanPhone;
+        return isMine;
+      });
+      return res.json({ success: true, data: driverOrders });
+    }
+    return res.status(403).json({ success: false, message: "\u063A\u064A\u0631 \u0645\u0635\u0631\u062D \u0644\u0643 \u0628\u0639\u0631\u0636 \u0647\u0630\u0647 \u0627\u0644\u0637\u0644\u0628\u0627\u062A" });
+  } catch (err) {
+    return respondSafeError(res, 503, "\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0627\u0644\u0637\u0644\u0628\u0627\u062A \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "MyOrders");
   }
-  if (req.user.role === "customer" && req.user.phone) {
-    const clean = req.user.phone.replace(/\D/g, "");
-    const myOrders = await db.getOrdersAsync({ phone: clean });
-    return res.json({ success: true, data: myOrders });
-  }
-  if (["delivery", "mandoub"].includes(req.user.role)) {
-    const allOrders = await db.getOrdersAsync();
-    const cleanPhone = req.user.phone ? req.user.phone.replace(/\D/g, "") : "";
-    const driverOrders = allOrders.filter((o) => {
-      const isMine = o.driverId === req.user?.userId || cleanPhone && o.driverPhone && o.driverPhone.replace(/\D/g, "") === cleanPhone;
-      return isMine;
-    });
-    return res.json({ success: true, data: driverOrders });
-  }
-  return res.status(403).json({ success: false, message: "\u063A\u064A\u0631 \u0645\u0635\u0631\u062D \u0644\u0643 \u0628\u0639\u0631\u0636 \u0647\u0630\u0647 \u0627\u0644\u0637\u0644\u0628\u0627\u062A" });
 });
 app.get("/api/orders/track/:query", trackingRateLimiter, async (req, res) => {
-  const rawQ = req.params.query.trim().toUpperCase();
-  const q = rawQ.replace(/^#/, "").trim();
-  if (!q || q.length < 4) {
-    return res.status(400).json({ success: false, message: "\u064A\u0631\u062C\u0649 \u0625\u062F\u062E\u0627\u0644 \u0631\u0642\u0645 \u0627\u0644\u0637\u0644\u0628 \u0643\u0627\u0645\u0644\u0627\u064B (\u0645\u062B\u0627\u0644: BG-2026-1049)" });
-  }
-  const allOrders = await db.getOrdersAsync();
-  const order = allOrders.find((o) => {
-    const oId = (o.id || "").toUpperCase();
-    const oNum = (o.orderNumber || "").toUpperCase();
-    return oId === q || oNum === q || /^\d+$/.test(q) && oNum === `BG-2026-${q}`;
-  });
-  if (!order) {
-    return res.status(404).json({ success: false, message: "\u0644\u0645 \u064A\u062A\u0645 \u0627\u0644\u0639\u062B\u0648\u0631 \u0639\u0644\u0649 \u0627\u0644\u0637\u0644\u0628. \u062A\u0623\u0643\u062F \u0645\u0646 \u0625\u062F\u062E\u0627\u0644 \u0631\u0642\u0645 \u0627\u0644\u0637\u0644\u0628 \u0643\u0627\u0645\u0644\u0627\u064B." });
-  }
-  const publicTimeline = (order.timeline || []).map((t) => ({
-    status: t.status,
-    titleAr: t.titleAr || t.title,
-    titleEn: t.titleEn,
-    time: t.time
-  }));
-  res.json({
-    success: true,
-    data: {
-      orderNumber: order.orderNumber,
-      status: order.status,
-      date: order.date,
-      itemsCount: Array.isArray(order.items) ? order.items.reduce((acc, it) => acc + (Number(it.quantity) || 1), 0) : 1,
-      timeline: publicTimeline
+  try {
+    const rawQ = req.params.query.trim().toUpperCase();
+    const q = rawQ.replace(/^#/, "").trim();
+    if (!q || q.length < 4) {
+      return res.status(400).json({ success: false, message: "\u064A\u0631\u062C\u0649 \u0625\u062F\u062E\u0627\u0644 \u0631\u0642\u0645 \u0627\u0644\u0637\u0644\u0628 \u0643\u0627\u0645\u0644\u0627\u064B (\u0645\u062B\u0627\u0644: BG-2026-1049)" });
     }
-  });
+    const allOrders = await db.getOrdersAsync();
+    const order = allOrders.find((o) => {
+      const oId = (o.id || "").toUpperCase();
+      const oNum = (o.orderNumber || "").toUpperCase();
+      return oId === q || oNum === q || /^\d+$/.test(q) && oNum === `BG-2026-${q}`;
+    });
+    if (!order) {
+      return res.status(404).json({ success: false, message: "\u0644\u0645 \u064A\u062A\u0645 \u0627\u0644\u0639\u062B\u0648\u0631 \u0639\u0644\u0649 \u0627\u0644\u0637\u0644\u0628. \u062A\u0623\u0643\u062F \u0645\u0646 \u0625\u062F\u062E\u0627\u0644 \u0631\u0642\u0645 \u0627\u0644\u0637\u0644\u0628 \u0643\u0627\u0645\u0644\u0627\u064B." });
+    }
+    const publicTimeline = (order.timeline || []).map((t) => ({
+      status: t.status,
+      titleAr: t.titleAr || t.title,
+      titleEn: t.titleEn,
+      time: t.time
+    }));
+    return res.json({
+      success: true,
+      data: {
+        orderNumber: order.orderNumber,
+        status: order.status,
+        date: order.date,
+        itemsCount: Array.isArray(order.items) ? order.items.reduce((acc, it) => acc + (Number(it.quantity) || 1), 0) : 1,
+        timeline: publicTimeline
+      }
+    });
+  } catch (err) {
+    return respondSafeError(res, 503, "\u0641\u0634\u0644 \u062A\u062A\u0628\u0639 \u0627\u0644\u0637\u0644\u0628 \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "OrderTrack");
+  }
 });
 app.get("/api/orders/:id", async (req, res) => {
   if (!req.user) {
     return res.status(401).json({ success: false, message: "\u064A\u062A\u0637\u0644\u0628 \u0627\u0644\u0648\u0635\u0648\u0644 \u0625\u0644\u0649 \u062A\u0641\u0627\u0635\u064A\u0644 \u0627\u0644\u0637\u0644\u0628 \u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u062F\u062E\u0648\u0644" });
   }
-  const order = await db.findOrderByIdAsync(req.params.id);
-  if (!order) {
-    return res.status(404).json({ success: false, message: "\u0627\u0644\u0637\u0644\u0628 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F" });
+  try {
+    const order = await db.findOrderByIdAsync(req.params.id);
+    if (!order) {
+      return res.status(404).json({ success: false, message: "\u0627\u0644\u0637\u0644\u0628 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F" });
+    }
+    const isManagement = ["owner", "admin", "employee"].includes(req.user.role);
+    const isCustomerOwner = req.user.role === "customer" && req.user.phone && order.customerPhone && req.user.phone.replace(/\D/g, "") === order.customerPhone.replace(/\D/g, "");
+    const isGuestOwner = req.user.role === "guest" && Array.isArray(req.user.orderIds) && (req.user.orderIds.includes(order.id) || order.orderNumber && req.user.orderIds.includes(order.orderNumber));
+    const isDriver = ["delivery", "mandoub"].includes(req.user.role) && (order.driverId === req.user.userId || req.user.phone && order.driverPhone && order.driverPhone.replace(/\D/g, "") === req.user.phone.replace(/\D/g, ""));
+    if (!isManagement && !isCustomerOwner && !isGuestOwner && !isDriver) {
+      return res.status(403).json({ success: false, message: "\u063A\u064A\u0631 \u0645\u0635\u0631\u062D \u0644\u0643 \u0628\u0639\u0631\u0636 \u062A\u0641\u0627\u0635\u064A\u0644 \u0647\u0630\u0627 \u0627\u0644\u0637\u0644\u0628" });
+    }
+    return res.json({ success: true, data: order });
+  } catch (err) {
+    return respondSafeError(res, 503, "\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u062A\u0641\u0627\u0635\u064A\u0644 \u0627\u0644\u0637\u0644\u0628 \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "GetOrderById");
   }
-  const isManagement = ["owner", "admin", "employee"].includes(req.user.role);
-  const isCustomerOwner = req.user.role === "customer" && req.user.phone && order.customerPhone && req.user.phone.replace(/\D/g, "") === order.customerPhone.replace(/\D/g, "");
-  const isGuestOwner = req.user.role === "guest" && Array.isArray(req.user.orderIds) && (req.user.orderIds.includes(order.id) || order.orderNumber && req.user.orderIds.includes(order.orderNumber));
-  const isDriver = ["delivery", "mandoub"].includes(req.user.role) && (order.driverId === req.user.userId || req.user.phone && order.driverPhone && order.driverPhone.replace(/\D/g, "") === req.user.phone.replace(/\D/g, ""));
-  if (!isManagement && !isCustomerOwner && !isGuestOwner && !isDriver) {
-    return res.status(403).json({ success: false, message: "\u063A\u064A\u0631 \u0645\u0635\u0631\u062D \u0644\u0643 \u0628\u0639\u0631\u0636 \u062A\u0641\u0627\u0635\u064A\u0644 \u0647\u0630\u0627 \u0627\u0644\u0637\u0644\u0628" });
-  }
-  res.json({ success: true, data: order });
 });
 app.get("/api/orders/:id/items", async (req, res) => {
   if (!req.user) {
     return res.status(401).json({ success: false, message: "\u064A\u062A\u0637\u0644\u0628 \u0627\u0644\u0648\u0635\u0648\u0644 \u0625\u0644\u0649 \u062A\u0641\u0627\u0635\u064A\u0644 \u0639\u0646\u0627\u0635\u0631 \u0627\u0644\u0637\u0644\u0628 \u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u062F\u062E\u0648\u0644" });
   }
-  const order = await db.findOrderByIdAsync(req.params.id);
-  if (!order) {
-    return res.status(404).json({ success: false, message: "\u0627\u0644\u0637\u0644\u0628 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F" });
+  try {
+    const order = await db.findOrderByIdAsync(req.params.id);
+    if (!order) {
+      return res.status(404).json({ success: false, message: "\u0627\u0644\u0637\u0644\u0628 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F" });
+    }
+    const isManagement = ["owner", "admin", "employee"].includes(req.user.role);
+    const isCustomerOwner = req.user.role === "customer" && req.user.phone && order.customerPhone && req.user.phone.replace(/\D/g, "") === order.customerPhone.replace(/\D/g, "");
+    const isGuestOwner = req.user.role === "guest" && Array.isArray(req.user.orderIds) && (req.user.orderIds.includes(order.id) || order.orderNumber && req.user.orderIds.includes(order.orderNumber));
+    const isDriver = ["delivery", "mandoub"].includes(req.user.role) && (order.driverId === req.user.userId || req.user.phone && order.driverPhone && order.driverPhone.replace(/\D/g, "") === req.user.phone.replace(/\D/g, ""));
+    if (!isManagement && !isCustomerOwner && !isGuestOwner && !isDriver) {
+      return res.status(403).json({ success: false, message: "\u063A\u064A\u0631 \u0645\u0635\u0631\u062D \u0644\u0643 \u0628\u0639\u0631\u0636 \u062A\u0641\u0627\u0635\u064A\u0644 \u0647\u0630\u0627 \u0627\u0644\u0637\u0644\u0628" });
+    }
+    const items = await db.getOrderItemsAsync(req.params.id);
+    return res.json({ success: true, data: items });
+  } catch (err) {
+    return respondSafeError(res, 503, "\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0639\u0646\u0627\u0635\u0631 \u0627\u0644\u0637\u0644\u0628 \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "GetOrderItems");
   }
-  const isManagement = ["owner", "admin", "employee"].includes(req.user.role);
-  const isCustomerOwner = req.user.role === "customer" && req.user.phone && order.customerPhone && req.user.phone.replace(/\D/g, "") === order.customerPhone.replace(/\D/g, "");
-  const isGuestOwner = req.user.role === "guest" && Array.isArray(req.user.orderIds) && (req.user.orderIds.includes(order.id) || order.orderNumber && req.user.orderIds.includes(order.orderNumber));
-  const isDriver = ["delivery", "mandoub"].includes(req.user.role) && (order.driverId === req.user.userId || req.user.phone && order.driverPhone && order.driverPhone.replace(/\D/g, "") === req.user.phone.replace(/\D/g, ""));
-  if (!isManagement && !isCustomerOwner && !isGuestOwner && !isDriver) {
-    return res.status(403).json({ success: false, message: "\u063A\u064A\u0631 \u0645\u0635\u0631\u062D \u0644\u0643 \u0628\u0639\u0631\u0636 \u062A\u0641\u0627\u0635\u064A\u0644 \u0647\u0630\u0627 \u0627\u0644\u0637\u0644\u0628" });
-  }
-  const items = await db.getOrderItemsAsync(req.params.id);
-  res.json({ success: true, data: items });
 });
 app.patch("/api/orders/:id/status", async (req, res) => {
-  const { id } = req.params;
-  const { status, driverNotes, driverId, driverName, driverPhone } = req.body;
   if (!req.user) {
     return res.status(401).json({ success: false, message: "\u064A\u062A\u0637\u0644\u0628 \u0647\u0630\u0627 \u0627\u0644\u0625\u062C\u0631\u0627\u0621 \u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u062F\u062E\u0648\u0644 \u0623\u0648\u0644\u0627\u064B" });
   }
-  const order = await db.findOrderByIdAsync(id);
-  if (!order) {
-    return res.status(404).json({ success: false, message: "\u0627\u0644\u0637\u0644\u0628 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F" });
-  }
-  const isManagement = ["owner", "admin", "employee"].includes(req.user.role);
-  const isDriverRole = ["delivery", "mandoub"].includes(req.user.role);
-  const isAssignedDriver = isDriverRole && (order.driverId === req.user.userId || req.user.phone && order.driverPhone && order.driverPhone.replace(/\D/g, "") === req.user.phone.replace(/\D/g, ""));
-  if (!isManagement && !isAssignedDriver) {
-    return res.status(403).json({
-      success: false,
-      message: "\u063A\u064A\u0631 \u0645\u0635\u0631\u062D \u0644\u0643 \u0628\u062A\u063A\u064A\u064A\u0631 \u062D\u0627\u0644\u0629 \u0647\u0630\u0627 \u0627\u0644\u0637\u0644\u0628. \u0641\u0642\u0637 \u0625\u062F\u0627\u0631\u0629 \u0627\u0644\u0645\u062A\u062C\u0631 \u0623\u0648 \u0627\u0644\u0645\u0646\u062F\u0648\u0628 \u0627\u0644\u0645\u0633\u0646\u062F \u0625\u0644\u064A\u0647 \u0627\u0644\u0637\u0644\u0628 \u064A\u0645\u0643\u0646\u0647\u0645\u0627 \u0630\u0644\u0643."
-    });
-  }
-  if (!isManagement && isAssignedDriver) {
-    if (!["assigned", "preparing", "shipped", "on_way", "delivering", "delivered"].includes(status)) {
-      return res.status(403).json({ success: false, message: "\u0645\u0646\u062F\u0648\u0628 \u0627\u0644\u062A\u0648\u0635\u064A\u0644 \u064A\u0645\u0643\u0646\u0647 \u0641\u0642\u0637 \u062A\u062D\u062F\u064A\u062B \u0645\u0631\u0627\u062D\u0644 \u0627\u0633\u062A\u0644\u0627\u0645 \u0648\u0645\u0633\u0627\u0631 \u0627\u0644\u0634\u062D\u0646\u0629 \u0623\u0648 \u0625\u062A\u0645\u0627\u0645 \u0627\u0644\u062A\u0633\u0644\u064A\u0645" });
-    }
-  }
-  let driverInfo;
-  if (isManagement && (driverId || driverName)) {
-    const agents = await db.getDeliveryAgentsAsync();
-    const verifiedAgent = agents.find((a) => a.id === driverId || driverName && a.name.trim() === driverName.trim());
-    if (!verifiedAgent) {
-      return res.status(400).json({ success: false, message: "\u0627\u0644\u0645\u0646\u062F\u0648\u0628 \u0627\u0644\u0645\u062D\u062F\u062F \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F \u0641\u064A \u0633\u062C\u0644 \u0627\u0644\u0645\u0646\u0627\u062F\u064A\u0628 \u0627\u0644\u0645\u0639\u062A\u0645\u062F\u064A\u0646" });
-    }
-    driverInfo = {
-      driverId: verifiedAgent.id,
-      driverName: verifiedAgent.name,
-      driverPhone: verifiedAgent.phone
-    };
-    await db.updateOrderDriverAsync(id, driverInfo.driverId, driverInfo.driverName, driverInfo.driverPhone);
-  }
-  const actor = `${req.user.name || req.user.role} (${req.user.phone || req.user.userId})`;
   try {
+    const { id } = req.params;
+    const { status, driverNotes, driverId, driverName } = req.body;
+    const order = await db.findOrderByIdAsync(id);
+    if (!order) {
+      return res.status(404).json({ success: false, message: "\u0627\u0644\u0637\u0644\u0628 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F" });
+    }
+    const isManagement = ["owner", "admin", "employee"].includes(req.user.role);
+    const isDriverRole = ["delivery", "mandoub"].includes(req.user.role);
+    const isAssignedDriver = isDriverRole && (order.driverId === req.user.userId || req.user.phone && order.driverPhone && order.driverPhone.replace(/\D/g, "") === req.user.phone.replace(/\D/g, ""));
+    if (!isManagement && !isAssignedDriver) {
+      return res.status(403).json({
+        success: false,
+        message: "\u063A\u064A\u0631 \u0645\u0635\u0631\u062D \u0644\u0643 \u0628\u062A\u063A\u064A\u064A\u0631 \u062D\u0627\u0644\u0629 \u0647\u0630\u0627 \u0627\u0644\u0637\u0644\u0628. \u0641\u0642\u0637 \u0625\u062F\u0627\u0631\u0629 \u0627\u0644\u0645\u062A\u062C\u0631 \u0623\u0648 \u0627\u0644\u0645\u0646\u062F\u0648\u0628 \u0627\u0644\u0645\u0633\u0646\u062F \u0625\u0644\u064A\u0647 \u0627\u0644\u0637\u0644\u0628 \u064A\u0645\u0643\u0646\u0647\u0645\u0627 \u0630\u0644\u0643."
+      });
+    }
+    if (!isManagement && isAssignedDriver) {
+      if (!["assigned", "preparing", "shipped", "on_way", "delivering", "delivered"].includes(status)) {
+        return res.status(403).json({ success: false, message: "\u0645\u0646\u062F\u0648\u0628 \u0627\u0644\u062A\u0648\u0635\u064A\u0644 \u064A\u0645\u0643\u0646\u0647 \u0641\u0642\u0637 \u062A\u062D\u062F\u064A\u062B \u0645\u0631\u0627\u062D\u0644 \u0627\u0633\u062A\u0644\u0627\u0645 \u0648\u0645\u0633\u0627\u0631 \u0627\u0644\u0634\u062D\u0646\u0629 \u0623\u0648 \u0625\u062A\u0645\u0627\u0645 \u0627\u0644\u062A\u0633\u0644\u064A\u0645" });
+      }
+    }
+    let driverInfo;
+    if (isManagement && (driverId || driverName)) {
+      const agents = await db.getDeliveryAgentsAsync();
+      const verifiedAgent = agents.find((a) => a.id === driverId || driverName && a.name.trim() === driverName.trim());
+      if (!verifiedAgent) {
+        return res.status(400).json({ success: false, message: "\u0627\u0644\u0645\u0646\u062F\u0648\u0628 \u0627\u0644\u0645\u062D\u062F\u062F \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F \u0641\u064A \u0633\u062C\u0644 \u0627\u0644\u0645\u0646\u0627\u062F\u064A\u0628 \u0627\u0644\u0645\u0639\u062A\u0645\u062F\u064A\u0646" });
+      }
+      driverInfo = {
+        driverId: verifiedAgent.id,
+        driverName: verifiedAgent.name,
+        driverPhone: verifiedAgent.phone
+      };
+      await db.updateOrderDriverAsync(id, driverInfo.driverId, driverInfo.driverName, driverInfo.driverPhone);
+    }
+    const actor = `${req.user.name || req.user.role} (${req.user.phone || req.user.userId})`;
     const targetStatus = status || (driverInfo ? "assigned" : order.status);
     const updated = await db.updateOrderStatus(id, targetStatus, driverNotes, actor, driverInfo);
-    res.json({ success: true, data: updated });
+    if (!updated) {
+      return res.status(404).json({ success: false, message: "\u0627\u0644\u0637\u0644\u0628 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F" });
+    }
+    return res.json({ success: true, data: updated });
   } catch (err) {
-    res.status(400).json({ success: false, message: err.message || "\u0641\u0634\u0644 \u062A\u062D\u062F\u064A\u062B \u062D\u0627\u0644\u0629 \u0627\u0644\u0637\u0644\u0628" });
+    if (isDatabaseConnectivityError(err)) {
+      return respondSafeError(res, 503, "\u0641\u0634\u0644 \u062A\u062D\u062F\u064A\u062B \u062D\u0627\u0644\u0629 \u0627\u0644\u0637\u0644\u0628 \u0644\u062A\u0639\u0630\u0631 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "UpdateOrderStatus");
+    }
+    const msg = sanitizeD1ErrorMessage(err) || "\u0641\u0634\u0644 \u062A\u062D\u062F\u064A\u062B \u062D\u0627\u0644\u0629 \u0627\u0644\u0637\u0644\u0628";
+    if (msg.includes("\u062A\u063A\u064A\u0631\u062A \u0628\u0627\u0644\u062A\u0632\u0627\u0645\u0646")) {
+      return res.status(409).json({ success: false, message: msg });
+    }
+    return res.status(400).json({ success: false, message: msg });
   }
 });
 app.post("/api/orders/:id/assign-driver", async (req, res) => {
@@ -4724,81 +5632,259 @@ app.post("/api/orders/:id/assign-driver", async (req, res) => {
   if (!["owner", "admin", "employee"].includes(req.user.role)) {
     return res.status(403).json({ success: false, message: "\u063A\u064A\u0631 \u0645\u0635\u0631\u062D \u0644\u0643 \u0628\u062A\u0639\u064A\u064A\u0646 \u0627\u0644\u0645\u0646\u0627\u062F\u064A\u0628. \u0647\u0630\u0647 \u0627\u0644\u0639\u0645\u0644\u064A\u0629 \u0645\u0642\u062A\u0635\u0631\u0629 \u0639\u0644\u0649 \u0627\u0644\u0625\u062F\u0627\u0631\u0629." });
   }
-  const { id } = req.params;
-  const { driverId, driverName, driverNotes, setStatusToAssigned } = req.body || {};
-  const order = await db.findOrderByIdAsync(id);
-  if (!order) {
-    return res.status(404).json({ success: false, message: "\u0627\u0644\u0637\u0644\u0628 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F" });
-  }
-  const agents = await db.getDeliveryAgentsAsync();
-  const verifiedAgent = agents.find((a) => a.id === driverId || driverName && a.name.trim() === driverName.trim());
-  if (!verifiedAgent) {
-    return res.status(400).json({ success: false, message: "\u0627\u0644\u0645\u0646\u062F\u0648\u0628 \u0627\u0644\u0645\u062D\u062F\u062F \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F \u0641\u064A \u0633\u062C\u0644 \u0627\u0644\u0645\u0646\u0627\u062F\u064A\u0628 \u0627\u0644\u0645\u0639\u062A\u0645\u062F\u064A\u0646" });
-  }
-  const finalDriver = verifiedAgent;
-  const actor = `${req.user.name || req.user.role} (${req.user.phone || req.user.userId})`;
-  await db.updateOrderDriverAsync(id, finalDriver.id, finalDriver.name, finalDriver.phone);
-  const nextStatus = setStatusToAssigned ? "assigned" : ["pending", "received"].includes(order.status) ? "assigned" : order.status;
-  const updated = await db.updateOrderStatus(
-    id,
-    nextStatus,
-    driverNotes || `\u062A\u0645 \u062A\u0643\u0644\u064A\u0641 \u0627\u0644\u0645\u0646\u062F\u0648\u0628 \u0627\u0644\u0645\u0639\u062A\u0645\u062F (${finalDriver.name})`,
-    actor,
-    { driverId: finalDriver.id, driverName: finalDriver.name, driverPhone: finalDriver.phone }
-  );
-  res.json({
-    success: true,
-    message: `\u062A\u0645 \u062A\u0643\u0644\u064A\u0641 \u0627\u0644\u0645\u0646\u062F\u0648\u0628 \u0627\u0644\u0645\u0639\u062A\u0645\u062F (${finalDriver.name}) \u0628\u0646\u062C\u0627\u062D`,
-    data: updated
-  });
-});
-app.post("/api/orders/:id/cancel", async (req, res) => {
-  const { id } = req.params;
-  const { reason } = req.body || {};
-  if (!req.user) {
-    return res.status(401).json({ success: false, message: "\u064A\u062A\u0637\u0644\u0628 \u0625\u0644\u063A\u0627\u0621 \u0627\u0644\u0637\u0644\u0628 \u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u062F\u062E\u0648\u0644 \u0623\u0648\u0644\u0627\u064B" });
-  }
-  const order = await db.findOrderByIdAsync(id);
-  if (!order) {
-    return res.status(404).json({ success: false, message: "\u0627\u0644\u0637\u0644\u0628 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F" });
-  }
-  if (order.status === "cancelled") {
+  try {
+    const { id } = req.params;
+    const { driverId, driverName, driverNotes, setStatusToAssigned } = req.body || {};
+    const order = await db.findOrderByIdAsync(id);
+    if (!order) {
+      return res.status(404).json({ success: false, message: "\u0627\u0644\u0637\u0644\u0628 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F" });
+    }
+    const agents = await db.getDeliveryAgentsAsync();
+    const verifiedAgent = agents.find((a) => a.id === driverId || driverName && a.name.trim() === driverName.trim());
+    if (!verifiedAgent) {
+      return res.status(400).json({ success: false, message: "\u0627\u0644\u0645\u0646\u062F\u0648\u0628 \u0627\u0644\u0645\u062D\u062F\u062F \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F \u0641\u064A \u0633\u062C\u0644 \u0627\u0644\u0645\u0646\u0627\u062F\u064A\u0628 \u0627\u0644\u0645\u0639\u062A\u0645\u062F\u064A\u0646" });
+    }
+    const finalDriver = verifiedAgent;
+    const actor = `${req.user.name || req.user.role} (${req.user.phone || req.user.userId})`;
+    await db.updateOrderDriverAsync(id, finalDriver.id, finalDriver.name, finalDriver.phone);
+    const nextStatus = setStatusToAssigned ? "assigned" : ["pending", "received"].includes(order.status) ? "assigned" : order.status;
+    const updated = await db.updateOrderStatus(
+      id,
+      nextStatus,
+      driverNotes || `\u062A\u0645 \u062A\u0643\u0644\u064A\u0641 \u0627\u0644\u0645\u0646\u062F\u0648\u0628 \u0627\u0644\u0645\u0639\u062A\u0645\u062F (${finalDriver.name})`,
+      actor,
+      { driverId: finalDriver.id, driverName: finalDriver.name, driverPhone: finalDriver.phone }
+    );
     return res.json({
       success: true,
-      message: "\u0627\u0644\u0637\u0644\u0628 \u0645\u0644\u063A\u064A \u0628\u0627\u0644\u0641\u0639\u0644 \u0648\u0627\u0644\u0645\u062E\u0632\u0648\u0646 \u0645\u0633\u062A\u0631\u062C\u0639 \u0633\u0627\u0628\u0642\u064B\u0627",
-      data: order,
-      alreadyCancelled: true
-    });
-  }
-  if (order.status === "delivered") {
-    return res.status(400).json({ success: false, message: "\u0644\u0627 \u064A\u0645\u0643\u0646 \u0625\u0644\u063A\u0627\u0621 \u0637\u0644\u0628 \u062A\u0645 \u062A\u0633\u0644\u064A\u0645\u0647 \u0628\u0646\u062C\u0627\u062D" });
-  }
-  const isManagement = ["owner", "admin", "employee"].includes(req.user.role);
-  const isCustomerOwner = req.user.role === "customer" && req.user.phone && order.customerPhone.replace(/\D/g, "") === req.user.phone.replace(/\D/g, "");
-  const isGuestOwner = req.user.role === "guest" && Array.isArray(req.user.orderIds) && (req.user.orderIds.includes(order.id) || order.orderNumber && req.user.orderIds.includes(order.orderNumber));
-  if (!isManagement && !isCustomerOwner && !isGuestOwner) {
-    return res.status(403).json({ success: false, message: "\u063A\u064A\u0631 \u0645\u0635\u0631\u062D \u0644\u0643 \u0628\u0625\u0644\u063A\u0627\u0621 \u0647\u0630\u0627 \u0627\u0644\u0637\u0644\u0628" });
-  }
-  if ((isCustomerOwner || isGuestOwner) && !isManagement) {
-    if (!["pending", "received"].includes(order.status)) {
-      return res.status(400).json({
-        success: false,
-        message: "\u0644\u0627 \u064A\u0645\u0643\u0646 \u0644\u0644\u0639\u0645\u064A\u0644 \u0625\u0644\u063A\u0627\u0621 \u0627\u0644\u0637\u0644\u0628 \u0625\u0644\u0627 \u0625\u0630\u0627 \u0643\u0627\u0646 \u0641\u064A \u062D\u0627\u0644\u0629 \u0642\u064A\u062F \u0627\u0644\u0627\u0646\u062A\u0638\u0627\u0631 \u0623\u0648 \u0645\u0633\u062A\u0644\u0645 (\u0642\u0628\u0644 \u0627\u0644\u062A\u0623\u0643\u064A\u062F \u0648\u0627\u0644\u062A\u062C\u0647\u064A\u0632). \u064A\u0631\u062C\u0649 \u0627\u0644\u062A\u0648\u0627\u0635\u0644 \u0645\u0639 \u0625\u062F\u0627\u0631\u0629 \u0627\u0644\u0645\u062A\u062C\u0631 \u0644\u0644\u0645\u0633\u0627\u0639\u062F\u0629."
-      });
-    }
-  }
-  const actor = `${req.user.name || req.user.role} (${req.user.phone || req.user.userId})`;
-  const safeReason = sanitizeInputString(reason || "", 200);
-  const notes = safeReason ? `\u0633\u0628\u0628 \u0627\u0644\u0625\u0644\u063A\u0627\u0621: ${safeReason}` : void 0;
-  try {
-    const updated = await db.updateOrderStatus(id, "cancelled", notes, actor);
-    res.json({
-      success: true,
-      message: "\u062A\u0645 \u0625\u0644\u063A\u0627\u0621 \u0627\u0644\u0637\u0644\u0628 \u0648\u0627\u0633\u062A\u0631\u062C\u0627\u0639 \u0643\u0627\u0641\u0629 \u0627\u0644\u0643\u0645\u064A\u0627\u062A \u0625\u0644\u0649 \u0627\u0644\u0645\u062E\u0632\u0648\u0646 \u0628\u0646\u062C\u0627\u062D",
+      message: `\u062A\u0645 \u062A\u0643\u0644\u064A\u0641 \u0627\u0644\u0645\u0646\u062F\u0648\u0628 \u0627\u0644\u0645\u0639\u062A\u0645\u062F (${finalDriver.name}) \u0628\u0646\u062C\u0627\u062D`,
       data: updated
     });
   } catch (err) {
-    res.status(400).json({ success: false, message: err.message || "\u0641\u0634\u0644 \u0625\u0644\u063A\u0627\u0621 \u0627\u0644\u0637\u0644\u0628" });
+    return respondSafeError(res, 503, "\u0641\u0634\u0644 \u062A\u0639\u064A\u064A\u0646 \u0627\u0644\u0645\u0646\u062F\u0648\u0628 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "AssignDriver");
+  }
+});
+app.post("/api/orders/:id/cancel", async (req, res) => {
+  if (!req.user) {
+    return res.status(401).json({ success: false, message: "\u064A\u062A\u0637\u0644\u0628 \u0625\u0644\u063A\u0627\u0621 \u0627\u0644\u0637\u0644\u0628 \u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u062F\u062E\u0648\u0644 \u0623\u0648\u0644\u0627\u064B" });
+  }
+  try {
+    const { id } = req.params;
+    const { reason } = req.body || {};
+    const order = await db.findOrderByIdAsync(id);
+    if (!order) {
+      return res.status(404).json({ success: false, message: "\u0627\u0644\u0637\u0644\u0628 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F" });
+    }
+    if (order.status === "cancelled") {
+      return res.json({
+        success: true,
+        message: "\u0627\u0644\u0637\u0644\u0628 \u0645\u0644\u063A\u064A \u0628\u0627\u0644\u0641\u0639\u0644 \u0648\u0627\u0644\u0645\u062E\u0632\u0648\u0646 \u0645\u0633\u062A\u0631\u062C\u0639 \u0633\u0627\u0628\u0642\u064B\u0627",
+        data: order,
+        alreadyCancelled: true
+      });
+    }
+    if (order.status === "delivered" || order.status === "completed") {
+      return res.status(400).json({ success: false, message: "\u0644\u0627 \u064A\u0645\u0643\u0646 \u0625\u0644\u063A\u0627\u0621 \u0637\u0644\u0628 \u062A\u0645 \u062A\u0633\u0644\u064A\u0645\u0647 \u0623\u0648 \u0625\u0643\u0645\u0627\u0644\u0647 \u0628\u0627\u0644\u0641\u0639\u0644" });
+    }
+    const isManagement = ["owner", "admin", "employee"].includes(req.user.role);
+    const isCustomerOwner = req.user.role === "customer" && req.user.phone && order.customerPhone.replace(/\D/g, "") === req.user.phone.replace(/\D/g, "");
+    const isGuestOwner = req.user.role === "guest" && Array.isArray(req.user.orderIds) && (req.user.orderIds.includes(order.id) || order.orderNumber && req.user.orderIds.includes(order.orderNumber));
+    if (!isManagement && !isCustomerOwner && !isGuestOwner) {
+      return res.status(403).json({ success: false, message: "\u063A\u064A\u0631 \u0645\u0635\u0631\u062D \u0644\u0643 \u0628\u0625\u0644\u063A\u0627\u0621 \u0647\u0630\u0627 \u0627\u0644\u0637\u0644\u0628" });
+    }
+    if ((isCustomerOwner || isGuestOwner) && !isManagement) {
+      if (!["pending", "received"].includes(order.status)) {
+        return res.status(400).json({
+          success: false,
+          message: "\u0644\u0627 \u064A\u0645\u0643\u0646 \u0644\u0644\u0639\u0645\u064A\u0644 \u0625\u0644\u063A\u0627\u0621 \u0627\u0644\u0637\u0644\u0628 \u0625\u0644\u0627 \u0625\u0630\u0627 \u0643\u0627\u0646 \u0641\u064A \u062D\u0627\u0644\u0629 \u0642\u064A\u062F \u0627\u0644\u0627\u0646\u062A\u0638\u0627\u0631 \u0623\u0648 \u0645\u0633\u062A\u0644\u0645 (\u0642\u0628\u0644 \u0627\u0644\u062A\u0623\u0643\u064A\u062F \u0648\u0627\u0644\u062A\u062C\u0647\u064A\u0632). \u064A\u0631\u062C\u0649 \u0627\u0644\u062A\u0648\u0627\u0635\u0644 \u0645\u0639 \u0625\u062F\u0627\u0631\u0629 \u0627\u0644\u0645\u062A\u062C\u0631 \u0644\u0644\u0645\u0633\u0627\u0639\u062F\u0629."
+        });
+      }
+    }
+    const actor = `${req.user.name || req.user.role} (${req.user.phone || req.user.userId})`;
+    const safeReason = sanitizeInputString(reason || "", 200);
+    const notes = safeReason ? `\u0633\u0628\u0628 \u0627\u0644\u0625\u0644\u063A\u0627\u0621: ${safeReason}` : void 0;
+    const updated = await db.updateOrderStatus(id, "cancelled", notes, actor);
+    if (!updated) {
+      return res.status(404).json({ success: false, message: "\u0627\u0644\u0637\u0644\u0628 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F" });
+    }
+    const wasAlreadyCancelled = Boolean(updated._alreadyCancelled);
+    return res.json({
+      success: true,
+      message: wasAlreadyCancelled ? "\u0627\u0644\u0637\u0644\u0628 \u0645\u0644\u063A\u064A \u0628\u0627\u0644\u0641\u0639\u0644 \u0648\u0627\u0644\u0645\u062E\u0632\u0648\u0646 \u0645\u0633\u062A\u0631\u062C\u0639 \u0633\u0627\u0628\u0642\u064B\u0627" : "\u062A\u0645 \u0625\u0644\u063A\u0627\u0621 \u0627\u0644\u0637\u0644\u0628 \u0648\u0627\u0633\u062A\u0631\u062C\u0627\u0639 \u0643\u0627\u0641\u0629 \u0627\u0644\u0643\u0645\u064A\u0627\u062A \u0625\u0644\u0649 \u0627\u0644\u0645\u062E\u0632\u0648\u0646 \u0628\u0646\u062C\u0627\u062D",
+      data: updated,
+      alreadyCancelled: wasAlreadyCancelled
+    });
+  } catch (err) {
+    if (isDatabaseConnectivityError(err)) {
+      return respondSafeError(res, 503, "\u0641\u0634\u0644 \u0625\u0644\u063A\u0627\u0621 \u0627\u0644\u0637\u0644\u0628 \u0644\u062A\u0639\u0630\u0631 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "CancelOrder");
+    }
+    const msg = sanitizeD1ErrorMessage(err) || "\u0641\u0634\u0644 \u0625\u0644\u063A\u0627\u0621 \u0627\u0644\u0637\u0644\u0628";
+    if (msg.includes("\u062A\u0645 \u062A\u0633\u0644\u064A\u0645\u0647") || msg.includes("\u062A\u063A\u064A\u0631\u062A \u0628\u0627\u0644\u062A\u0632\u0627\u0645\u0646")) {
+      return res.status(409).json({ success: false, message: msg });
+    }
+    return res.status(400).json({ success: false, message: msg });
+  }
+});
+app.get("/api/payments", requireRoles(["owner", "admin", "employee"]), async (req, res) => {
+  try {
+    const orderId = typeof req.query.orderId === "string" ? req.query.orderId.trim() : void 0;
+    const payments = await db.getPaymentsAsync(orderId);
+    res.json({ success: true, data: payments });
+  } catch (err) {
+    return respondSafeError(res, 503, "\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0633\u062C\u0644 \u0627\u0644\u062F\u0641\u0639\u0627\u062A \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "GetPayments");
+  }
+});
+app.get("/api/orders/:id/payments", async (req, res) => {
+  if (!req.user) {
+    return res.status(401).json({ success: false, message: "\u064A\u062A\u0637\u0644\u0628 \u0627\u0644\u0648\u0635\u0648\u0644 \u0625\u0644\u0649 \u062A\u0641\u0627\u0635\u064A\u0644 \u0627\u0644\u062F\u0641\u0639 \u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u062F\u062E\u0648\u0644" });
+  }
+  try {
+    const order = await db.findOrderByIdAsync(req.params.id);
+    if (!order) {
+      return res.status(404).json({ success: false, message: "\u0627\u0644\u0637\u0644\u0628 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F" });
+    }
+    const isManagement = ["owner", "admin", "employee"].includes(req.user.role);
+    const isCustomerOwner = req.user.role === "customer" && req.user.phone && order.customerPhone && req.user.phone.replace(/\D/g, "") === order.customerPhone.replace(/\D/g, "");
+    const isGuestOwner = req.user.role === "guest" && Array.isArray(req.user.orderIds) && (req.user.orderIds.includes(order.id) || order.orderNumber && req.user.orderIds.includes(order.orderNumber));
+    const isDriver = ["delivery", "mandoub"].includes(req.user.role) && (order.driverId === req.user.userId || req.user.phone && order.driverPhone && order.driverPhone.replace(/\D/g, "") === req.user.phone.replace(/\D/g, ""));
+    if (!isManagement && !isCustomerOwner && !isGuestOwner && !isDriver) {
+      return res.status(403).json({ success: false, message: "\u063A\u064A\u0631 \u0645\u0635\u0631\u062D \u0644\u0643 \u0628\u0639\u0631\u0636 \u0628\u064A\u0627\u0646\u0627\u062A \u0627\u0644\u062F\u0641\u0639 \u0644\u0647\u0630\u0627 \u0627\u0644\u0637\u0644\u0628" });
+    }
+    const payments = await db.getPaymentsAsync(order.id);
+    return res.json({ success: true, data: payments });
+  } catch (err) {
+    return respondSafeError(res, 503, "\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0628\u064A\u0627\u0646\u0627\u062A \u0627\u0644\u062F\u0641\u0639 \u0644\u0644\u0637\u0644\u0628", err, "GetOrderPayments");
+  }
+});
+app.post("/api/orders/:id/payment/confirm", async (req, res) => {
+  if (!req.user) {
+    return res.status(401).json({ success: false, message: "\u064A\u062A\u0637\u0644\u0628 \u062A\u0623\u0643\u064A\u062F \u0627\u0644\u062A\u062D\u0635\u064A\u0644 \u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u062F\u062E\u0648\u0644" });
+  }
+  try {
+    const order = await db.findOrderByIdAsync(req.params.id);
+    if (!order) {
+      return res.status(404).json({ success: false, message: "\u0627\u0644\u0637\u0644\u0628 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F" });
+    }
+    const isManagement = ["owner", "admin", "employee"].includes(req.user.role);
+    const isDriverRole = ["delivery", "mandoub"].includes(req.user.role);
+    const isAssignedDriver = isDriverRole && (order.driverId === req.user.userId || req.user.phone && order.driverPhone && order.driverPhone.replace(/\D/g, "") === req.user.phone.replace(/\D/g, ""));
+    if (!isManagement && !isAssignedDriver) {
+      return res.status(403).json({ success: false, message: "\u063A\u064A\u0631 \u0645\u0635\u0631\u062D \u0644\u0643 \u0628\u062A\u0623\u0643\u064A\u062F \u062A\u062D\u0635\u064A\u0644 \u0627\u0644\u062F\u0641\u0639\u0629 \u0644\u0647\u0630\u0627 \u0627\u0644\u0637\u0644\u0628" });
+    }
+    if (!isManagement && isAssignedDriver) {
+      const m = String(order.paymentMethod || "").toLowerCase();
+      if (m !== "cod" && m !== "cash" && m !== "cash_on_delivery") {
+        return res.status(403).json({ success: false, message: "\u0645\u0646\u062F\u0648\u0628 \u0627\u0644\u062A\u0648\u0635\u064A\u0644 \u0645\u0635\u0631\u062D \u0644\u0647 \u0641\u0642\u0637 \u0628\u062A\u0623\u0643\u064A\u062F \u0627\u0644\u062A\u062D\u0635\u064A\u0644 \u0627\u0644\u0646\u0642\u062F\u064A \u0639\u0646\u062F \u0627\u0644\u0627\u0633\u062A\u0644\u0627\u0645" });
+      }
+    }
+    const { amount, method, referenceNumber, proofImageUrl, notes } = req.body || {};
+    const actor = `${req.user.name || req.user.role} (${req.user.phone || req.user.userId})`;
+    const result = await db.confirmOrderPaymentAsync({
+      orderId: order.id,
+      amount: amount !== void 0 ? Number(amount) : void 0,
+      method,
+      referenceNumber: referenceNumber ? sanitizeInputString(referenceNumber, 100) : void 0,
+      proofImageUrl: proofImageUrl ? String(proofImageUrl).trim().slice(0, 500) : void 0,
+      notes: notes ? sanitizeInputString(notes, 300) : void 0,
+      actor
+    });
+    return res.json({
+      success: true,
+      message: "\u062A\u0645 \u062A\u0623\u0643\u064A\u062F \u062A\u062D\u0635\u064A\u0644 \u0627\u0644\u062F\u0641\u0639\u0629 \u0648\u062A\u062D\u062F\u064A\u062B \u062D\u0627\u0644\u0629 \u0627\u0644\u062F\u0641\u0639 \u0628\u0646\u062C\u0627\u062D",
+      data: result.payment,
+      order: result.order
+    });
+  } catch (err) {
+    if (isDatabaseConnectivityError(err)) {
+      return respondSafeError(res, 503, "\u0641\u0634\u0644 \u062A\u0623\u0643\u064A\u062F \u0627\u0644\u062A\u062D\u0635\u064A\u0644 \u0644\u062A\u0639\u0630\u0631 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "ConfirmPayment");
+    }
+    const msg = sanitizeD1ErrorMessage(err) || "\u0641\u0634\u0644 \u062A\u0623\u0643\u064A\u062F \u0627\u0644\u062A\u062D\u0635\u064A\u0644";
+    if (msg.includes("DUP_PAYMENT") || msg.includes("\u062A\u0645 \u062A\u0623\u0643\u064A\u062F \u062A\u062D\u0635\u064A\u0644 \u0627\u0644\u062F\u0641\u0639\u0629 \u0644\u0647\u0630\u0627 \u0627\u0644\u0637\u0644\u0628 \u0645\u0633\u0628\u0642\u0627\u064B")) {
+      return res.status(409).json({ success: false, message: "\u062A\u0645 \u062A\u0623\u0643\u064A\u062F \u062A\u062D\u0635\u064A\u0644 \u0627\u0644\u062F\u0641\u0639\u0629 \u0644\u0647\u0630\u0627 \u0627\u0644\u0637\u0644\u0628 \u0645\u0633\u0628\u0642\u0627\u064B" });
+    }
+    return res.status(400).json({ success: false, message: msg });
+  }
+});
+app.post("/api/orders/:id/payment/refund", requireRoles(["owner", "admin"]), async (req, res) => {
+  try {
+    const { reason } = req.body || {};
+    const actor = `${req.user.name || req.user.role} (${req.user.phone || req.user.userId})`;
+    const result = await db.refundOrderPaymentAsync({
+      orderId: req.params.id,
+      reason: reason ? sanitizeInputString(reason, 300) : void 0,
+      actor
+    });
+    return res.json({
+      success: true,
+      message: "\u062A\u0645 \u062A\u0633\u062C\u064A\u0644 \u0627\u0633\u062A\u0631\u062F\u0627\u062F \u0627\u0644\u062F\u0641\u0639\u0629 \u0628\u0646\u062C\u0627\u062D",
+      data: result.payment,
+      order: result.order
+    });
+  } catch (err) {
+    if (isDatabaseConnectivityError(err)) {
+      return respondSafeError(res, 503, "\u0641\u0634\u0644 \u062A\u0646\u0641\u064A\u0630 \u0627\u0644\u0627\u0633\u062A\u0631\u062F\u0627\u062F \u0644\u062A\u0639\u0630\u0631 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "RefundPayment");
+    }
+    const msg = sanitizeD1ErrorMessage(err) || "\u0641\u0634\u0644 \u0627\u0633\u062A\u0631\u062F\u0627\u062F \u0627\u0644\u062F\u0641\u0639\u0629";
+    if (msg.includes("DUP_REFUND") || msg.includes("\u062A\u0645 \u0627\u0633\u062A\u0631\u062F\u0627\u062F \u0647\u0630\u0647 \u0627\u0644\u062F\u0641\u0639\u0629 \u0645\u0633\u0628\u0642\u0627\u064B")) {
+      return res.status(409).json({ success: false, message: "\u062A\u0645 \u0627\u0633\u062A\u0631\u062F\u0627\u062F \u0647\u0630\u0647 \u0627\u0644\u062F\u0641\u0639\u0629 \u0645\u0633\u0628\u0642\u0627\u064B" });
+    }
+    if (msg.includes("\u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F")) {
+      return res.status(404).json({ success: false, message: msg });
+    }
+    return res.status(400).json({ success: false, message: msg });
+  }
+});
+app.get("/api/notifications", async (req, res) => {
+  if (!req.user) {
+    return res.status(401).json({ success: false, message: "\u064A\u062A\u0637\u0644\u0628 \u0639\u0631\u0636 \u0627\u0644\u0625\u0634\u0639\u0627\u0631\u0627\u062A \u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u062F\u062E\u0648\u0644" });
+  }
+  try {
+    const limit = Number(req.query.limit) || 50;
+    const notifications = await db.getNotificationsAsync({
+      role: req.user.role,
+      userId: req.user.userId,
+      phone: req.user.phone,
+      limit
+    });
+    return res.json({ success: true, data: notifications });
+  } catch (err) {
+    return respondSafeError(res, 503, "\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0627\u0644\u0625\u0634\u0639\u0627\u0631\u0627\u062A \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "GetNotifications");
+  }
+});
+app.patch("/api/notifications/read-all", async (req, res) => {
+  if (!req.user) {
+    return res.status(401).json({ success: false, message: "\u064A\u062A\u0637\u0644\u0628 \u0647\u0630\u0627 \u0627\u0644\u0625\u062C\u0631\u0627\u0621 \u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u062F\u062E\u0648\u0644" });
+  }
+  try {
+    const updatedCount = await db.markAllNotificationsReadAsync({
+      role: req.user.role,
+      userId: req.user.userId,
+      phone: req.user.phone
+    });
+    return res.json({ success: true, updatedCount });
+  } catch (err) {
+    return respondSafeError(res, 503, "\u0641\u0634\u0644 \u062A\u062D\u062F\u064A\u062B \u062D\u0627\u0644\u0629 \u0627\u0644\u0625\u0634\u0639\u0627\u0631\u0627\u062A \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "ReadAllNotifications");
+  }
+});
+app.patch("/api/notifications/:id/read", async (req, res) => {
+  if (!req.user) {
+    return res.status(401).json({ success: false, message: "\u064A\u062A\u0637\u0644\u0628 \u0647\u0630\u0627 \u0627\u0644\u0625\u062C\u0631\u0627\u0621 \u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u062F\u062E\u0648\u0644" });
+  }
+  try {
+    const updated = await db.markNotificationReadAsync(req.params.id, {
+      role: req.user.role,
+      userId: req.user.userId,
+      phone: req.user.phone
+    });
+    if (!updated) {
+      return res.status(404).json({ success: false, message: "\u0627\u0644\u0625\u0634\u0639\u0627\u0631 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F" });
+    }
+    return res.json({ success: true, data: updated });
+  } catch (err) {
+    if (String(err?.message || "").includes("FORBIDDEN_NOTIFICATION")) {
+      return res.status(403).json({ success: false, message: "\u063A\u064A\u0631 \u0645\u0635\u0631\u062D \u0644\u0643 \u0628\u062A\u0639\u062F\u064A\u0644 \u0647\u0630\u0627 \u0627\u0644\u0625\u0634\u0639\u0627\u0631" });
+    }
+    return respondSafeError(res, 503, "\u0641\u0634\u0644 \u062A\u062D\u062F\u064A\u062B \u0627\u0644\u0625\u0634\u0639\u0627\u0631 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "ReadNotification");
   }
 });
 app.get("/api/reviews", async (req, res) => {
@@ -4806,8 +5892,7 @@ app.get("/api/reviews", async (req, res) => {
     const reviews = await db.getReviewsAsync();
     res.json({ success: true, data: reviews });
   } catch (err) {
-    console.error("Reviews query error:", err);
-    res.status(503).json({ success: false, message: "\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u062A\u0642\u064A\u064A\u0645\u0627\u062A \u0627\u0644\u0645\u0646\u062A\u062C\u0627\u062A \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", error: err.message });
+    return respondSafeError(res, 503, "\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u062A\u0642\u064A\u064A\u0645\u0627\u062A \u0627\u0644\u0645\u0646\u062A\u062C\u0627\u062A \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "Reviews");
   }
 });
 app.post("/api/reviews", async (req, res) => {
@@ -4816,19 +5901,26 @@ app.post("/api/reviews", async (req, res) => {
     if (!productId || !comment || !userName) {
       return res.status(400).json({ success: false, message: "\u064A\u0631\u062C\u0649 \u0643\u062A\u0627\u0628\u0629 \u0627\u0644\u0627\u0633\u0645 \u0648\u0627\u0644\u062A\u0639\u0644\u064A\u0642 \u0648\u062A\u062D\u062F\u064A\u062F \u0627\u0644\u0645\u0646\u062A\u062C" });
     }
-    const userPhone = req.user?.phone || (req.body.userPhone ? String(req.body.userPhone) : req.body.phone ? String(req.body.phone) : "");
-    let isVerified = userPhone ? await db.hasDeliveredOrderForProductAsync(userPhone, productId) : false;
-    if (!isVerified && req.body.orderId) {
-      const order = await db.findOrderByIdAsync(String(req.body.orderId));
-      if (order && order.status === "delivered" && order.items.some((it) => it.productId === productId)) {
-        isVerified = true;
+    let isVerified = false;
+    let verifiedPhone;
+    if (req.user?.role === "customer" && req.user.phone) {
+      verifiedPhone = req.user.phone.replace(/\D/g, "");
+      isVerified = await db.hasDeliveredOrderForProductAsync(verifiedPhone, String(productId));
+    } else if (req.user?.role === "guest" && Array.isArray(req.user.orderIds)) {
+      verifiedPhone = req.user.phone ? req.user.phone.replace(/\D/g, "") : void 0;
+      for (const oid of req.user.orderIds) {
+        const ord = await db.findOrderByIdAsync(String(oid));
+        if (ord && ord.status === "delivered" && Array.isArray(ord.items) && ord.items.some((it) => it.productId === productId)) {
+          isVerified = true;
+          break;
+        }
       }
     }
     const newReview = {
       id: "rev-" + Date.now(),
       productId: String(productId),
       userName: sanitizeInputString(userName, 50),
-      userPhone: userPhone || void 0,
+      userPhone: verifiedPhone,
       rating: Math.min(5, Math.max(1, Number(rating) || 5)),
       comment: sanitizeInputString(comment, 500),
       date: (/* @__PURE__ */ new Date()).toISOString().split("T")[0],
@@ -4837,8 +5929,7 @@ app.post("/api/reviews", async (req, res) => {
     const added = await db.addReviewAsync(newReview);
     res.json({ success: true, data: added });
   } catch (err) {
-    console.error("Add review error:", err);
-    res.status(500).json({ success: false, message: "\u0641\u0634\u0644 \u0625\u0636\u0627\u0641\u0629 \u0627\u0644\u062A\u0642\u064A\u064A\u0645 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", error: err.message });
+    return respondSafeError(res, 500, "\u0641\u0634\u0644 \u0625\u0636\u0627\u0641\u0629 \u0627\u0644\u062A\u0642\u064A\u064A\u0645 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "AddReview");
   }
 });
 app.post("/api/validate-coupon", couponRateLimiter, async (req, res) => {
@@ -4851,8 +5942,12 @@ app.post("/api/validate-coupon", couponRateLimiter, async (req, res) => {
     if (!found || !found.isActive) {
       return res.status(400).json({ success: false, message: "\u0643\u0648\u0628\u0648\u0646 \u063A\u064A\u0631 \u0635\u0627\u0644\u062D \u0623\u0648 \u063A\u064A\u0631 \u0645\u0641\u0639\u0644" });
     }
-    if (found.validUntil && new Date(found.validUntil).getTime() < Date.now()) {
-      return res.status(400).json({ success: false, message: "\u0647\u0630\u0627 \u0627\u0644\u0643\u0648\u0628\u0648\u0646 \u0645\u0646\u062A\u0647\u064A \u0627\u0644\u0635\u0644\u0627\u062D\u064A\u0629" });
+    if (found.validUntil) {
+      const trimmed = String(found.validUntil).trim();
+      const targetTs = /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? (/* @__PURE__ */ new Date(`${trimmed}T23:59:59.999Z`)).getTime() : new Date(trimmed).getTime();
+      if (!isNaN(targetTs) && targetTs < Date.now()) {
+        return res.status(400).json({ success: false, message: "\u0647\u0630\u0627 \u0627\u0644\u0643\u0648\u0628\u0648\u0646 \u0645\u0646\u062A\u0647\u064A \u0627\u0644\u0635\u0644\u0627\u062D\u064A\u0629" });
+      }
     }
     if (found.maxUses && found.usageCount && found.usageCount >= found.maxUses) {
       return res.status(400).json({ success: false, message: "\u0644\u0642\u062F \u0627\u0633\u062A\u0646\u0641\u062F \u0647\u0630\u0627 \u0627\u0644\u0643\u0648\u0628\u0648\u0646 \u0627\u0644\u062D\u062F \u0627\u0644\u0623\u0642\u0635\u0649 \u0644\u0639\u062F\u062F \u0645\u0631\u0627\u062A \u0627\u0644\u0627\u0633\u062A\u062E\u062F\u0627\u0645 \u0627\u0644\u0645\u0633\u0645\u0648\u062D \u0628\u0647\u0627" });
@@ -4861,9 +5956,22 @@ app.post("/api/validate-coupon", couponRateLimiter, async (req, res) => {
     if (items && Array.isArray(items) && items.length > 0) {
       const products = await db.getProductsAsync();
       for (const it of items) {
-        const p = products.find((prod) => prod.id === it.productId);
+        const targetId = it.productId || it.product?.id || it.id;
+        const p = products.find((prod) => prod.id === targetId);
         if (p) {
-          orderAmount += p.price * Math.max(1, Number(it.quantity) || 1);
+          const itemWeight = it.weight || it.selectedWeight;
+          let unitPrice = Number(p.price);
+          if (itemWeight && p.weightOptions && p.weightOptions.length > 0) {
+            const cleanReqWeight = String(itemWeight).trim().toLowerCase();
+            const exact = p.weightOptions.find((w) => String(w.weight || "").trim().toLowerCase() === cleanReqWeight);
+            const prefix = !exact && p.weightOptions.find((w) => {
+              const opt = String(w.weight || "").trim().toLowerCase();
+              return opt.startsWith(cleanReqWeight) || cleanReqWeight.startsWith(opt.split(" ")[0]);
+            });
+            if (exact) unitPrice = Number(exact.price);
+            else if (prefix) unitPrice = Number(prefix.price);
+          }
+          orderAmount += unitPrice * Math.max(1, Number(it.quantity) || 1);
         }
       }
     } else {
@@ -4888,8 +5996,7 @@ app.post("/api/validate-coupon", couponRateLimiter, async (req, res) => {
       }
     });
   } catch (err) {
-    console.error("Validate coupon error:", err);
-    res.status(503).json({ success: false, message: "\u0641\u0634\u0644 \u0627\u0644\u062A\u062D\u0642\u0642 \u0645\u0646 \u0627\u0644\u0643\u0648\u0628\u0648\u0646 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", error: err.message });
+    return respondSafeError(res, 503, "\u0641\u0634\u0644 \u0627\u0644\u062A\u062D\u0642\u0642 \u0645\u0646 \u0627\u0644\u0643\u0648\u0628\u0648\u0646 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "ValidateCoupon");
   }
 });
 app.get("/api/coupons", requireRoles(["owner", "admin", "employee"]), async (req, res) => {
@@ -4897,8 +6004,7 @@ app.get("/api/coupons", requireRoles(["owner", "admin", "employee"]), async (req
     const coupons = await db.getCouponsAsync();
     res.json({ success: true, data: coupons });
   } catch (err) {
-    console.error("Coupons query error:", err);
-    res.status(503).json({ success: false, message: "\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0627\u0644\u0643\u0648\u0628\u0648\u0646\u0627\u062A \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", error: err.message });
+    return respondSafeError(res, 503, "\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0627\u0644\u0643\u0648\u0628\u0648\u0646\u0627\u062A \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "Coupons");
   }
 });
 app.post("/api/coupons", requireRoles(["owner", "admin"]), async (req, res) => {
@@ -4918,8 +6024,7 @@ app.post("/api/coupons", requireRoles(["owner", "admin"]), async (req, res) => {
     });
     res.json({ success: true, data: newCoupon });
   } catch (err) {
-    console.error("Add coupon error:", err);
-    res.status(500).json({ success: false, message: "\u0641\u0634\u0644 \u062D\u0641\u0638 \u0627\u0644\u0643\u0648\u0628\u0648\u0646 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", error: err.message });
+    return respondSafeError(res, 500, "\u0641\u0634\u0644 \u062D\u0641\u0638 \u0627\u0644\u0643\u0648\u0628\u0648\u0646 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "AddCoupon");
   }
 });
 app.put("/api/coupons/:code", requireRoles(["owner", "admin"]), async (req, res) => {
@@ -4930,17 +6035,18 @@ app.put("/api/coupons/:code", requireRoles(["owner", "admin"]), async (req, res)
     }
     res.json({ success: true, data: updated });
   } catch (err) {
-    console.error("Update coupon error:", err);
-    res.status(500).json({ success: false, message: "\u0641\u0634\u0644 \u062A\u062D\u062F\u064A\u062B \u0627\u0644\u0643\u0648\u0628\u0648\u0646 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", error: err.message });
+    return respondSafeError(res, 500, "\u0641\u0634\u0644 \u062A\u062D\u062F\u064A\u062B \u0627\u0644\u0643\u0648\u0628\u0648\u0646 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "UpdateCoupon");
   }
 });
 app.delete("/api/coupons/:code", requireRoles(["owner", "admin"]), async (req, res) => {
   try {
-    await db.deleteCouponAsync(req.params.code);
+    const deleted = await db.deleteCouponAsync(req.params.code);
+    if (!deleted) {
+      return res.status(404).json({ success: false, message: "\u0627\u0644\u0643\u0648\u0628\u0648\u0646 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F" });
+    }
     res.json({ success: true, message: "\u062A\u0645 \u062D\u0630\u0641 \u0627\u0644\u0643\u0648\u0628\u0648\u0646" });
   } catch (err) {
-    console.error("Delete coupon error:", err);
-    res.status(500).json({ success: false, message: "\u0641\u0634\u0644 \u062D\u0630\u0641 \u0627\u0644\u0643\u0648\u0628\u0648\u0646 \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", error: err.message });
+    return respondSafeError(res, 500, "\u0641\u0634\u0644 \u062D\u0630\u0641 \u0627\u0644\u0643\u0648\u0628\u0648\u0646 \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "DeleteCoupon");
   }
 });
 app.get("/api/settings", async (req, res) => {
@@ -4948,8 +6054,7 @@ app.get("/api/settings", async (req, res) => {
     const settings = await db.getSettingsAsync();
     res.json({ success: true, data: settings });
   } catch (err) {
-    console.error("Settings query error:", err);
-    res.status(503).json({ success: false, message: "\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0627\u0644\u0625\u0639\u062F\u0627\u062F\u0627\u062A \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", error: err.message });
+    return respondSafeError(res, 503, "\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0627\u0644\u0625\u0639\u062F\u0627\u062F\u0627\u062A \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "Settings");
   }
 });
 app.post("/api/settings", requireRoles(["owner", "admin"]), async (req, res) => {
@@ -4957,8 +6062,7 @@ app.post("/api/settings", requireRoles(["owner", "admin"]), async (req, res) => 
     const updated = await db.updateSettingsAsync(req.body);
     res.json({ success: true, data: updated });
   } catch (err) {
-    console.error("Settings update error:", err);
-    res.status(500).json({ success: false, message: "\u0641\u0634\u0644 \u062D\u0641\u0638 \u0627\u0644\u0625\u0639\u062F\u0627\u062F\u0627\u062A \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", error: err.message });
+    return respondSafeError(res, 500, "\u0641\u0634\u0644 \u062D\u0641\u0638 \u0627\u0644\u0625\u0639\u062F\u0627\u062F\u0627\u062A \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "SaveSettings");
   }
 });
 app.put("/api/settings", requireRoles(["owner", "admin"]), async (req, res) => {
@@ -4966,8 +6070,7 @@ app.put("/api/settings", requireRoles(["owner", "admin"]), async (req, res) => {
     const updated = await db.updateSettingsAsync(req.body);
     res.json({ success: true, data: updated });
   } catch (err) {
-    console.error("Settings update error:", err);
-    res.status(500).json({ success: false, message: "\u0641\u0634\u0644 \u062D\u0641\u0638 \u0627\u0644\u0625\u0639\u062F\u0627\u062F\u0627\u062A \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", error: err.message });
+    return respondSafeError(res, 500, "\u0641\u0634\u0644 \u062D\u0641\u0638 \u0627\u0644\u0625\u0639\u062F\u0627\u062F\u0627\u062A \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "UpdateSettings");
   }
 });
 app.get("/api/delivery-agents", async (req, res) => {
@@ -4986,8 +6089,7 @@ app.get("/api/delivery-agents", async (req, res) => {
     }));
     res.json({ success: true, data: safeAgents });
   } catch (err) {
-    console.error("Delivery agents error:", err);
-    res.status(503).json({ success: false, message: "\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0645\u0646\u0627\u062F\u064A\u0628 \u0627\u0644\u062A\u0648\u0635\u064A\u0644 \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", error: err.message });
+    return respondSafeError(res, 503, "\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0645\u0646\u0627\u062F\u064A\u0628 \u0627\u0644\u062A\u0648\u0635\u064A\u0644 \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "DeliveryAgents");
   }
 });
 app.post("/api/delivery-agents", requireRoles(["owner", "admin"]), async (req, res) => {
@@ -5013,8 +6115,7 @@ app.post("/api/delivery-agents", requireRoles(["owner", "admin"]), async (req, r
     }, pin);
     res.json({ success: true, data: newAgent });
   } catch (err) {
-    console.error("Delivery agents update error:", err);
-    res.status(500).json({ success: false, message: "\u0641\u0634\u0644 \u062D\u0641\u0638 \u0628\u064A\u0627\u0646\u0627\u062A \u0627\u0644\u0645\u0646\u062F\u0648\u0628 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", error: err.message });
+    return respondSafeError(res, 500, "\u0641\u0634\u0644 \u062D\u0641\u0638 \u0628\u064A\u0627\u0646\u0627\u062A \u0627\u0644\u0645\u0646\u062F\u0648\u0628 \u0641\u064A \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "AddDeliveryAgent");
   }
 });
 app.put("/api/delivery-agents/:id", requireRoles(["owner", "admin"]), async (req, res) => {
@@ -5032,8 +6133,7 @@ app.put("/api/delivery-agents/:id", requireRoles(["owner", "admin"]), async (req
     }
     res.json({ success: true, data: updated });
   } catch (err) {
-    console.error("Delivery agent update error:", err);
-    res.status(500).json({ success: false, message: "\u0641\u0634\u0644 \u062A\u062D\u062F\u064A\u062B \u0628\u064A\u0627\u0646\u0627\u062A \u0627\u0644\u0645\u0646\u062F\u0648\u0628", error: err.message });
+    return respondSafeError(res, 500, "\u0641\u0634\u0644 \u062A\u062D\u062F\u064A\u062B \u0628\u064A\u0627\u0646\u0627\u062A \u0627\u0644\u0645\u0646\u062F\u0648\u0628", err, "UpdateDeliveryAgent");
   }
 });
 app.delete("/api/delivery-agents/:id", requireRoles(["owner", "admin"]), async (req, res) => {
@@ -5041,8 +6141,7 @@ app.delete("/api/delivery-agents/:id", requireRoles(["owner", "admin"]), async (
     await db.deleteDeliveryAgentAsync(req.params.id);
     res.json({ success: true, message: "\u062A\u0645 \u062D\u0630\u0641 \u0627\u0644\u0645\u0646\u062F\u0648\u0628 \u0628\u0646\u062C\u0627\u062D" });
   } catch (err) {
-    console.error("Delivery agent delete error:", err);
-    res.status(500).json({ success: false, message: "\u0641\u0634\u0644 \u062D\u0630\u0641 \u0627\u0644\u0645\u0646\u062F\u0648\u0628 \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", error: err.message });
+    return respondSafeError(res, 500, "\u0641\u0634\u0644 \u062D\u0630\u0641 \u0627\u0644\u0645\u0646\u062F\u0648\u0628 \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "DeleteDeliveryAgent");
   }
 });
 app.get("/api/gallery", async (req, res) => {
@@ -5050,8 +6149,7 @@ app.get("/api/gallery", async (req, res) => {
     const data = await db.getGalleryItemsAsync();
     res.json({ success: true, data });
   } catch (err) {
-    console.error("Gallery query error:", err);
-    res.status(503).json({ success: false, message: "\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0627\u0644\u0645\u0639\u0631\u0636 \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", error: err.message });
+    return respondSafeError(res, 503, "\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0627\u0644\u0645\u0639\u0631\u0636 \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "Gallery");
   }
 });
 app.post("/api/gallery", requireRoles(["owner", "admin"]), async (req, res) => {
@@ -5062,8 +6160,7 @@ app.post("/api/gallery", requireRoles(["owner", "admin"]), async (req, res) => {
     });
     res.json({ success: true, data: newItem });
   } catch (err) {
-    console.error("Gallery add error:", err);
-    res.status(500).json({ success: false, message: "\u0641\u0634\u0644 \u0625\u0636\u0627\u0641\u0629 \u0627\u0644\u0635\u0648\u0631\u0629 \u0644\u0644\u0645\u0639\u0631\u0636", error: err.message });
+    return respondSafeError(res, 500, "\u0641\u0634\u0644 \u0625\u0636\u0627\u0641\u0629 \u0627\u0644\u0635\u0648\u0631\u0629 \u0644\u0644\u0645\u0639\u0631\u0636", err, "AddGallery");
   }
 });
 app.put("/api/gallery/:id", requireRoles(["owner", "admin"]), async (req, res) => {
@@ -5074,17 +6171,18 @@ app.put("/api/gallery/:id", requireRoles(["owner", "admin"]), async (req, res) =
     }
     res.json({ success: true, data: updated });
   } catch (err) {
-    console.error("Gallery update error:", err);
-    res.status(500).json({ success: false, message: "\u0641\u0634\u0644 \u062A\u0639\u062F\u064A\u0644 \u0639\u0646\u0635\u0631 \u0627\u0644\u0645\u0639\u0631\u0636", error: err.message });
+    return respondSafeError(res, 500, "\u0641\u0634\u0644 \u062A\u0639\u062F\u064A\u0644 \u0639\u0646\u0635\u0631 \u0627\u0644\u0645\u0639\u0631\u0636", err, "UpdateGallery");
   }
 });
 app.delete("/api/gallery/:id", requireRoles(["owner", "admin"]), async (req, res) => {
   try {
-    await db.deleteGalleryItemAsync(req.params.id);
+    const deleted = await db.deleteGalleryItemAsync(req.params.id);
+    if (!deleted) {
+      return res.status(404).json({ success: false, message: "\u0639\u0646\u0635\u0631 \u0627\u0644\u0645\u0639\u0631\u0636 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F" });
+    }
     res.json({ success: true, message: "\u062A\u0645 \u062D\u0630\u0641 \u0627\u0644\u0635\u0648\u0631\u0629 \u0645\u0646 \u0627\u0644\u0645\u0639\u0631\u0636" });
   } catch (err) {
-    console.error("Gallery delete error:", err);
-    res.status(500).json({ success: false, message: "\u0641\u0634\u0644 \u062D\u0630\u0641 \u0627\u0644\u0635\u0648\u0631\u0629 \u0645\u0646 \u0627\u0644\u0645\u0639\u0631\u0636", error: err.message });
+    return respondSafeError(res, 500, "\u0641\u0634\u0644 \u062D\u0630\u0641 \u0627\u0644\u0635\u0648\u0631\u0629 \u0645\u0646 \u0627\u0644\u0645\u0639\u0631\u0636", err, "DeleteGallery");
   }
 });
 app.get("/api/admin/reports", requireRoles(["owner", "admin"]), async (req, res) => {
@@ -5124,21 +6222,13 @@ app.get("/api/admin/reports", requireRoles(["owner", "admin"]), async (req, res)
       }
     });
   } catch (err) {
-    console.error("Reports query error:", err);
-    res.status(503).json({ success: false, message: "\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0627\u0644\u062A\u0642\u0627\u0631\u064A\u0631 \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", error: err.message });
+    return respondSafeError(res, 503, "\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0627\u0644\u062A\u0642\u0627\u0631\u064A\u0631 \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "AdminReports");
   }
 });
 app.get(["/api/customers", "/api/admin/customers", "/api/crm/customers"], requireRoles(["owner", "admin", "employee"]), async (req, res) => {
   try {
     const orders = await db.getOrdersAsync();
-    let registeredCustomers = [];
-    try {
-      if (typeof db.getCustomersAsync === "function") {
-        registeredCustomers = await db.getCustomersAsync();
-      }
-    } catch (e) {
-      console.warn("Could not fetch registered customers:", e);
-    }
+    const registeredCustomers = await db.getCustomersAsync();
     const customerMap = {};
     if (Array.isArray(registeredCustomers)) {
       registeredCustomers.forEach((c) => {
@@ -5215,8 +6305,7 @@ app.get(["/api/customers", "/api/admin/customers", "/api/crm/customers"], requir
     }));
     res.json({ success: true, data: result });
   } catch (err) {
-    console.error("Customers query error:", err);
-    res.status(503).json({ success: false, message: "\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0627\u0644\u0639\u0645\u0644\u0627\u0621 \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", error: err.message });
+    return respondSafeError(res, 503, "\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0627\u0644\u0639\u0645\u0644\u0627\u0621 \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "CustomersCRM");
   }
 });
 app.get("/api/b2b/calculator-data", requireRoles(["owner", "admin", "employee"]), async (req, res) => {
@@ -5243,8 +6332,7 @@ app.get("/api/b2b/calculator-data", requireRoles(["owner", "admin", "employee"])
       }
     });
   } catch (err) {
-    console.error("B2B calculator query error:", err);
-    res.status(503).json({ success: false, message: "\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0628\u064A\u0627\u0646\u0627\u062A B2B \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", error: err.message });
+    return respondSafeError(res, 503, "\u0641\u0634\u0644 \u0627\u0633\u062A\u0639\u0644\u0627\u0645 \u0628\u064A\u0627\u0646\u0627\u062A B2B \u0645\u0646 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A", err, "B2BCalculator");
   }
 });
 app.post("/api/analytics/track", (req, res) => {
@@ -5260,10 +6348,10 @@ app.post("/api/analytics/abandoned-cart", (req, res) => {
   res.json({ success: true });
 });
 app.get("/sitemap.xml", async (req, res) => {
-  res.setHeader("Content-Type", "application/xml");
-  const host = req.protocol + "://" + req.get("host");
-  const products = await db.getProductsAsync();
-  const productUrls = products.map((p) => `
+  try {
+    const host = req.protocol + "://" + req.get("host");
+    const products = await db.getProductsAsync();
+    const productUrls = products.map((p) => `
     <url>
       <loc>${host}/product/${p.id}</loc>
       <lastmod>${(/* @__PURE__ */ new Date()).toISOString().split("T")[0]}</lastmod>
@@ -5271,7 +6359,7 @@ app.get("/sitemap.xml", async (req, res) => {
       <priority>0.9</priority>
     </url>
   `).join("");
-  const sitemap = `<?xml version="1.0" encoding="UTF-8"?>
+    const sitemap = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
     <loc>${host}/</loc>
@@ -5287,7 +6375,11 @@ app.get("/sitemap.xml", async (req, res) => {
   </url>
   ${productUrls}
 </urlset>`;
-  res.send(sitemap);
+    res.setHeader("Content-Type", "application/xml");
+    return res.send(sitemap);
+  } catch (err) {
+    return respondSafeError(res, 503, "\u062A\u0639\u0630\u0631 \u0625\u0646\u0634\u0627\u0621 \u062E\u0631\u064A\u0637\u0629 \u0627\u0644\u0645\u0648\u0642\u0639 \u062D\u0627\u0644\u064A\u0627\u064B", err, "Sitemap");
+  }
 });
 app.get("/robots.txt", (req, res) => {
   res.setHeader("Content-Type", "text/plain");
@@ -5341,11 +6433,12 @@ app.post("/api/gemini/advisor", async (req, res) => {
   }
 });
 app.use((err, req, res, next) => {
-  console.error("Unhandled Server Error:", err);
+  console.error("Unhandled Server Error:", sanitizeD1ErrorMessage(err));
   if (!res.headersSent) {
-    res.status(err.status || 500).json({
+    const status = err?.status && typeof err.status === "number" ? err.status : isDatabaseConnectivityError(err) ? 503 : 500;
+    res.status(status).json({
       success: false,
-      message: err.message || "\u062D\u062F\u062B \u062E\u0637\u0623 \u063A\u064A\u0631 \u0645\u062A\u0648\u0642\u0639 \u0641\u064A \u0627\u0644\u062E\u0627\u062F\u0645"
+      message: status === 503 ? "\u062E\u062F\u0645\u0629 \u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A \u063A\u064A\u0631 \u0645\u062A\u0627\u062D\u0629 \u0645\u0624\u0642\u062A\u0627\u064B. \u064A\u0631\u062C\u0649 \u0627\u0644\u0645\u062D\u0627\u0648\u0644\u0629 \u0644\u0627\u062D\u0642\u0627\u064B." : "\u062D\u062F\u062B \u062E\u0637\u0623 \u063A\u064A\u0631 \u0645\u062A\u0648\u0642\u0639 \u0641\u064A \u0627\u0644\u062E\u0627\u062F\u0645"
     });
   }
 });

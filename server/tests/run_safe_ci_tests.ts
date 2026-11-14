@@ -1,7 +1,4 @@
-import { d1 } from '../d1';
-import { generateToken } from '../security';
-
-const BASE_URL = process.env.TEST_BASE_URL || 'http://localhost:3000';
+import { enforceIsolatedTestEnvironment } from './testGuard';
 
 let passed = 0;
 let failed = 0;
@@ -16,12 +13,12 @@ function assert(condition: boolean, msg: string) {
   }
 }
 
-async function req(url: string, options: any = {}) {
+async function req(baseUrl: string, url: string, options: any = {}) {
   const headers = { 'Content-Type': 'application/json', 'x-ci-test': 'safe-suite', ...(options.headers || {}) };
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 15000);
   try {
-    const res = await fetch(`${BASE_URL}${url}`, { ...options, headers, signal: controller.signal });
+    const res = await fetch(`${baseUrl}${url}`, { ...options, headers, signal: controller.signal });
     clearTimeout(timeoutId);
     const text = await res.text();
     try {
@@ -36,145 +33,177 @@ async function req(url: string, options: any = {}) {
 }
 
 async function runSafeCiTests() {
+  // Validate test environment BEFORE importing ../d1 or touching any DB/network
+  const testConfig = await enforceIsolatedTestEnvironment({ requireMutationOptIn: false, requireBaseUrl: true });
+
+  const { d1 } = await import('../d1');
+  const { generateToken, hashSecret } = await import('../security');
+
   console.log('======================================================================');
-  console.log('🛡️ BLACK GOLD SAFE CI TEST SUITE: SECURITY, ENUMERATION & INTEGRITY');
+  console.log('🛡️ BLACK GOLD ISOLATED CI TEST SUITE: SECURITY, ENUMERATION & INTEGRITY');
+  console.log(`🎯 Target Test Base URL: ${testConfig.baseUrl}`);
+  console.log(`🧪 Mutation Tests Enabled: ${testConfig.allowMutation}`);
   console.log('======================================================================\n');
 
   await d1.init();
 
   // -------------------------------------------------------------------
-  // 1. SECURITY TEST: PRIVILEGE ESCALATION PREVENTION (/api/auth/quick-customer)
+  // 1. CLOUDFLARE D1 ISOLATED TEST INTEGRITY (READ-ONLY)
   // -------------------------------------------------------------------
-  console.log('--- 1. PRIVILEGE ESCALATION PREVENTION (/api/auth/quick-customer) ---');
-  // Attempt to login using known admin/owner phone number via customer quick-login
-  const adminPhone = '777000111';
-  const exploitAttempt = await req('/api/auth/quick-customer', {
-    method: 'POST',
-    body: JSON.stringify({ phone: adminPhone, name: 'Attacker Attempting Elevation' })
-  });
+  console.log('--- 1. CLOUDFLARE D1 ISOLATED INTEGRITY (READ-ONLY) ---');
+  assert(d1.isD1Configured(), 'Isolated test Cloudflare D1 is configured');
 
-  assert(exploitAttempt.status === 403, `Quick customer login with admin phone (${adminPhone}) rejected with HTTP 403 Forbidden`);
-  assert(exploitAttempt.json?.success === false, 'Response has success: false');
-  assert(!exploitAttempt.json?.token, 'No authentication token issued for admin phone via quick customer login');
+  const tablesRow = await d1.executeCloudflareD1Query("SELECT count(*) as count FROM sqlite_master WHERE type='table';");
+  const tableCount = Number(tablesRow?.[0]?.count ?? 0);
+  assert(tableCount >= 10, `Isolated test DB has ${tableCount} operational tables`);
 
-  // Verify the admin account in D1 was NOT altered by the attempt
-  const ownerAccount = await d1.findUserByPhoneAsync(adminPhone);
-  if (ownerAccount) {
-    assert(ownerAccount.role === 'owner', 'Owner role in database remained strictly "owner"');
-    assert(!ownerAccount.name.includes('Attacker'), 'Owner name was NOT modified by the attack attempt');
-  }
-
-  // Legitimate Customer Login receives role: 'customer' strictly
-  const legitimatePhone = '773344556';
-  const customerLogin = await req('/api/auth/quick-customer', {
-    method: 'POST',
-    body: JSON.stringify({ phone: legitimatePhone, name: 'عميل الفحص الدوري' })
-  });
-  assert(customerLogin.status === 200, 'Legitimate customer login succeeds with HTTP 200');
-  assert(customerLogin.json?.user?.role === 'customer', 'Customer token has role strictly set to "customer"');
+  const products = await d1.getProductsAsync();
+  assert(Array.isArray(products) && products.length > 0, `Products table returned ${products.length} products`);
 
   // -------------------------------------------------------------------
-  // 2. ORDER TRACKING ENUMERATION & PRIVACY AUDIT (/api/orders/track/:query)
+  // 2. ORDER TRACKING ENUMERATION & PRIVACY AUDIT (READ-ONLY)
   // -------------------------------------------------------------------
-  console.log('\n--- 2. ORDER TRACKING ENUMERATION & PRIVACY AUDIT ---');
-  // 2.1 Substring / Short probing must be rejected
-  const shortProbe = await req('/api/orders/track/12');
+  console.log('\n--- 2. ORDER TRACKING ENUMERATION & PRIVACY AUDIT (READ-ONLY) ---');
+  const shortProbe = await req(testConfig.baseUrl, '/api/orders/track/12');
   assert(shortProbe.status === 400, 'Short query probe (track/12) rejected with HTTP 400');
 
-  const partialProbe = await req('/api/orders/track/88');
+  const partialProbe = await req(testConfig.baseUrl, '/api/orders/track/88');
   assert(partialProbe.status === 400, 'Partial 2-digit probe rejected with HTTP 400');
 
-  // 2.2 Non-existent order must return 404
-  const notFoundProbe = await req('/api/orders/track/BG-2026-99999999');
+  const notFoundProbe = await req(testConfig.baseUrl, '/api/orders/track/BG-2026-99999999');
   assert(notFoundProbe.status === 404, 'Non-existent order query returns HTTP 404');
 
-  // 2.3 Fetch a real order to test tracking privacy
   const allOrders = await d1.getOrdersAsync();
   const sampleOrder = allOrders?.[0];
-
   if (sampleOrder) {
-    const validTrack = await req(`/api/orders/track/${sampleOrder.orderNumber}`);
+    const validTrack = await req(testConfig.baseUrl, `/api/orders/track/${sampleOrder.orderNumber}`);
     assert(validTrack.status === 200, `Exact order tracking for (${sampleOrder.orderNumber}) succeeds with HTTP 200`);
-    
+
     const trackData = validTrack.json?.data;
     assert(Boolean(trackData?.orderNumber), 'Returns orderNumber');
     assert(Boolean(trackData?.status), 'Returns order status');
     assert(Array.isArray(trackData?.timeline), 'Returns public milestones timeline');
-
-    // PRIVACY VERIFICATION: Sensitive fields must NOT exist in public response
     assert(!trackData?.customerPhone, 'Customer phone number is NOT exposed in public tracking');
     assert(!trackData?.driverName, 'Delivery driver name is NOT exposed in public tracking');
     assert(!trackData?.driverPhone, 'Delivery driver phone is NOT exposed in public tracking');
     assert(!trackData?.street, 'Street address is NOT exposed in public tracking');
+  } else {
+    console.log('  ℹ️ [INFO] No sample order present in isolated test DB; skipped sample tracking privacy check.');
   }
 
   // -------------------------------------------------------------------
-  // 3. CLOUDFLARE D1 READ-ONLY ARCHITECTURAL INTEGRITY
+  // 3. MUTATION TESTS (STRICTLY GATED BY CI_TESTS_ALLOW_MUTATION=true)
   // -------------------------------------------------------------------
-  console.log('\n--- 3. CLOUDFLARE D1 INTEGRITY & VERCEL READINESS ---');
-  assert(d1.isD1Configured(), 'Cloudflare D1 is actively configured with valid credentials');
-  
-  const tablesRow = await d1.executeCloudflareD1Query("SELECT count(*) as count FROM sqlite_master WHERE type='table';");
-  const tableCount = Number(tablesRow?.[0]?.count ?? 0);
-  assert(tableCount >= 10, `Database has ${tableCount} authoritative operational tables in Cloudflare D1`);
+  if (!testConfig.allowMutation) {
+    console.log('\n--- 3. MUTATION TESTS SKIPPED ---');
+    console.log('  ⏭️ [SKIP] Auth & stock write tests skipped (set CI_TESTS_ALLOW_MUTATION=true on an isolated test DB to enable).');
+  } else {
+    console.log('\n--- 3. ISOLATED MUTATION TESTS (SYNTHETIC DATA + CLEANUP) ---');
+    const runTag = `ci-${Date.now()}`;
+    const syntheticAdminPhone = '770009901';
+    const syntheticCustomerPhone = '770009902';
+    const syntheticAdminId = `usr-${runTag}-admin`;
+    const syntheticReasonAdd = `CI_SAFE_TEST_ADD_${runTag}`;
+    const syntheticReasonSub = `CI_SAFE_TEST_SUB_${runTag}`;
+    const targetProduct = products[0];
+    const initialStock = targetProduct.stock;
 
-  const products = await d1.getProductsAsync();
-  assert(Array.isArray(products) && products.length > 0, `Products table returned ${products.length} live products`);
+    try {
+      // Seed synthetic admin strictly in isolated test DB (never use real admin phones like 777000111)
+      await d1.executeCloudflareD1Query(
+        "INSERT OR IGNORE INTO users (id, name, phone, role, password_hash, status, permissions_json) VALUES (?, ?, ?, 'owner', ?, 'active', '[]');",
+        [syntheticAdminId, 'Synthetic CI Owner', syntheticAdminPhone, hashSecret(`ci-only-${runTag}`)]
+      );
 
-  // -------------------------------------------------------------------
-  // 4. NON-DESTRUCTIVE CONCURRENCY & ADJUSTMENT AUDIT
-  // -------------------------------------------------------------------
-  console.log('\n--- 4. INVENTORY ADJUSTMENT ATOMICITY (ZERO NET CHANGE) ---');
-  const targetProduct = products[0];
-  const initialStock = targetProduct.stock;
+      // 3.1 Privilege Escalation Prevention (/api/auth/quick-customer)
+      const exploitAttempt = await req(testConfig.baseUrl, '/api/auth/quick-customer', {
+        method: 'POST',
+        body: JSON.stringify({ phone: syntheticAdminPhone, name: 'Attacker Attempting Elevation' })
+      });
 
-  const adminToken = generateToken({
-    userId: 'usr-ci-auditor',
-    role: 'owner',
-    phone: '777000111',
-    name: 'فاحص النظام الآلي'
-  });
+      assert(exploitAttempt.status === 403, `Quick customer login with synthetic admin phone (${syntheticAdminPhone}) rejected with HTTP 403`);
+      assert(exploitAttempt.json?.success === false, 'Response has success: false');
+      assert(!exploitAttempt.json?.token, 'No authentication token issued for admin phone via quick customer login');
 
-  // Step 1: Add +1 unit
-  const addRes = await req('/api/inventory/adjust', {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${adminToken}` },
-    body: JSON.stringify({
-      productId: targetProduct.id,
-      type: 'purchase',
-      quantity: 1,
-      reason: 'فحص تكاملي آلي غير تدميري (+1)',
-      performedBy: 'CI Safe Runner'
-    })
-  });
-  assert(addRes.status === 200, 'Relative atomic stock increment (+1) succeeded in D1');
+      const adminCheck = await d1.findUserByPhoneAsync(syntheticAdminPhone);
+      if (adminCheck) {
+        assert(adminCheck.role === 'owner', 'Synthetic owner role in isolated test DB remained strictly "owner"');
+        assert(!adminCheck.name.includes('Attacker'), 'Synthetic owner name was NOT modified');
+      }
 
-  // Step 2: Immediately Subtract -1 unit (Exact Zero Net Change!)
-  const subRes = await req('/api/inventory/adjust', {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${adminToken}` },
-    body: JSON.stringify({
-      productId: targetProduct.id,
-      type: 'damage',
-      quantity: 1,
-      reason: 'إلغاء أثر الفحص التكاملي الآلي (-1)',
-      performedBy: 'CI Safe Runner'
-    })
-  });
-  assert(subRes.status === 200, 'Relative atomic stock decrement (-1) succeeded in D1');
+      // 3.2 Legitimate synthetic customer login strictly gets role: 'customer'
+      const customerLogin = await req(testConfig.baseUrl, '/api/auth/quick-customer', {
+        method: 'POST',
+        body: JSON.stringify({ phone: syntheticCustomerPhone, name: 'عميل اختبار معزول' })
+      });
+      assert(customerLogin.status === 200, 'Synthetic customer login succeeds with HTTP 200');
+      assert(customerLogin.json?.user?.role === 'customer', 'Customer token has role strictly set to "customer"');
 
-  // Verify stock is restored to EXACT initial value
-  const finalProduct = await d1.findProductByIdAsync(targetProduct.id);
-  assert(finalProduct?.stock === initialStock, `Stock in D1 verified at EXACT initial value (${finalProduct?.stock} === ${initialStock}) with zero net drift`);
+      // 3.3 Atomic inventory adjustment (+1 / -1) with zero net drift
+      const adminToken = generateToken({
+        userId: syntheticAdminId,
+        role: 'owner',
+        phone: syntheticAdminPhone,
+        name: 'Synthetic CI Auditor'
+      });
+
+      const addRes = await req(testConfig.baseUrl, '/api/inventory/adjust', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${adminToken}` },
+        body: JSON.stringify({
+          productId: targetProduct.id,
+          type: 'purchase',
+          quantity: 1,
+          reason: syntheticReasonAdd,
+          performedBy: 'CI Safe Runner'
+        })
+      });
+      assert(addRes.status === 200, 'Relative atomic stock increment (+1) succeeded in isolated test DB');
+
+      const subRes = await req(testConfig.baseUrl, '/api/inventory/adjust', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${adminToken}` },
+        body: JSON.stringify({
+          productId: targetProduct.id,
+          type: 'damage',
+          quantity: 1,
+          reason: syntheticReasonSub,
+          performedBy: 'CI Safe Runner'
+        })
+      });
+      assert(subRes.status === 200, 'Relative atomic stock decrement (-1) succeeded in isolated test DB');
+
+      const finalProduct = await d1.findProductByIdAsync(targetProduct.id);
+      assert(
+        finalProduct?.stock === initialStock,
+        `Stock in isolated test DB verified at EXACT initial value (${finalProduct?.stock} === ${initialStock})`
+      );
+    } finally {
+      // Guaranteed cleanup of synthetic test rows on isolated test DB
+      await d1.executeCloudflareD1Query(
+        'DELETE FROM inventory_logs WHERE reason IN (?, ?);',
+        [syntheticReasonAdd, syntheticReasonSub]
+      ).catch(() => {});
+      await d1.executeCloudflareD1Query(
+        'DELETE FROM users WHERE phone IN (?, ?) OR id = ?;',
+        [syntheticAdminPhone, syntheticCustomerPhone, syntheticAdminId]
+      ).catch(() => {});
+      await d1.executeCloudflareD1Query(
+        "UPDATE products SET stock = ? WHERE id = ?; UPDATE inventory SET current_stock = ? WHERE product_id = ?;",
+        [initialStock, targetProduct.id, initialStock, targetProduct.id]
+      ).catch(() => {});
+    }
+  }
 
   console.log('\n======================================================================');
-  console.log(`📊 SAFE CI AUDIT SUMMARY: ${passed} PASSED, ${failed} FAILED`);
+  console.log(`📊 ISOLATED CI AUDIT SUMMARY: ${passed} PASSED, ${failed} FAILED`);
   console.log('======================================================================');
 
   process.exit(failed > 0 ? 1 : 0);
 }
 
 runSafeCiTests().catch(err => {
-  console.error('Fatal Safe CI error:', err);
+  console.error('❌ Safe CI runner aborted:', err?.message || err);
   process.exit(1);
 });
+

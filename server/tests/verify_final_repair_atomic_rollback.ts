@@ -1,7 +1,6 @@
-import { d1 } from '../d1';
-import { generateToken, hashSecret } from '../security';
+import { enforceIsolatedTestEnvironment } from './testGuard';
 
-const BASE_URL = 'http://localhost:3000';
+let BASE_URL = '';
 
 let passedCount = 0;
 let failedCount = 0;
@@ -36,6 +35,12 @@ async function req(url: string, options: any = {}) {
 }
 
 async function runFinalRepairVerification() {
+  const testConfig = await enforceIsolatedTestEnvironment({ requireMutationOptIn: true, requireBaseUrl: true });
+  BASE_URL = testConfig.baseUrl;
+
+  const { d1 } = await import('../d1');
+  const { generateToken } = await import('../security');
+
   console.log('======================================================================');
   console.log('🧪 FINAL AUDIT & VERIFICATION SUITE: BLACK GOLD STORE');
   console.log('======================================================================\n');
@@ -46,8 +51,8 @@ async function runFinalRepairVerification() {
   const adminToken = generateToken({
     userId: 'usr-admin-final-audit',
     role: 'owner',
-    phone: '777000111',
-    name: 'مالك المتجر التنفيذي'
+    phone: '770009901',
+    name: 'مالك اختبار معزول'
   });
 
   const testCustomerPhone = '771998877';
@@ -278,7 +283,7 @@ async function runFinalRepairVerification() {
   // 7.1 Owner Login with Wrong PIN rejected with 401
   const wrongAdminRes = await req('/api/auth/admin-login', {
     method: 'POST',
-    body: JSON.stringify({ phone: '777000111', pin: '000000_wrong' })
+    body: JSON.stringify({ phone: '770009901', pin: '000000_wrong' })
   });
   assert(wrongAdminRes.status === 401, 'Admin login with wrong PIN rejected with HTTP 401');
 

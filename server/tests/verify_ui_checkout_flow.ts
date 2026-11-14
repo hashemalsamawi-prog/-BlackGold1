@@ -26,11 +26,17 @@
  *    - Submit button re-enables
  */
 
-import { d1 } from '../d1';
+import { enforceIsolatedTestEnvironment } from './testGuard';
 
-const BASE_URL = 'http://localhost:3000';
+let BASE_URL = '';
 
 async function runCheckoutFlowVerification() {
+  const testConfig = await enforceIsolatedTestEnvironment({ requireMutationOptIn: true, requireBaseUrl: true });
+  BASE_URL = testConfig.baseUrl;
+
+  const { d1 } = await import('../d1');
+  await d1.init();
+
   console.log('===============================================================');
   console.log('🚀 Starting Full Checkout UI/UX & Backend End-to-End Test Suite');
   console.log('===============================================================\n');

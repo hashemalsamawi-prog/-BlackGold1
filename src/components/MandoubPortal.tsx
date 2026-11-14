@@ -6,6 +6,7 @@ import {
   Banknote, MessageSquare, ExternalLink, RefreshCw, Sparkles, Printer
 } from 'lucide-react';
 import { EmptyState } from './EmptyState';
+import { api } from '../services/api';
 
 interface MandoubPortalProps {
   isOpen: boolean;
@@ -40,31 +41,31 @@ export const MandoubPortal: React.FC<MandoubPortalProps> = ({
   onOpenInvoice,
 }) => {
   const [activeTab, setActiveTab] = useState<'active' | 'pending' | 'completed'>('active');
-  const [confirmedCashOrderId, setConfirmedCashOrderId] = useState<string | null>(null);
+  const [collectingOrderId, setCollectingOrderId] = useState<string | null>(null);
+  const [collectedOrderIds, setCollectedOrderIds] = useState<Record<string, boolean>>({});
+  const [collectionFeedback, setCollectionFeedback] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
-  const currentDriverObj = availableDrivers.find(d => d.name === driverName) || availableDrivers[0];
-  const isAssignedToThisDriver = (o: Order) => {
-    if (!driverName) return true;
-    return o.driverName === driverName || 
-           (currentDriverObj && o.driverId === currentDriverObj.id) || 
-           (!o.driverName && ['received', 'confirmed', 'pending'].includes(o.status));
+  const currentDriverObj = availableDrivers.find(d => d.name === driverName);
+  const matchesCurrentDriver = (o: Order) => {
+    if (!driverName) return false;
+    return o.driverName === driverName || (currentDriverObj ? o.driverId === currentDriverObj.id : false);
   };
 
   const activeOrders = orders.filter((o) => 
     ['assigned', 'preparing', 'shipped', 'on_way', 'delivering'].includes(o.status) &&
-    (o.driverName === driverName || (currentDriverObj && o.driverId === currentDriverObj.id))
+    matchesCurrentDriver(o)
   );
 
   const pendingOrders = orders.filter((o) => 
     ['pending', 'received', 'confirmed'].includes(o.status) &&
-    isAssignedToThisDriver(o)
+    (matchesCurrentDriver(o) || (isOwnerPreview && !o.driverName))
   );
 
   const completedOrders = orders.filter((o) => 
     o.status === 'delivered' && 
-    (o.driverName === driverName || (currentDriverObj && o.driverId === currentDriverObj.id))
+    matchesCurrentDriver(o)
   );
 
   // Financial summary for this driver
@@ -100,17 +101,23 @@ export const MandoubPortal: React.FC<MandoubPortalProps> = ({
               </div>
               <div className="flex items-center gap-2 text-xs text-zinc-400 mt-1">
                 <span>الكابتن المعتمد:</span>
-                <select
-                  value={driverName}
-                  onChange={(e) => onSelectDriver(e.target.value)}
-                  className="bg-zinc-950 border border-amber-500/40 rounded-xl px-3 py-1 text-amber-300 font-bold text-xs outline-none cursor-pointer"
-                >
-                  {availableDrivers.map((d) => (
-                    <option key={d.id} value={d.name}>
-                      {d.name} ({d.phone} • {d.vehicleType === 'motorcycle' ? 'دراجة' : 'سيارة'})
-                    </option>
-                  ))}
-                </select>
+                {isOwnerPreview ? (
+                  <select
+                    value={driverName}
+                    onChange={(e) => onSelectDriver(e.target.value)}
+                    className="bg-zinc-950 border border-amber-500/40 rounded-xl px-3 py-1 text-amber-300 font-bold text-xs outline-none cursor-pointer"
+                  >
+                    {availableDrivers.map((d) => (
+                      <option key={d.id} value={d.name}>
+                        {d.name} ({d.phone} • {d.vehicleType === 'motorcycle' ? 'دراجة' : 'سيارة'})
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <span className="bg-zinc-950 border border-amber-500/40 rounded-xl px-3 py-1 text-amber-300 font-bold text-xs">
+                    {driverName || 'كابتن التوصيل'}
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -421,13 +428,56 @@ export const MandoubPortal: React.FC<MandoubPortalProps> = ({
                       )}
 
                       {order.status === 'delivered' && (
-                        <span className="text-emerald-400 text-xs font-black flex items-center gap-1">
-                          <CheckCircle2 className="w-4 h-4" />
-                          <span>تم تسليم هذا الطلب وتحصيل مبلغه كاملاً</span>
-                        </span>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-emerald-400 text-xs font-black flex items-center gap-1">
+                            <CheckCircle2 className="w-4 h-4" />
+                            <span>تم تسليم الشحنة بنجاح</span>
+                          </span>
+                          {(order.paymentMethod === 'cod' || order.paymentMethod === 'cash_on_delivery' || order.paymentMethod === 'cash') &&
+                           order.paymentStatus !== 'paid' && order.paymentStatus !== 'confirmed' && !collectedOrderIds[order.id] && (
+                            <button
+                              type="button"
+                              disabled={collectingOrderId === order.id}
+                              onClick={async () => {
+                                setCollectingOrderId(order.id);
+                                setCollectionFeedback(null);
+                                try {
+                                  const res = await api.confirmOrderPayment(order.id, {
+                                    amount: safeTotal,
+                                    method: 'cod',
+                                    notes: `تحصيل نقدي بواسطة الكابتن (${driverName})`,
+                                  });
+                                  if (res?.success) {
+                                    setCollectedOrderIds((prev) => ({ ...prev, [order.id]: true }));
+                                    setCollectionFeedback(`✅ تم توثيق استلام ${safeTotal.toLocaleString()} ريال للطلب #${order.orderNumber || order.id}`);
+                                  } else {
+                                    setCollectionFeedback(`❌ ${res?.message || 'تعذر توثيق التحصيل النقدي'}`);
+                                  }
+                                } catch {
+                                  setCollectionFeedback('❌ تعذر الاتصال بالخادم لتوثيق التحصيل');
+                                } finally {
+                                  setCollectingOrderId(null);
+                                }
+                              }}
+                              className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs cursor-pointer disabled:opacity-50"
+                            >
+                              {collectingOrderId === order.id ? 'جاري التوثيق...' : `توثيق استلام ${safeTotal.toLocaleString()} ريال نقداً`}
+                            </button>
+                          )}
+                          {(order.paymentStatus === 'paid' || order.paymentStatus === 'confirmed' || collectedOrderIds[order.id]) && (
+                            <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">
+                              تم تحصيل المبلغ ✓
+                            </span>
+                          )}
+                        </div>
                       )}
                     </div>
                   </div>
+                  {collectionFeedback && (
+                    <div className="text-[11px] font-bold text-amber-300 bg-zinc-900 border border-amber-500/30 rounded-xl px-3 py-1.5">
+                      {collectionFeedback}
+                    </div>
+                  )}
                 </div>
               );
             })}

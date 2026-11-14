@@ -86,10 +86,17 @@ export const api = {
   async verifySession() {
     const token = authStorage.getToken();
     if (!token) return { success: false };
-    const res = await fetch('/api/auth/verify', {
-      headers: { 'Authorization': `Bearer ${token}` },
-    });
-    return res.json();
+    try {
+      const res = await fetch('/api/auth/me', {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        return { success: false, status: res.status };
+      }
+      return await res.json();
+    } catch {
+      return { success: false };
+    }
   },
 
   async getProducts() {
@@ -191,7 +198,7 @@ export const api = {
   async addReview(reviewData: any) {
     const res = await fetch('/api/reviews', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(true),
       body: JSON.stringify(reviewData),
     });
     return res.json();
@@ -221,7 +228,9 @@ export const api = {
   },
 
   async getInventoryTransactions() {
-    const res = await fetch('/api/inventory/transactions');
+    const res = await fetch('/api/inventory/transactions', {
+      headers: getAuthHeaders(false),
+    });
     return res.json();
   },
 
@@ -399,6 +408,54 @@ export const api = {
   async deleteDeliveryAgent(id: string) {
     const res = await fetch(`/api/delivery-agents/${id}`, {
       method: 'DELETE',
+      headers: getAuthHeaders(false),
+    });
+    return res.json();
+  },
+
+  async getPayments(orderId?: string) {
+    const url = orderId ? `/api/orders/${encodeURIComponent(orderId)}/payments` : '/api/payments';
+    const res = await fetch(url, { headers: getAuthHeaders(false) });
+    return res.json();
+  },
+
+  async confirmOrderPayment(
+    orderId: string,
+    payload: { amount?: number; method?: string; referenceNumber?: string; proofImageUrl?: string; notes?: string }
+  ) {
+    const res = await fetch(`/api/orders/${encodeURIComponent(orderId)}/payment/confirm`, {
+      method: 'POST',
+      headers: getAuthHeaders(true),
+      body: JSON.stringify(payload),
+    });
+    return res.json();
+  },
+
+  async refundOrderPayment(orderId: string, reason?: string) {
+    const res = await fetch(`/api/orders/${encodeURIComponent(orderId)}/payment/refund`, {
+      method: 'POST',
+      headers: getAuthHeaders(true),
+      body: JSON.stringify({ reason }),
+    });
+    return res.json();
+  },
+
+  async getNotifications() {
+    const res = await fetch('/api/notifications', { headers: getAuthHeaders(false) });
+    return res.json();
+  },
+
+  async markNotificationRead(id: string) {
+    const res = await fetch(`/api/notifications/${encodeURIComponent(id)}/read`, {
+      method: 'PATCH',
+      headers: getAuthHeaders(false),
+    });
+    return res.json();
+  },
+
+  async markAllNotificationsRead() {
+    const res = await fetch('/api/notifications/read-all', {
+      method: 'PATCH',
       headers: getAuthHeaders(false),
     });
     return res.json();

@@ -15,10 +15,33 @@ import {
   sanitizeInputString,
   createRateLimiter
 } from "./server/db";
-import { d1, CLOUDFLARE_CONFIG, isRealValidCustomerName } from "./server/d1";
+import { d1, CLOUDFLARE_CONFIG, isRealValidCustomerName, sanitizeD1ErrorMessage } from "./server/d1";
 import { Order, Product } from "./src/types";
 
+function isDatabaseConnectivityError(err: any): boolean {
+  const msg = String(err?.message || '');
+  return (
+    msg.includes('Cloudflare D1') ||
+    msg.includes('قاعدة بيانات') ||
+    msg.includes('قاعدة البيانات') ||
+    msg.includes('Network error') ||
+    msg.includes('fetch failed')
+  );
+}
+
+function respondSafeError(res: Response, status: number, publicMessage: string, err?: any, logContext: string = 'Server Error') {
+  if (err) {
+    console.error(`[${logContext}]`, sanitizeD1ErrorMessage(err));
+  }
+  const finalStatus = (status === 500 && err && isDatabaseConnectivityError(err)) ? 503 : status;
+  return res.status(finalStatus).json({
+    success: false,
+    message: publicMessage
+  });
+}
+
 const app = express();
+app.set('trust proxy', process.env.VERCEL ? 1 : (process.env.NODE_ENV === 'production' ? 1 : false));
 const PORT = 3000;
 
 // Ensure uploads directory exists
@@ -45,7 +68,9 @@ app.use((req, res, next) => {
     req.url.startsWith('/auth') || 
     req.url.startsWith('/products') || 
     req.url.startsWith('/orders') || 
+    req.url.startsWith('/my-orders') ||
     req.url.startsWith('/coupons') || 
+    req.url.startsWith('/validate-coupon') ||
     req.url.startsWith('/delivery-agents') || 
     req.url.startsWith('/reviews') || 
     req.url.startsWith('/settings') || 
@@ -53,6 +78,8 @@ app.use((req, res, next) => {
     req.url.startsWith('/inventory') || 
     req.url.startsWith('/crm') || 
     req.url.startsWith('/gallery') || 
+    req.url.startsWith('/payments') ||
+    req.url.startsWith('/notifications') ||
     req.url.startsWith('/gemini') ||
     req.url.startsWith('/health')
   )) {
@@ -61,7 +88,45 @@ app.use((req, res, next) => {
   next();
 });
 
-// Gateway & Health Check Endpoints
+// Universal D1 Initialization Middleware (Strict Fail-Closed):
+// Guarantees Cloudflare D1 is initialized BEFORE any API route executes.
+// If D1 initialization fails, NEVER call next() — immediately return HTTP 503.
+let d1InitializationPromise: Promise<void> | null = null;
+app.use(async (req: Request, res: Response, next: NextFunction) => {
+  const requiresD1 =
+    req.path.startsWith('/api') ||
+    req.path === '/health' ||
+    req.path === '/sitemap.xml';
+
+  if (!requiresD1) {
+    return next();
+  }
+
+  if (!d1.isD1Initialized()) {
+    if (!d1InitializationPromise) {
+      d1InitializationPromise = db.init();
+    }
+    const activePromise = d1InitializationPromise;
+
+    try {
+      await activePromise;
+    } catch (err: any) {
+      console.error("❌ [D1 Middleware Init] Fail-closed: D1 initialization failed:", sanitizeD1ErrorMessage(err));
+      return res.status(503).json({
+        success: false,
+        message: "خدمة قاعدة البيانات غير متاحة مؤقتاً. يرجى المحاولة لاحقاً."
+      });
+    } finally {
+      if (d1InitializationPromise === activePromise) {
+        d1InitializationPromise = null;
+      }
+    }
+  }
+
+  return next();
+});
+
+// Gateway & Health Check Endpoints (Guarded by D1 Middleware above)
 app.get(["/api", "/api/index"], (req, res) => {
   res.json({
     success: true,
@@ -133,36 +198,6 @@ function requireRoles(allowedRoles: string[]) {
     return next();
   };
 }
-
-// Universal D1 Initialization Middleware:
-// Guarantees Cloudflare D1 tables are initialized in EVERY environment (Vercel Serverless Functions, Docker, Cloud Run)
-// before any route handler reads data, preventing cold-start empty-memory anomalies.
-let d1InitializationPromise: Promise<void> | null = null;
-app.use(async (req: Request, res: Response, next: NextFunction) => {
-  if (req.path.startsWith('/assets/') || req.path.endsWith('.js') || req.path.endsWith('.css') || req.path.endsWith('.ico')) {
-    return next();
-  }
-
-  if (!d1InitializationPromise) {
-    d1InitializationPromise = db.init().catch(err => {
-      console.warn("⚠️ [D1 Middleware Init] Warning during lazy database initialization:", err.message);
-      d1InitializationPromise = null; // allow retry on next request if transient failure
-      throw err;
-    });
-  }
-
-  try {
-    await d1InitializationPromise;
-  } catch (err: any) {
-    if (process.env.NODE_ENV === 'production' && !d1.isD1Configured()) {
-      return res.status(503).json({
-        success: false,
-        message: "قاعدة بيانات Cloudflare D1 غير مهيأة أو غير متصلة في بيئة الإنتاج"
-      });
-    }
-  }
-  next();
-});
 
 app.use(authenticateUser);
 
@@ -254,11 +289,7 @@ app.post("/api/auth/quick-customer", authRateLimiter, async (req, res) => {
       }
     });
   } catch (err: any) {
-    console.error("Quick customer login error:", err);
-    res.status(500).json({ 
-      success: false, 
-      message: err.message || "حدث خطأ أثناء تسجيل الدخول السريع" 
-    });
+    return respondSafeError(res, 503, "حدث خطأ أثناء تسجيل الدخول السريع", err, "QuickCustomerLogin");
   }
 });
 
@@ -279,13 +310,8 @@ app.post("/api/auth/admin-login", authRateLimiter, async (req, res) => {
     const cleanPhone = phone ? normalizeDigits(phone).replace(/\D/g, '') : '';
     const hashedInput = hashSecret(rawSecret);
 
-    // Find owner/admin/employee accounts from D1
-    let allUsers: UserAccount[] = [];
-    try {
-      allUsers = await db.getUsersAsync();
-    } catch (e: any) {
-      console.warn("Could not fetch users directly from D1:", e?.message);
-    }
+    // Find owner/admin/employee accounts from D1 (fail-closed if D1 query fails)
+    const allUsers = await db.getUsersAsync();
     const users = allUsers.filter(u => ['owner', 'admin', 'employee'].includes(u.role));
     
     let matchedUser = users.find(u => {
@@ -342,12 +368,6 @@ app.post("/api/auth/admin-login", authRateLimiter, async (req, res) => {
     }
 
     if (!matchedUser) {
-      if (!d1.isD1Configured() && !process.env.ADMIN_PIN) {
-        return res.status(401).json({
-          success: false,
-          message: "متغيرات قاعدة بيانات Cloudflare D1 ورمز الإدارة غير مكتملة في بيئة Vercel. يرجى إضافتها في Vercel Project Settings."
-        });
-      }
       return res.status(401).json({ success: false, message: "رمز الدخول أو كلمة المرور غير صحيحة" });
     }
 
@@ -369,11 +389,7 @@ app.post("/api/auth/admin-login", authRateLimiter, async (req, res) => {
       }
     });
   } catch (err: any) {
-    console.error("Admin login error:", err);
-    res.status(500).json({ 
-      success: false, 
-      message: err.message || "حدث خطأ أثناء معالجة تسجيل دخول الإدارة" 
-    });
+    return respondSafeError(res, 503, "حدث خطأ أثناء معالجة تسجيل دخول الإدارة", err, "AdminLogin");
   }
 });
 
@@ -466,11 +482,7 @@ app.post("/api/auth/driver-login", authRateLimiter, async (req, res) => {
       }
     });
   } catch (err: any) {
-    console.error("Driver login error:", err);
-    res.status(500).json({ 
-      success: false, 
-      message: err.message || "حدث خطأ أثناء معالجة تسجيل دخول المندوب" 
-    });
+    return respondSafeError(res, 503, "حدث خطأ أثناء معالجة تسجيل دخول المندوب", err, "DriverLogin");
   }
 });
 
@@ -499,7 +511,7 @@ export async function handleD1HealthAndStatus(req: Request, res: Response) {
   const isHealthCheck = req.path === "/api/d1/health";
   const health = await d1.checkD1Health();
 
-  // If D1 check failed, return a genuine failure state with 503 HTTP status in production or failure payload
+  // If D1 check failed, return a genuine failure state with 503 HTTP status
   if (!health.isConnected) {
     return res.status(503).json({
       success: false,
@@ -510,14 +522,20 @@ export async function handleD1HealthAndStatus(req: Request, res: Response) {
       schemaValid: health.schemaValid,
       remoteCloudflareConnected: health.reachable,
       engine: "Cloudflare D1 Serverless (SQLite Dialect)",
-      databaseId: CLOUDFLARE_CONFIG.databaseId,
-      error: health.error || "تعذر التحقق من الاتصال المباشر بقاعدة بيانات Cloudflare D1",
+      error: health.error ? sanitizeD1ErrorMessage(health.error) : "تعذر التحقق من الاتصال المباشر بقاعدة بيانات Cloudflare D1",
       message: "فشل التحقق من الاتصال بقاعدة بيانات Cloudflare D1."
     });
   }
 
   // If lightweight health check requested, return early with real status
   if (isHealthCheck && req.query?.full !== 'true') {
+    const isolationNonce = typeof req.headers?.['x-test-isolation-nonce'] === 'string'
+      ? req.headers['x-test-isolation-nonce'].trim()
+      : '';
+    const isolationProof = isolationNonce.length >= 16
+      ? crypto.createHmac('sha256', CLOUDFLARE_CONFIG.databaseId || 'UNCONFIGURED').update(isolationNonce).digest('hex')
+      : undefined;
+
     return res.json({
       success: true,
       status: "healthy",
@@ -528,10 +546,12 @@ export async function handleD1HealthAndStatus(req: Request, res: Response) {
       schemaValid: health.schemaValid,
       remoteCloudflareConnected: true,
       engine: "Cloudflare D1 Serverless (SQLite Dialect)",
-      databaseId: CLOUDFLARE_CONFIG.databaseId,
-      accountId: CLOUDFLARE_CONFIG.accountId ? `${CLOUDFLARE_CONFIG.accountId.substring(0, 6)}...` : '',
       remoteTablesCount: health.remoteTablesCount,
       timestamp: new Date().toISOString(),
+      ...(isolationProof ? {
+        isolationProof,
+        isProductionRuntime: process.env.NODE_ENV === 'production'
+      } : {}),
       message: "قاعدة بيانات Cloudflare D1 متصلة وتعمل بكفاءة عالية وبمخطط سليم."
     });
   }
@@ -562,33 +582,33 @@ export async function handleD1HealthAndStatus(req: Request, res: Response) {
       db.getInventoryTransactionsAsync()
     ]);
 
-    // Live query for store_settings count and inventory count from D1
+    // Live query for store_settings, inventory, payments, and notifications counts from D1 (when configured)
     let storeSettingsCount = 0;
     let inventoryRowsCount = 0;
-    try {
-      const stRows = await d1.executeCloudflareD1Query("SELECT count(*) as count FROM store_settings;");
-      if (stRows && stRows.length > 0) {
-        storeSettingsCount = Number(stRows[0].count) || 1;
-      } else {
-        storeSettingsCount = 1;
-      }
-      const invRows = await d1.executeCloudflareD1Query("SELECT count(*) as count FROM inventory;");
-      if (invRows && invRows.length > 0) {
-        inventoryRowsCount = Number(invRows[0].count);
-      } else {
-        inventoryRowsCount = products.length;
-      }
-    } catch {
+    let paymentsRowsCount = 0;
+    let notificationsRowsCount = 0;
+    if (d1.isD1Configured()) {
+      const [stRows, invRows, payRows, notifRows] = await Promise.all([
+        d1.executeCloudflareD1Query("SELECT count(*) as count FROM store_settings;"),
+        d1.executeCloudflareD1Query("SELECT count(*) as count FROM inventory;"),
+        d1.executeCloudflareD1Query("SELECT count(*) as count FROM payments;"),
+        d1.executeCloudflareD1Query("SELECT count(*) as count FROM notifications;")
+      ]);
+      storeSettingsCount = (stRows && stRows.length > 0) ? (Number(stRows[0].count) || 0) : 0;
+      inventoryRowsCount = (invRows && invRows.length > 0) ? (Number(invRows[0].count) || 0) : 0;
+      paymentsRowsCount = (payRows && payRows.length > 0) ? (Number(payRows[0].count) || 0) : 0;
+      notificationsRowsCount = (notifRows && notifRows.length > 0) ? (Number(notifRows[0].count) || 0) : 0;
+    } else {
       storeSettingsCount = 1;
       inventoryRowsCount = products.length;
+      paymentsRowsCount = (await db.getPaymentsAsync()).length;
+      notificationsRowsCount = d1.getNotifications().length;
     }
 
     return res.json({
       success: true,
       status: "healthy",
       engine: "Cloudflare D1 Serverless (SQLite Dialect)",
-      databaseId: CLOUDFLARE_CONFIG.databaseId,
-      accountId: CLOUDFLARE_CONFIG.accountId ? `${CLOUDFLARE_CONFIG.accountId.substring(0, 6)}...` : '',
       isConnected: true,
       configured: health.configured,
       reachable: health.reachable,
@@ -610,14 +630,14 @@ export async function handleD1HealthAndStatus(req: Request, res: Response) {
         coupons: coupons.length,
         gallery_items: galleryItems.length,
         store_settings: storeSettingsCount,
-        payments: orders.length,
-        notifications: d1.getNotifications().length
+        payments: paymentsRowsCount,
+        notifications: notificationsRowsCount
       },
       message: "قاعدة بيانات Cloudflare D1 تعمل بكفاءة عالية وباتصال مباشر ومؤكد."
     });
   } catch (dataErr: any) {
-    console.error("D1 table count query error:", dataErr);
-    return res.status(500).json({
+    console.error("D1 table count query error:", sanitizeD1ErrorMessage(dataErr));
+    return res.status(503).json({
       success: false,
       isConnected: false,
       configured: health.configured,
@@ -625,7 +645,7 @@ export async function handleD1HealthAndStatus(req: Request, res: Response) {
       initialized: health.initialized,
       schemaValid: health.schemaValid,
       remoteCloudflareConnected: false,
-      error: dataErr?.message || "فشل قراءة جداول قاعدة البيانات",
+      error: "فشل قراءة جداول قاعدة البيانات",
       message: "حدث خطأ أثناء قراءة إحصائيات الجداول من Cloudflare D1"
     });
   }
@@ -638,8 +658,7 @@ app.get("/api/categories", async (req, res) => {
     const categories = await db.getCategoriesAsync();
     res.json({ success: true, data: categories });
   } catch (err: any) {
-    console.error("Categories query error:", err);
-    res.status(503).json({ success: false, message: "فشل استعلام الأقسام من قاعدة البيانات", error: err.message });
+    return respondSafeError(res, 503, "فشل استعلام الأقسام من قاعدة البيانات", err, "Categories");
   }
 });
 
@@ -648,8 +667,7 @@ app.get("/api/products", async (req, res) => {
     const products = await db.getProductsAsync();
     res.json({ success: true, data: products });
   } catch (err: any) {
-    console.error("Products query error:", err);
-    res.status(503).json({ success: false, message: "فشل استعلام المنتجات من قاعدة البيانات", error: err.message });
+    return respondSafeError(res, 503, "فشل استعلام المنتجات من قاعدة البيانات", err, "Products");
   }
 });
 
@@ -661,8 +679,7 @@ app.get("/api/products/:id", async (req, res) => {
     }
     res.json({ success: true, data: p });
   } catch (err: any) {
-    console.error("Product find error:", err);
-    res.status(503).json({ success: false, message: "فشل استعلام المنتج من قاعدة البيانات", error: err.message });
+    return respondSafeError(res, 503, "فشل استعلام المنتج من قاعدة البيانات", err, "ProductFind");
   }
 });
 
@@ -707,8 +724,7 @@ app.post("/api/products", requireRoles(['owner', 'admin']), async (req: Authenti
     const added = await db.addProductAsync(newProduct);
     res.json({ success: true, data: added });
   } catch (err: any) {
-    console.error("Add product error:", err);
-    res.status(500).json({ success: false, message: "فشل حفظ المنتج في قاعدة البيانات", error: err.message });
+    return respondSafeError(res, 500, "فشل حفظ المنتج في قاعدة البيانات", err, "AddProduct");
   }
 });
 
@@ -727,8 +743,7 @@ app.put("/api/products/:id", requireRoles(['owner', 'admin', 'employee']), async
     }
     res.json({ success: true, data: updated });
   } catch (err: any) {
-    console.error("Update product error:", err);
-    res.status(500).json({ success: false, message: "فشل تحديث المنتج في قاعدة البيانات", error: err.message });
+    return respondSafeError(res, 500, "فشل تحديث المنتج في قاعدة البيانات", err, "UpdateProduct");
   }
 });
 
@@ -738,8 +753,7 @@ app.delete("/api/products/:id", requireRoles(['owner', 'admin']), async (req: Au
     await db.deleteProductAsync(id);
     res.json({ success: true, message: "تم حذف المنتج بنجاح" });
   } catch (err: any) {
-    console.error("Delete product error:", err);
-    res.status(500).json({ success: false, message: "فشل حذف المنتج من قاعدة البيانات", error: err.message });
+    return respondSafeError(res, 500, "فشل حذف المنتج من قاعدة البيانات", err, "DeleteProduct");
   }
 });
 
@@ -829,8 +843,7 @@ app.post("/api/upload", requireRoles(['owner', 'admin', 'employee']), async (req
         console.error("CRITICAL: Failed to write upload to permanent disk storage in production:", fsErr?.message);
         return res.status(500).json({
           success: false,
-          message: "فشل حفظ الصورة على وحدة التخزين الدائمة بالسيرفر",
-          error: fsErr?.message
+          message: "فشل حفظ الصورة على وحدة التخزين الدائمة بالسيرفر"
         });
       }
       console.warn("Could not write to disk uploads in development, falling back to data URI preview:", fsErr?.message);
@@ -840,8 +853,7 @@ app.post("/api/upload", requireRoles(['owner', 'admin', 'employee']), async (req
       return res.json({ success: true, url: fallbackUrl, filename, storage: 'data-url', fallback: true });
     }
   } catch (error: any) {
-    console.error("Upload error:", error);
-    res.status(500).json({ success: false, message: "فشل حفظ الصورة على الخادم: " + (error?.message || '') });
+    return respondSafeError(res, 500, "فشل حفظ الصورة على الخادم", error, "Upload");
   }
 });
 
@@ -851,58 +863,57 @@ app.get("/api/inventory/transactions", requireRoles(['owner', 'admin', 'employee
     const transactions = await db.getInventoryTransactionsAsync();
     res.json({ success: true, data: transactions });
   } catch (err: any) {
-    console.error("Inventory transactions query error:", err);
-    res.status(503).json({ success: false, message: "فشل استعلام حركات المخزون من قاعدة البيانات", error: err.message });
+    return respondSafeError(res, 503, "فشل استعلام حركات المخزون من قاعدة البيانات", err, "InventoryTransactions");
   }
 });
 
 // Stock Adjustment
 app.post("/api/inventory/adjust", requireRoles(['owner', 'admin', 'employee']), async (req: AuthenticatedRequest, res) => {
-  const { productId, type, quantity, reason } = req.body;
-  if (!productId || typeof productId !== 'string') {
-    return res.status(400).json({ success: false, message: "يرجى تحديد المنتج المراد تعديل مخزونه" });
-  }
-
-  const allowedTypes = ['purchase', 'sale', 'adjustment', 'damage', 'return', 'STOCK_IN', 'STOCK_OUT'];
-  if (!type || !allowedTypes.includes(type)) {
-    return res.status(400).json({ success: false, message: "نوع عملية التعديل غير صالح" });
-  }
-
-  const qty = Number(quantity);
-  if (isNaN(qty) || !isFinite(qty)) {
-    return res.status(400).json({ success: false, message: "يرجى إدخال كمية رقمية صحيحة" });
-  }
-
-  const product = await db.findProductByIdAsync(productId);
-  if (!product) {
-    return res.status(404).json({ success: false, message: "المنتج غير موجود" });
-  }
-
-  const prevStock = product.stock;
-  let newStock = prevStock;
-
-  if (type === 'purchase' || type === 'return' || type === 'STOCK_IN') {
-    newStock = prevStock + Math.abs(qty);
-  } else if (type === 'sale' || type === 'damage' || type === 'STOCK_OUT') {
-    if (prevStock < Math.abs(qty)) {
-      return res.status(400).json({
-        success: false,
-        message: `المخزون الحالي (${prevStock}) غير كافٍ لخصم (${Math.abs(qty)}). لا يمكن أن يصبح المخزون سالباً.`
-      });
-    }
-    newStock = prevStock - Math.abs(qty);
-  } else if (type === 'adjustment') {
-    if (qty < 0) {
-      return res.status(400).json({ success: false, message: "لا يمكن أن يكون المخزون سالباً" });
-    }
-    newStock = Math.floor(qty);
-  }
-
-  const diff = newStock - prevStock;
-  const safeReason = sanitizeInputString(reason || '', 200) || 'تعديل جرد يدوي من لوحة التحكم';
-  const actor = req.user ? `${req.user.name || req.user.role} (${req.user.userId})` : 'الإدارة';
-
   try {
+    const { productId, type, quantity, reason } = req.body;
+    if (!productId || typeof productId !== 'string') {
+      return res.status(400).json({ success: false, message: "يرجى تحديد المنتج المراد تعديل مخزونه" });
+    }
+
+    const allowedTypes = ['purchase', 'sale', 'adjustment', 'damage', 'return', 'STOCK_IN', 'STOCK_OUT'];
+    if (!type || !allowedTypes.includes(type)) {
+      return res.status(400).json({ success: false, message: "نوع عملية التعديل غير صالح" });
+    }
+
+    const qty = Number(quantity);
+    if (isNaN(qty) || !isFinite(qty)) {
+      return res.status(400).json({ success: false, message: "يرجى إدخال كمية رقمية صحيحة" });
+    }
+
+    const product = await db.findProductByIdAsync(productId);
+    if (!product) {
+      return res.status(404).json({ success: false, message: "المنتج غير موجود" });
+    }
+
+    const prevStock = product.stock;
+    let newStock = prevStock;
+
+    if (type === 'purchase' || type === 'return' || type === 'STOCK_IN') {
+      newStock = prevStock + Math.abs(qty);
+    } else if (type === 'sale' || type === 'damage' || type === 'STOCK_OUT') {
+      if (prevStock < Math.abs(qty)) {
+        return res.status(400).json({
+          success: false,
+          message: `المخزون الحالي (${prevStock}) غير كافٍ لخصم (${Math.abs(qty)}). لا يمكن أن يصبح المخزون سالباً.`
+        });
+      }
+      newStock = prevStock - Math.abs(qty);
+    } else if (type === 'adjustment') {
+      if (qty < 0) {
+        return res.status(400).json({ success: false, message: "لا يمكن أن يكون المخزون سالباً" });
+      }
+      newStock = Math.floor(qty);
+    }
+
+    const diff = newStock - prevStock;
+    const safeReason = sanitizeInputString(reason || '', 200) || 'تعديل جرد يدوي من لوحة التحكم';
+    const actor = req.user ? `${req.user.name || req.user.role} (${req.user.userId})` : 'الإدارة';
+
     const result = await db.adjustProductStock({
       productId,
       type: type as any,
@@ -913,15 +924,17 @@ app.post("/api/inventory/adjust", requireRoles(['owner', 'admin', 'employee']), 
       performedBy: actor
     });
 
-    res.json({ success: true, data: result });
+    return res.json({ success: true, data: result });
   } catch (err: any) {
-    console.error("Stock adjustment failed:", err);
-    res.status(400).json({
-      success: false,
-      message: err.message?.includes('prevent_negative_stock')
-        ? "فشلت العملية: تم رفض تعديل المخزون لمنع القيمة السالبة"
-        : (err.message || "حدث خطأ أثناء تعديل المخزون")
-    });
+    console.error("Stock adjustment failed:", sanitizeD1ErrorMessage(err));
+    const msg = String(err?.message || '');
+    if (msg.includes('prevent_negative_stock')) {
+      return res.status(400).json({ success: false, message: "فشلت العملية: تم رفض تعديل المخزون لمنع القيمة السالبة" });
+    }
+    if (msg.includes('تغيّر بالتزامن')) {
+      return res.status(409).json({ success: false, message: msg });
+    }
+    return respondSafeError(res, 503, "حدث خطأ أثناء تعديل المخزون", err, "StockAdjust");
   }
 });
 
@@ -931,246 +944,315 @@ app.post("/api/inventory/adjust", requireRoles(['owner', 'admin', 'employee']), 
 
 // Create Order (Server-Side Recalculation of Prices & Coupon & Stock Validation)
 app.post("/api/orders", orderRateLimiter, async (req: AuthenticatedRequest, res) => {
-  const { items, address, customerName, customerPhone, paymentMethod, notes, couponCode } = req.body;
+  try {
+    const { items, address, customerName, customerPhone, paymentMethod, notes, couponCode } = req.body;
 
-  if (!items || !Array.isArray(items) || items.length === 0) {
-    return res.status(400).json({ success: false, message: "السلة فارغة، يرجى إضافة منتجات أولاً" });
-  }
-
-  // 1. Phone resolution: prefer valid phone sent with order, fallback to authenticated JWT phone
-  let resolvedPhone = (customerPhone && String(customerPhone).trim()) || req.user?.phone || '';
-
-  // 2. Name resolution hierarchy:
-  // - If customer sent a real, valid name, ALWAYS use it (never overwrite with old/generic name).
-  // - Else if account has a real valid name, use it.
-  // - Else if customer sent any non-empty name, use it.
-  // - Else if account has any non-empty name, use it.
-  // - Else fallback to clear default: 'عميل المتجر'
-  let resolvedName = '';
-  if (isRealValidCustomerName(customerName)) {
-    resolvedName = String(customerName).trim();
-  } else if (isRealValidCustomerName(req.user?.name)) {
-    resolvedName = String(req.user!.name).trim();
-  } else if (customerName && String(customerName).trim().length > 0) {
-    resolvedName = String(customerName).trim();
-  } else if (req.user?.name && String(req.user.name).trim().length > 0) {
-    resolvedName = String(req.user.name).trim();
-  } else {
-    resolvedName = 'عميل المتجر';
-  }
-
-  if (!resolvedPhone) {
-    return res.status(400).json({ success: false, message: "يرجى توفير رقم هاتف العميل لتأكيد التوصيل" });
-  }
-
-  const phoneValidation = validateYemeniPhone(resolvedPhone);
-  if (!phoneValidation.isValid) {
-    return res.status(400).json({ success: false, message: "يرجى إدخال رقم هاتف يمني صحيح (مثال: 77XXXXXXX أو 73XXXXXXX)" });
-  }
-  const cleanPhone = phoneValidation.normalized;
-  const safeCustomerName = sanitizeInputString(resolvedName, 80);
-
-  const rawAddress = address || req.body.deliveryAddress || req.body.shippingAddress;
-  const resolvedDistrict = (typeof rawAddress === 'object' && rawAddress?.district) 
-    ? rawAddress.district 
-    : (req.body.district || (typeof rawAddress === 'string' ? rawAddress : ''));
-  const resolvedStreet = (typeof rawAddress === 'object' && rawAddress?.street) 
-    ? rawAddress.street 
-    : (req.body.street || (typeof rawAddress === 'object' && (rawAddress?.streetAddress || rawAddress?.details)) || (typeof rawAddress === 'string' ? rawAddress : (req.body.addressDetails || '')));
-  const resolvedLandmark = (typeof rawAddress === 'object' && rawAddress?.landmark) 
-    ? rawAddress.landmark 
-    : (req.body.landmark || req.body.addressDetails || '');
-
-  if (!resolvedDistrict) {
-    return res.status(400).json({ success: false, message: "يرجى تحديد عنوان التوصيل داخل صنعاء" });
-  }
-
-  const safeAddress = {
-    district: sanitizeInputString(resolvedDistrict, 80),
-    street: sanitizeInputString(resolvedStreet || resolvedDistrict, 120),
-    landmark: sanitizeInputString(resolvedLandmark, 120),
-    city: "صنعاء"
-  };
-
-  const allProducts = await db.getProductsAsync();
-  const validatedItems: any[] = [];
-  let calculatedSubtotal = 0;
-
-  // 1. Validate Stock & Pricing Server-Side
-  for (const item of items) {
-    const targetId = item.productId || item.product?.id || item.id;
-    const product = allProducts.find(p => p.id === targetId);
-    if (!product) {
-      return res.status(400).json({ success: false, message: `المنتج (${item.productNameAr || item.nameAr || targetId}) غير متوفر في المتجر` });
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ success: false, message: "السلة فارغة، يرجى إضافة منتجات أولاً" });
     }
 
-    const orderQty = Math.max(1, parseInt(item.quantity, 10) || 1);
+    // 1. Phone resolution: prefer valid phone sent with order, fallback to authenticated JWT phone
+    let resolvedPhone = (customerPhone && String(customerPhone).trim()) || req.user?.phone || '';
 
-    if (product.stock < orderQty) {
-      return res.status(400).json({
-        success: false,
-        message: `عذراً! الكمية المطلوبة من "${product.nameAr}" (${orderQty}) تتجاوز المخزون المتاح حالياً (${product.stock} عبوة).`
+    // 2. Name resolution hierarchy:
+    let resolvedName = '';
+    if (isRealValidCustomerName(customerName)) {
+      resolvedName = String(customerName).trim();
+    } else if (isRealValidCustomerName(req.user?.name)) {
+      resolvedName = String(req.user!.name).trim();
+    } else if (customerName && String(customerName).trim().length > 0) {
+      resolvedName = String(customerName).trim();
+    } else if (req.user?.name && String(req.user.name).trim().length > 0) {
+      resolvedName = String(req.user.name).trim();
+    } else {
+      resolvedName = 'عميل المتجر';
+    }
+
+    if (!resolvedPhone) {
+      return res.status(400).json({ success: false, message: "يرجى توفير رقم هاتف العميل لتأكيد التوصيل" });
+    }
+
+    const phoneValidation = validateYemeniPhone(resolvedPhone);
+    if (!phoneValidation.isValid) {
+      return res.status(400).json({ success: false, message: "يرجى إدخال رقم هاتف يمني صحيح (مثال: 77XXXXXXX أو 73XXXXXXX)" });
+    }
+    const cleanPhone = phoneValidation.normalized;
+    const safeCustomerName = sanitizeInputString(resolvedName, 80);
+
+    const rawAddress = address || req.body.deliveryAddress || req.body.shippingAddress;
+    const resolvedDistrict = (typeof rawAddress === 'object' && rawAddress?.district) 
+      ? rawAddress.district 
+      : (req.body.district || (typeof rawAddress === 'string' ? rawAddress : ''));
+    const resolvedStreet = (typeof rawAddress === 'object' && rawAddress?.street) 
+      ? rawAddress.street 
+      : (req.body.street || (typeof rawAddress === 'object' && (rawAddress?.streetAddress || rawAddress?.details)) || (typeof rawAddress === 'string' ? rawAddress : (req.body.addressDetails || '')));
+    const resolvedLandmark = (typeof rawAddress === 'object' && rawAddress?.landmark) 
+      ? rawAddress.landmark 
+      : (req.body.landmark || req.body.addressDetails || '');
+
+    if (!resolvedDistrict) {
+      return res.status(400).json({ success: false, message: "يرجى تحديد عنوان التوصيل داخل صنعاء" });
+    }
+
+    const safeAddress = {
+      district: sanitizeInputString(resolvedDistrict, 80),
+      street: sanitizeInputString(resolvedStreet || resolvedDistrict, 120),
+      landmark: sanitizeInputString(resolvedLandmark, 120),
+      city: "صنعاء"
+    };
+
+    const allProducts = await db.getProductsAsync();
+    const validatedItems: any[] = [];
+    let calculatedSubtotal = 0;
+
+    // Helper for authoritative weight price resolution
+    const resolveAuthoritativeItemPrice = (product: Product, itemWeight?: string): number => {
+      if (itemWeight && product.weightOptions && product.weightOptions.length > 0) {
+        const cleanReqWeight = String(itemWeight).trim().toLowerCase();
+        const exactMatch = product.weightOptions.find(w => String(w.weight || '').trim().toLowerCase() === cleanReqWeight);
+        if (exactMatch) return Number(exactMatch.price);
+        const prefixMatch = product.weightOptions.find(w => {
+          const opt = String(w.weight || '').trim().toLowerCase();
+          return opt.startsWith(cleanReqWeight) || cleanReqWeight.startsWith(opt.split(' ')[0]);
+        });
+        if (prefixMatch) return Number(prefixMatch.price);
+      }
+      return Number(product.price);
+    };
+
+    const isCouponExpired = (validUntil?: string): boolean => {
+      if (!validUntil) return false;
+      const trimmed = String(validUntil).trim();
+      const targetTs = /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
+        ? new Date(`${trimmed}T23:59:59.999Z`).getTime()
+        : new Date(trimmed).getTime();
+      return !isNaN(targetTs) && targetTs < Date.now();
+    };
+
+    // 1. Validate Stock & Pricing Server-Side
+    for (const item of items) {
+      const targetId = item.productId || item.product?.id || item.id;
+      const product = allProducts.find(p => p.id === targetId);
+      if (!product) {
+        return res.status(400).json({ success: false, message: `المنتج (${item.productNameAr || item.nameAr || targetId}) غير متوفر في المتجر` });
+      }
+
+      const rawQty = Number(item.quantity);
+      if (!Number.isInteger(rawQty) || rawQty <= 0 || rawQty > 10000) {
+        return res.status(400).json({
+          success: false,
+          message: `الكمية المطلوبة للمنتج "${product.nameAr}" غير صالحة. يجب أن تكون رقماً صحيحاً موجباً.`
+        });
+      }
+      const orderQty = rawQty;
+
+      if (product.stock < orderQty) {
+        return res.status(400).json({
+          success: false,
+          message: `عذراً! الكمية المطلوبة من "${product.nameAr}" (${orderQty}) تتجاوز المخزون المتاح حالياً (${product.stock} عبوة).`
+        });
+      }
+
+      // Determine unit price strictly from verified database product records
+      const itemWeight = item.weight || item.selectedWeight || (item.product && item.product.weight);
+      const itemPrice = resolveAuthoritativeItemPrice(product, itemWeight);
+
+      calculatedSubtotal += (itemPrice * orderQty);
+
+      validatedItems.push({
+        productId: product.id,
+        productNameAr: product.nameAr,
+        productNameEn: product.nameEn,
+        weight: itemWeight || (product.weightOptions?.[0]?.weight || '250g'),
+        quantity: orderQty,
+        unitPrice: itemPrice,
+        totalPrice: itemPrice * orderQty
       });
     }
 
-    // Determine unit price strictly from verified database product records
-    const itemWeight = item.weight || item.selectedWeight || (item.product && item.product.weight);
-    let itemPrice = product.price;
-    if (itemWeight && product.weightOptions && product.weightOptions.length > 0) {
-      const matchOpt = product.weightOptions.find(w => w.weight === itemWeight);
-      if (matchOpt) {
-        itemPrice = matchOpt.price;
+    // 2. Validate Coupon Server-Side
+    let calculatedDiscount = 0;
+    if (couponCode) {
+      const coupon = await db.findCouponAsync(couponCode);
+      const isCouponValid = coupon && coupon.isActive && 
+        !isCouponExpired(coupon.validUntil) &&
+        (!coupon.maxUses || !coupon.usageCount || coupon.usageCount < coupon.maxUses);
+      if (isCouponValid && calculatedSubtotal >= coupon.minOrderAmount) {
+        const rawDiscount = (calculatedSubtotal * coupon.discountPercent) / 100;
+        calculatedDiscount = (coupon.maxDiscount && coupon.maxDiscount > 0)
+          ? Math.min(rawDiscount, coupon.maxDiscount)
+          : rawDiscount;
       }
     }
 
-    calculatedSubtotal += (itemPrice * orderQty);
+    // 3. Calculate Shipping Fee based on Store Settings & Threshold
+    const settings = await db.getSettingsAsync();
+    let calculatedShipping = Number(settings.defaultShippingFee || 800); // Default Sana'a delivery from settings
 
-    validatedItems.push({
-      productId: product.id,
-      productNameAr: product.nameAr,
-      productNameEn: product.nameEn,
-      weight: itemWeight || (product.weightOptions?.[0]?.weight || '250g'),
-      quantity: orderQty,
-      unitPrice: itemPrice,
-      totalPrice: itemPrice * orderQty
-    });
-  }
-
-  // 2. Validate Coupon Server-Side
-  let calculatedDiscount = 0;
-  if (couponCode) {
-    const coupon = await db.findCouponAsync(couponCode);
-    const isCouponValid = coupon && coupon.isActive && 
-      (!coupon.validUntil || new Date(coupon.validUntil).getTime() >= Date.now()) &&
-      (!coupon.maxUses || !coupon.usageCount || coupon.usageCount < coupon.maxUses);
-    if (isCouponValid && calculatedSubtotal >= coupon.minOrderAmount) {
-      const rawDiscount = (calculatedSubtotal * coupon.discountPercent) / 100;
-      calculatedDiscount = (coupon.maxDiscount && coupon.maxDiscount > 0)
-        ? Math.min(rawDiscount, coupon.maxDiscount)
-        : rawDiscount;
-    }
-  }
-
-  // 3. Calculate Shipping Fee based on Store Settings & Threshold
-  const settings = await db.getSettingsAsync();
-  let calculatedShipping = 800; // Default Sana'a delivery
-
-  if (safeAddress.district && settings.deliveryDistricts) {
-    const matchedDistrict = settings.deliveryDistricts.find(d => 
-      safeAddress.district.includes(d.nameAr) || d.nameAr.includes(safeAddress.district)
-    );
-    if (matchedDistrict) {
-      calculatedShipping = matchedDistrict.fee;
-    }
-  }
-
-  if (calculatedSubtotal >= (settings.freeDeliveryThreshold || 8000)) {
-    calculatedShipping = 0; // Free delivery threshold met!
-  }
-
-  const calculatedTotal = calculatedSubtotal + calculatedShipping - calculatedDiscount;
-
-  // 4. Extract Idempotency Key
-  const idempotencyKey = String(
-    req.headers['x-idempotency-key'] ||
-    req.headers['idempotency-key'] ||
-    req.body.idempotencyKey ||
-    req.body.clientRequestId ||
-    ''
-  ).trim();
-
-  // 5. Generate Order Identifier & Assign Driver from D1
-  const drivers = await db.getDeliveryAgentsAsync();
-  const activeDrivers = drivers.filter(d => d.isActive !== false && (d as any).is_active !== 0);
-  // Driver is only assigned if a verified active driver exists in D1, otherwise left unassigned until dispatch
-  const assignedDriver = activeDrivers.length > 0 ? {
-    id: activeDrivers[0].id,
-    name: activeDrivers[0].name,
-    phone: activeDrivers[0].phone
-  } : undefined;
-
-  // High-entropy, cryptographically unique order ID and customer-friendly order number with collision protection
-  let orderId = `ORD-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-  let orderNum = `BG-2026-${Date.now().toString().slice(-4)}${crypto.randomInt(1000, 9999)}`;
-  const existingOrders = await db.getOrdersAsync();
-  while (existingOrders.some(o => o.id === orderId || o.orderNumber === orderNum)) {
-    orderId = `ORD-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
-    orderNum = `BG-2026-${Date.now().toString().slice(-4)}${crypto.randomInt(1000, 9999)}`;
-  }
-  const now = new Date();
-  const timeFormatted = now.toLocaleTimeString("ar-YE", { hour: "2-digit", minute: "2-digit" });
-
-  // 6. Atomic Stock Deduction, Customer Upsert, Order & Items Creation
-  const atomicResult = await db.createOrderAtomic({
-    orderId,
-    orderNumber: orderNum,
-    customerName: safeCustomerName,
-    customerPhone: cleanPhone,
-    address: safeAddress,
-    validatedItems,
-    subtotal: calculatedSubtotal,
-    shippingFee: calculatedShipping,
-    discount: calculatedDiscount,
-    total: calculatedTotal,
-    paymentMethod: paymentMethod || "cod",
-    notes: sanitizeInputString(notes || '', 200),
-    couponCode: (calculatedDiscount > 0 && couponCode) ? String(couponCode).trim() : undefined,
-    idempotencyKey: idempotencyKey || undefined,
-    assignedDriver,
-    timeline: [
-      {
-        status: "received",
-        time: timeFormatted,
-        titleAr: "تم استلام الطلب وتأكيده بالنظام",
-        titleEn: "Order Received & Verified"
+    if (safeAddress.district && settings.deliveryDistricts) {
+      const matchedDistrict = settings.deliveryDistricts.find(d => 
+        safeAddress.district.includes(d.nameAr) || d.nameAr.includes(safeAddress.district)
+      );
+      if (matchedDistrict) {
+        calculatedShipping = matchedDistrict.fee;
       }
-    ],
-    date: now.toISOString().replace("T", " ").substring(0, 16)
-  });
+    }
 
-  if (!atomicResult.success || !atomicResult.order) {
-    return res.status(400).json({
-      success: false,
-      message: atomicResult.message || "فشلت عملية إنشاء الطلب لعدم توفر المخزون الكافي"
+    if (calculatedSubtotal >= (settings.freeDeliveryThreshold || 8000)) {
+      calculatedShipping = 0; // Free delivery threshold met!
+    }
+
+    const calculatedTotal = calculatedSubtotal + calculatedShipping - calculatedDiscount;
+
+    // 4. Extract Idempotency Key & Enforce Ownership (Prevent Cross-User IDOR via Key Reuse)
+    const idempotencyKey = String(
+      req.headers['x-idempotency-key'] ||
+      req.headers['idempotency-key'] ||
+      req.body.idempotencyKey ||
+      req.body.clientRequestId ||
+      ''
+    ).trim();
+
+    const verifyIdempotentOrderOwnership = (existingOrder: Order): boolean => {
+      const existingPhone = (existingOrder.customerPhone || '').replace(/\D/g, '');
+      const isManagement = req.user && ['owner', 'admin', 'employee'].includes(req.user.role);
+      if (isManagement) return true;
+      if (req.user?.role === 'customer') {
+        const jwtPhone = (req.user.phone || '').replace(/\D/g, '');
+        return Boolean(jwtPhone && existingPhone === jwtPhone && cleanPhone === jwtPhone);
+      }
+      if (req.user?.role === 'guest') {
+        const jwtPhone = (req.user.phone || '').replace(/\D/g, '');
+        const tokenOrderIds: string[] = Array.isArray((req.user as any).orderIds) ? (req.user as any).orderIds : [];
+        return (
+          existingPhone === cleanPhone &&
+          (!jwtPhone || jwtPhone === cleanPhone) &&
+          (tokenOrderIds.length === 0 || tokenOrderIds.includes(existingOrder.id) || (existingOrder.orderNumber ? tokenOrderIds.includes(existingOrder.orderNumber) : false))
+        );
+      }
+      // Unauthenticated caller with exact same phone (genuine network retry before guestToken persisted)
+      return existingPhone === cleanPhone;
+    };
+
+    if (idempotencyKey) {
+      let preExisting: Order | undefined;
+      if (d1.isD1Configured()) {
+        const rows = await d1.executeCloudflareD1Query("SELECT * FROM orders WHERE idempotency_key = ? LIMIT 1;", [idempotencyKey]).catch(() => []);
+        if (Array.isArray(rows) && rows.length > 0) {
+          preExisting = d1.mapD1OrderToOrder(rows[0]);
+        }
+      } else {
+        preExisting = d1.getOrders().find(o => o.idempotencyKey === idempotencyKey);
+      }
+      if (preExisting && !verifyIdempotentOrderOwnership(preExisting)) {
+        return res.status(409).json({
+          success: false,
+          message: "مفتاح الطلب (Idempotency Key) مستخدم مسبقاً لطلب آخر ولا يمكن مشاركته."
+        });
+      }
+    }
+
+    // 5. Generate Order Identifier & Assign Driver from D1
+    const drivers = await db.getDeliveryAgentsAsync();
+    const activeDrivers = drivers.filter(d => d.isActive !== false && (d as any).is_active !== 0);
+    // Driver is only assigned if a verified active driver exists in D1, otherwise left unassigned until dispatch
+    const assignedDriver = activeDrivers.length > 0 ? {
+      id: activeDrivers[0].id,
+      name: activeDrivers[0].name,
+      phone: activeDrivers[0].phone
+    } : undefined;
+
+    // High-entropy, cryptographically unique order ID and customer-friendly order number with collision protection
+    let orderId = `ORD-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    let orderNum = `BG-2026-${Date.now().toString().slice(-4)}${crypto.randomInt(1000, 9999)}`;
+    const existingOrders = await db.getOrdersAsync();
+    while (existingOrders.some(o => o.id === orderId || o.orderNumber === orderNum)) {
+      orderId = `ORD-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+      orderNum = `BG-2026-${Date.now().toString().slice(-4)}${crypto.randomInt(1000, 9999)}`;
+    }
+    const now = new Date();
+    const timeFormatted = now.toLocaleTimeString("ar-YE", { hour: "2-digit", minute: "2-digit" });
+
+    // 6. Atomic Stock Deduction, Customer Upsert, Order & Items Creation
+    const atomicResult = await db.createOrderAtomic({
+      orderId,
+      orderNumber: orderNum,
+      customerName: safeCustomerName,
+      customerPhone: cleanPhone,
+      address: safeAddress,
+      validatedItems,
+      subtotal: calculatedSubtotal,
+      shippingFee: calculatedShipping,
+      discount: calculatedDiscount,
+      total: calculatedTotal,
+      paymentMethod: paymentMethod || "cod",
+      notes: sanitizeInputString(notes || '', 200),
+      couponCode: (calculatedDiscount > 0 && couponCode) ? String(couponCode).trim() : undefined,
+      idempotencyKey: idempotencyKey || undefined,
+      assignedDriver,
+      timeline: [
+        {
+          status: "received",
+          time: timeFormatted,
+          titleAr: "تم استلام الطلب وتأكيده بالنظام",
+          titleEn: "Order Received & Verified"
+        }
+      ],
+      date: now.toISOString().replace("T", " ").substring(0, 16)
     });
-  }
 
-  const createdOrder = atomicResult.order;
+    if (!atomicResult.success || !atomicResult.order) {
+      return res.status(400).json({
+        success: false,
+        message: atomicResult.message || "فشلت عملية إنشاء الطلب لعدم توفر المخزون الكافي"
+      });
+    }
 
-  // Issue Cryptographically Signed Guest Session Token for non-logged-in customers
-  let guestToken: string | undefined;
-  if (!req.user || req.user.role === 'guest') {
-    const existingOrderIds = (req.user as any)?.orderIds || [];
-    const mergedOrderIds = Array.from(new Set([
-      ...existingOrderIds,
-      createdOrder.id,
-      createdOrder.orderNumber
-    ].filter(Boolean)));
-    guestToken = generateToken({
-      userId: req.user?.userId || `guest-${cleanPhone}`,
-      role: 'guest',
-      phone: cleanPhone,
-      name: safeCustomerName,
-      orderIds: mergedOrderIds,
-      isGuest: true
+    const createdOrder = atomicResult.order;
+    if ((atomicResult as any).isDuplicate && !verifyIdempotentOrderOwnership(createdOrder)) {
+      return res.status(409).json({
+        success: false,
+        message: "مفتاح الطلب (Idempotency Key) مستخدم مسبقاً لطلب آخر ولا يمكن مشاركته."
+      });
+    }
+
+    // Issue Cryptographically Signed Guest Session Token for non-logged-in customers
+    let guestToken: string | undefined;
+    if (!req.user || req.user.role === 'guest') {
+      const existingOrderIds = (req.user as any)?.orderIds || [];
+      const mergedOrderIds = Array.from(new Set([
+        ...existingOrderIds,
+        createdOrder.id,
+        createdOrder.orderNumber
+      ].filter(Boolean)));
+      guestToken = generateToken({
+        userId: req.user?.userId || `guest-${cleanPhone}`,
+        role: 'guest',
+        phone: cleanPhone,
+        name: safeCustomerName,
+        orderIds: mergedOrderIds,
+        isGuest: true
+      });
+    }
+
+    // Log Analytics Event
+    db.logAnalyticsEvent('purchase', {
+      orderId: createdOrder.id,
+      orderNumber: createdOrder.orderNumber,
+      total: createdOrder.total,
+      itemsCount: validatedItems.length
+    }, req.user?.userId);
+
+    return res.json({
+      success: true,
+      data: createdOrder,
+      guestToken,
+      isDuplicate: (atomicResult as any).isDuplicate || false,
+      message: (atomicResult as any).isDuplicate ? "تم استرجاع الطلب المسجل مسبقاً" : "تم إنشاء الطلب وتسجيله بنجاح!"
     });
+  } catch (err: any) {
+    return respondSafeError(res, 503, "تعذر إنشاء الطلب بسبب خطأ في الاتصال بقاعدة البيانات. يرجى المحاولة لاحقاً.", err, "CreateOrder");
   }
-
-  // Log Analytics Event
-  db.logAnalyticsEvent('purchase', {
-    orderId: createdOrder.id,
-    orderNumber: createdOrder.orderNumber,
-    total: createdOrder.total,
-    itemsCount: validatedItems.length
-  }, req.user?.userId);
-
-  res.json({
-    success: true,
-    data: createdOrder,
-    guestToken,
-    isDuplicate: (atomicResult as any).isDuplicate || false,
-    message: (atomicResult as any).isDuplicate ? "تم استرجاع الطلب المسجل مسبقاً" : "تم إنشاء الطلب وتسجيله بنجاح!"
-  });
 });
 
 // Admin, Delivery, and Customer Orders List with Strict Role Enforcement
@@ -1179,40 +1261,44 @@ app.get("/api/orders", async (req: AuthenticatedRequest, res) => {
     return res.status(401).json({ success: false, message: "يتطلب الوصول إلى قائمة الطلبات تسجيل الدخول" });
   }
 
-  const allOrders = await db.getOrdersAsync();
+  try {
+    const allOrders = await db.getOrdersAsync();
 
-  // If user role is delivery driver / mandoub, filter strictly their assigned orders
-  if (['delivery', 'mandoub'].includes(req.user.role)) {
-    const cleanPhone = req.user.phone ? req.user.phone.replace(/\D/g, '') : '';
-    const driverOrders = allOrders.filter(o => 
-      o.driverId === req.user?.userId || 
-      (cleanPhone && o.driverPhone && o.driverPhone.replace(/\D/g, '') === cleanPhone)
-    );
-    return res.json({ success: true, data: driverOrders });
+    // If user role is delivery driver / mandoub, filter strictly their assigned orders
+    if (['delivery', 'mandoub'].includes(req.user.role)) {
+      const cleanPhone = req.user.phone ? req.user.phone.replace(/\D/g, '') : '';
+      const driverOrders = allOrders.filter(o => 
+        o.driverId === req.user?.userId || 
+        (cleanPhone && o.driverPhone && o.driverPhone.replace(/\D/g, '') === cleanPhone)
+      );
+      return res.json({ success: true, data: driverOrders });
+    }
+
+    // If user role is admin, owner, or employee, return all orders
+    if (['owner', 'admin', 'employee'].includes(req.user.role)) {
+      return res.json({ success: true, data: allOrders });
+    }
+
+    // If user role is customer, return only their orders
+    if (req.user.role === 'customer' && req.user.phone) {
+      const cleanPhone = req.user.phone.replace(/\D/g, '');
+      const customerOrders = allOrders.filter(o => o.customerPhone && o.customerPhone.replace(/\D/g, '') === cleanPhone);
+      return res.json({ success: true, data: customerOrders });
+    }
+
+    // If user role is guest, return strictly authorized orders
+    if (req.user.role === 'guest') {
+      const authorizedOrderIds = (req.user as any).orderIds || [];
+      const guestOrders = allOrders.filter(o => 
+        authorizedOrderIds.includes(o.id) || (o.orderNumber && authorizedOrderIds.includes(o.orderNumber))
+      );
+      return res.json({ success: true, data: guestOrders });
+    }
+
+    return res.status(403).json({ success: false, message: "ليس لديك صلاحية لعرض قائمة الطلبات" });
+  } catch (err: any) {
+    return respondSafeError(res, 503, "فشل استعلام الطلبات من قاعدة البيانات", err, "GetOrders");
   }
-
-  // If user role is admin, owner, or employee, return all orders
-  if (['owner', 'admin', 'employee'].includes(req.user.role)) {
-    return res.json({ success: true, data: allOrders });
-  }
-
-  // If user role is customer, return only their orders
-  if (req.user.role === 'customer' && req.user.phone) {
-    const cleanPhone = req.user.phone.replace(/\D/g, '');
-    const customerOrders = allOrders.filter(o => o.customerPhone && o.customerPhone.replace(/\D/g, '') === cleanPhone);
-    return res.json({ success: true, data: customerOrders });
-  }
-
-  // If user role is guest, return strictly authorized orders
-  if (req.user.role === 'guest') {
-    const authorizedOrderIds = (req.user as any).orderIds || [];
-    const guestOrders = allOrders.filter(o => 
-      authorizedOrderIds.includes(o.id) || (o.orderNumber && authorizedOrderIds.includes(o.orderNumber))
-    );
-    return res.json({ success: true, data: guestOrders });
-  }
-
-  return res.status(403).json({ success: false, message: "ليس لديك صلاحية لعرض قائمة الطلبات" });
 });
 
 // Customer's Personal Orders (My Orders with Strict JWT Ownership & Guest Session Isolation)
@@ -1221,95 +1307,103 @@ app.get("/api/my-orders", async (req: AuthenticatedRequest, res) => {
     return res.status(401).json({ success: false, message: "يتطلب عرض طلباتي تسجيل الدخول أو جلسة زائر موثقة" });
   }
 
-  // Management can view all or filtered
-  if (['owner', 'admin', 'employee'].includes(req.user.role)) {
-    const phone = req.query.phone as string;
-    if (phone) {
-      const clean = phone.replace(/\D/g, '');
-      const filtered = await db.getOrdersAsync({ phone: clean });
-      return res.json({ success: true, data: filtered });
+  try {
+    // Management can view all or filtered
+    if (['owner', 'admin', 'employee'].includes(req.user.role)) {
+      const phone = req.query.phone as string;
+      if (phone) {
+        const clean = phone.replace(/\D/g, '');
+        const filtered = await db.getOrdersAsync({ phone: clean });
+        return res.json({ success: true, data: filtered });
+      }
+      const allOrders = await db.getOrdersAsync();
+      return res.json({ success: true, data: allOrders });
     }
-    const allOrders = await db.getOrdersAsync();
-    return res.json({ success: true, data: allOrders });
-  }
 
-  // Guest Session: strictly restricted to orders created under their cryptographic guest token
-  if (req.user.role === 'guest') {
-    const authorizedOrderIds = (req.user as any).orderIds || [];
-    if (!Array.isArray(authorizedOrderIds) || authorizedOrderIds.length === 0) {
-      return res.json({ success: true, data: [] });
+    // Guest Session: strictly restricted to orders created under their cryptographic guest token
+    if (req.user.role === 'guest') {
+      const authorizedOrderIds = (req.user as any).orderIds || [];
+      if (!Array.isArray(authorizedOrderIds) || authorizedOrderIds.length === 0) {
+        return res.json({ success: true, data: [] });
+      }
+      const allOrders = await db.getOrdersAsync();
+      const myOrders = allOrders.filter(o => 
+        authorizedOrderIds.includes(o.id) || (o.orderNumber && authorizedOrderIds.includes(o.orderNumber))
+      );
+      return res.json({ success: true, data: myOrders });
     }
-    const allOrders = await db.getOrdersAsync();
-    const myOrders = allOrders.filter(o => 
-      authorizedOrderIds.includes(o.id) || (o.orderNumber && authorizedOrderIds.includes(o.orderNumber))
-    );
-    return res.json({ success: true, data: myOrders });
-  }
 
-  // Customer must only see orders belonging to their authenticated JWT phone
-  if (req.user.role === 'customer' && req.user.phone) {
-    const clean = req.user.phone.replace(/\D/g, '');
-    const myOrders = await db.getOrdersAsync({ phone: clean });
-    return res.json({ success: true, data: myOrders });
-  }
+    // Customer must only see orders belonging to their authenticated JWT phone
+    if (req.user.role === 'customer' && req.user.phone) {
+      const clean = req.user.phone.replace(/\D/g, '');
+      const myOrders = await db.getOrdersAsync({ phone: clean });
+      return res.json({ success: true, data: myOrders });
+    }
 
-  // Delivery Driver / Mandoub: Can view ONLY orders assigned to them (No visibility to other drivers or unassigned pool)
-  if (['delivery', 'mandoub'].includes(req.user.role)) {
-    const allOrders = await db.getOrdersAsync();
-    const cleanPhone = req.user.phone ? req.user.phone.replace(/\D/g, '') : '';
-    const driverOrders = allOrders.filter(o => {
-      const isMine = o.driverId === req.user?.userId ||
-                     (cleanPhone && o.driverPhone && o.driverPhone.replace(/\D/g, '') === cleanPhone);
-      return isMine;
-    });
-    return res.json({ success: true, data: driverOrders });
-  }
+    // Delivery Driver / Mandoub: Can view ONLY orders assigned to them (No visibility to other drivers or unassigned pool)
+    if (['delivery', 'mandoub'].includes(req.user.role)) {
+      const allOrders = await db.getOrdersAsync();
+      const cleanPhone = req.user.phone ? req.user.phone.replace(/\D/g, '') : '';
+      const driverOrders = allOrders.filter(o => {
+        const isMine = o.driverId === req.user?.userId ||
+                       (cleanPhone && o.driverPhone && o.driverPhone.replace(/\D/g, '') === cleanPhone);
+        return isMine;
+      });
+      return res.json({ success: true, data: driverOrders });
+    }
 
-  return res.status(403).json({ success: false, message: "غير مصرح لك بعرض هذه الطلبات" });
+    return res.status(403).json({ success: false, message: "غير مصرح لك بعرض هذه الطلبات" });
+  } catch (err: any) {
+    return respondSafeError(res, 503, "فشل استعلام الطلبات من قاعدة البيانات", err, "MyOrders");
+  }
 });
 
 // Order Public Tracking (Single Order Status & Milestone Timeline by Exact Order Number or ID)
 app.get("/api/orders/track/:query", trackingRateLimiter, async (req, res) => {
-  const rawQ = req.params.query.trim().toUpperCase();
-  const q = rawQ.replace(/^#/, '').trim();
-  if (!q || q.length < 4) {
-    return res.status(400).json({ success: false, message: "يرجى إدخال رقم الطلب كاملاً (مثال: BG-2026-1049)" });
-  }
-
-  // Strict matching only: full ID, exact orderNumber, or exact numeric suffix (e.g. 1049 -> BG-2026-1049)
-  // NEVER allow fuzzy substring or partial endsWith probing to prevent enumeration of other customers' orders!
-  const allOrders = await db.getOrdersAsync();
-  const order = allOrders.find(o => {
-    const oId = (o.id || '').toUpperCase();
-    const oNum = (o.orderNumber || '').toUpperCase();
-    return oId === q || 
-      oNum === q ||
-      (/^\d+$/.test(q) && oNum === `BG-2026-${q}`);
-  });
-
-  if (!order) {
-    return res.status(404).json({ success: false, message: "لم يتم العثور على الطلب. تأكد من إدخال رقم الطلب كاملاً." });
-  }
-
-  // Sanitized public tracking response: strictly NO customer phone, street, landmark, driver name, or driver phone
-  // Only public status milestones without private internal notes
-  const publicTimeline = (order.timeline || []).map((t: any) => ({
-    status: t.status,
-    titleAr: t.titleAr || t.title,
-    titleEn: t.titleEn,
-    time: t.time
-  }));
-
-  res.json({
-    success: true,
-    data: {
-      orderNumber: order.orderNumber,
-      status: order.status,
-      date: order.date,
-      itemsCount: Array.isArray(order.items) ? order.items.reduce((acc, it) => acc + (Number(it.quantity) || 1), 0) : 1,
-      timeline: publicTimeline
+  try {
+    const rawQ = req.params.query.trim().toUpperCase();
+    const q = rawQ.replace(/^#/, '').trim();
+    if (!q || q.length < 4) {
+      return res.status(400).json({ success: false, message: "يرجى إدخال رقم الطلب كاملاً (مثال: BG-2026-1049)" });
     }
-  });
+
+    // Strict matching only: full ID, exact orderNumber, or exact numeric suffix (e.g. 1049 -> BG-2026-1049)
+    // NEVER allow fuzzy substring or partial endsWith probing to prevent enumeration of other customers' orders!
+    const allOrders = await db.getOrdersAsync();
+    const order = allOrders.find(o => {
+      const oId = (o.id || '').toUpperCase();
+      const oNum = (o.orderNumber || '').toUpperCase();
+      return oId === q || 
+        oNum === q ||
+        (/^\d+$/.test(q) && oNum === `BG-2026-${q}`);
+    });
+
+    if (!order) {
+      return res.status(404).json({ success: false, message: "لم يتم العثور على الطلب. تأكد من إدخال رقم الطلب كاملاً." });
+    }
+
+    // Sanitized public tracking response: strictly NO customer phone, street, landmark, driver name, or driver phone
+    // Only public status milestones without private internal notes
+    const publicTimeline = (order.timeline || []).map((t: any) => ({
+      status: t.status,
+      titleAr: t.titleAr || t.title,
+      titleEn: t.titleEn,
+      time: t.time
+    }));
+
+    return res.json({
+      success: true,
+      data: {
+        orderNumber: order.orderNumber,
+        status: order.status,
+        date: order.date,
+        itemsCount: Array.isArray(order.items) ? order.items.reduce((acc, it) => acc + (Number(it.quantity) || 1), 0) : 1,
+        timeline: publicTimeline
+      }
+    });
+  } catch (err: any) {
+    return respondSafeError(res, 503, "فشل تتبع الطلب من قاعدة البيانات", err, "OrderTrack");
+  }
 });
 
 // Get Single Order by ID (Strict Ownership & RBAC)
@@ -1318,28 +1412,32 @@ app.get("/api/orders/:id", async (req: AuthenticatedRequest, res) => {
     return res.status(401).json({ success: false, message: "يتطلب الوصول إلى تفاصيل الطلب تسجيل الدخول" });
   }
 
-  const order = await db.findOrderByIdAsync(req.params.id);
-  if (!order) {
-    return res.status(404).json({ success: false, message: "الطلب غير موجود" });
+  try {
+    const order = await db.findOrderByIdAsync(req.params.id);
+    if (!order) {
+      return res.status(404).json({ success: false, message: "الطلب غير موجود" });
+    }
+
+    const isManagement = ['owner', 'admin', 'employee'].includes(req.user.role);
+    const isCustomerOwner = req.user.role === 'customer' && req.user.phone && order.customerPhone && (
+      req.user.phone.replace(/\D/g, '') === order.customerPhone.replace(/\D/g, '')
+    );
+    const isGuestOwner = req.user.role === 'guest' && Array.isArray((req.user as any).orderIds) && (
+      (req.user as any).orderIds.includes(order.id) || (order.orderNumber && (req.user as any).orderIds.includes(order.orderNumber))
+    );
+    const isDriver = ['delivery', 'mandoub'].includes(req.user.role) && (
+      order.driverId === req.user.userId || 
+      (req.user.phone && order.driverPhone && order.driverPhone.replace(/\D/g, '') === req.user.phone.replace(/\D/g, ''))
+    );
+
+    if (!isManagement && !isCustomerOwner && !isGuestOwner && !isDriver) {
+      return res.status(403).json({ success: false, message: "غير مصرح لك بعرض تفاصيل هذا الطلب" });
+    }
+
+    return res.json({ success: true, data: order });
+  } catch (err: any) {
+    return respondSafeError(res, 503, "فشل استعلام تفاصيل الطلب من قاعدة البيانات", err, "GetOrderById");
   }
-
-  const isManagement = ['owner', 'admin', 'employee'].includes(req.user.role);
-  const isCustomerOwner = req.user.role === 'customer' && req.user.phone && order.customerPhone && (
-    req.user.phone.replace(/\D/g, '') === order.customerPhone.replace(/\D/g, '')
-  );
-  const isGuestOwner = req.user.role === 'guest' && Array.isArray((req.user as any).orderIds) && (
-    (req.user as any).orderIds.includes(order.id) || (order.orderNumber && (req.user as any).orderIds.includes(order.orderNumber))
-  );
-  const isDriver = ['delivery', 'mandoub'].includes(req.user.role) && (
-    order.driverId === req.user.userId || 
-    (req.user.phone && order.driverPhone && order.driverPhone.replace(/\D/g, '') === req.user.phone.replace(/\D/g, ''))
-  );
-
-  if (!isManagement && !isCustomerOwner && !isGuestOwner && !isDriver) {
-    return res.status(403).json({ success: false, message: "غير مصرح لك بعرض تفاصيل هذا الطلب" });
-  }
-
-  res.json({ success: true, data: order });
 });
 
 // Relational Order Items from D1 (Protected with RBAC)
@@ -1348,93 +1446,105 @@ app.get("/api/orders/:id/items", async (req: AuthenticatedRequest, res) => {
     return res.status(401).json({ success: false, message: "يتطلب الوصول إلى تفاصيل عناصر الطلب تسجيل الدخول" });
   }
 
-  const order = await db.findOrderByIdAsync(req.params.id);
-  if (!order) {
-    return res.status(404).json({ success: false, message: "الطلب غير موجود" });
+  try {
+    const order = await db.findOrderByIdAsync(req.params.id);
+    if (!order) {
+      return res.status(404).json({ success: false, message: "الطلب غير موجود" });
+    }
+
+    const isManagement = ['owner', 'admin', 'employee'].includes(req.user.role);
+    const isCustomerOwner = req.user.role === 'customer' && req.user.phone && order.customerPhone && (
+      req.user.phone.replace(/\D/g, '') === order.customerPhone.replace(/\D/g, '')
+    );
+    const isGuestOwner = req.user.role === 'guest' && Array.isArray((req.user as any).orderIds) && (
+      (req.user as any).orderIds.includes(order.id) || (order.orderNumber && (req.user as any).orderIds.includes(order.orderNumber))
+    );
+    const isDriver = ['delivery', 'mandoub'].includes(req.user.role) && (
+      order.driverId === req.user.userId || 
+      (req.user.phone && order.driverPhone && order.driverPhone.replace(/\D/g, '') === req.user.phone.replace(/\D/g, ''))
+    );
+
+    if (!isManagement && !isCustomerOwner && !isGuestOwner && !isDriver) {
+      return res.status(403).json({ success: false, message: "غير مصرح لك بعرض تفاصيل هذا الطلب" });
+    }
+
+    const items = await db.getOrderItemsAsync(req.params.id);
+    return res.json({ success: true, data: items });
+  } catch (err: any) {
+    return respondSafeError(res, 503, "فشل استعلام عناصر الطلب من قاعدة البيانات", err, "GetOrderItems");
   }
-
-  const isManagement = ['owner', 'admin', 'employee'].includes(req.user.role);
-  const isCustomerOwner = req.user.role === 'customer' && req.user.phone && order.customerPhone && (
-    req.user.phone.replace(/\D/g, '') === order.customerPhone.replace(/\D/g, '')
-  );
-  const isGuestOwner = req.user.role === 'guest' && Array.isArray((req.user as any).orderIds) && (
-    (req.user as any).orderIds.includes(order.id) || (order.orderNumber && (req.user as any).orderIds.includes(order.orderNumber))
-  );
-  const isDriver = ['delivery', 'mandoub'].includes(req.user.role) && (
-    order.driverId === req.user.userId || 
-    (req.user.phone && order.driverPhone && order.driverPhone.replace(/\D/g, '') === req.user.phone.replace(/\D/g, ''))
-  );
-
-  if (!isManagement && !isCustomerOwner && !isGuestOwner && !isDriver) {
-    return res.status(403).json({ success: false, message: "غير مصرح لك بعرض تفاصيل هذا الطلب" });
-  }
-
-  const items = await db.getOrderItemsAsync(req.params.id);
-  res.json({ success: true, data: items });
 });
 
 // Update Order Status (Strict RBAC: Management & Assigned Driver Only)
 app.patch("/api/orders/:id/status", async (req: AuthenticatedRequest, res) => {
-  const { id } = req.params;
-  const { status, driverNotes, driverId, driverName, driverPhone } = req.body;
-
   if (!req.user) {
     return res.status(401).json({ success: false, message: "يتطلب هذا الإجراء تسجيل الدخول أولاً" });
   }
 
-  const order = await db.findOrderByIdAsync(id);
-  if (!order) {
-    return res.status(404).json({ success: false, message: "الطلب غير موجود" });
-  }
-
-  const isManagement = ['owner', 'admin', 'employee'].includes(req.user.role);
-  const isDriverRole = ['delivery', 'mandoub'].includes(req.user.role);
-  const isAssignedDriver = isDriverRole && (
-    order.driverId === req.user.userId || 
-    (req.user.phone && order.driverPhone && order.driverPhone.replace(/\D/g, '') === req.user.phone.replace(/\D/g, ''))
-  );
-
-  // Strict check: Non-management drivers CANNOT self-assign or claim unassigned orders
-  if (!isManagement && !isAssignedDriver) {
-    return res.status(403).json({ 
-      success: false, 
-      message: "غير مصرح لك بتغيير حالة هذا الطلب. فقط إدارة المتجر أو المندوب المسند إليه الطلب يمكنهما ذلك." 
-    });
-  }
-
-  // Drivers can only update delivery lifecycle stages:
-  // assigned (قبول الشحنة) -> preparing / shipped (استلام الشحنة) -> on_way / delivering (في الطريق) -> delivered (تم التسليم واستلام المبلغ)
-  if (!isManagement && isAssignedDriver) {
-    if (!['assigned', 'preparing', 'shipped', 'on_way', 'delivering', 'delivered'].includes(status)) {
-      return res.status(403).json({ success: false, message: "مندوب التوصيل يمكنه فقط تحديث مراحل استلام ومسار الشحنة أو إتمام التسليم" });
-    }
-  }
-
-  let driverInfo: { driverId?: string; driverName?: string; driverPhone?: string } | undefined;
-
-  // Update Driver Assignment if requested by Admin/Management
-  if (isManagement && (driverId || driverName)) {
-    const agents = await db.getDeliveryAgentsAsync();
-    const verifiedAgent = agents.find(a => a.id === driverId || (driverName && a.name.trim() === driverName.trim()));
-    if (!verifiedAgent) {
-      return res.status(400).json({ success: false, message: "المندوب المحدد غير موجود في سجل المناديب المعتمدين" });
-    }
-    driverInfo = {
-      driverId: verifiedAgent.id,
-      driverName: verifiedAgent.name,
-      driverPhone: verifiedAgent.phone
-    };
-    await db.updateOrderDriverAsync(id, driverInfo.driverId!, driverInfo.driverName!, driverInfo.driverPhone!);
-  }
-
-  const actor = `${req.user.name || req.user.role} (${req.user.phone || req.user.userId})`;
-
   try {
+    const { id } = req.params;
+    const { status, driverNotes, driverId, driverName } = req.body;
+
+    const order = await db.findOrderByIdAsync(id);
+    if (!order) {
+      return res.status(404).json({ success: false, message: "الطلب غير موجود" });
+    }
+
+    const isManagement = ['owner', 'admin', 'employee'].includes(req.user.role);
+    const isDriverRole = ['delivery', 'mandoub'].includes(req.user.role);
+    const isAssignedDriver = isDriverRole && (
+      order.driverId === req.user.userId || 
+      (req.user.phone && order.driverPhone && order.driverPhone.replace(/\D/g, '') === req.user.phone.replace(/\D/g, ''))
+    );
+
+    // Strict check: Non-management drivers CANNOT self-assign or claim unassigned orders
+    if (!isManagement && !isAssignedDriver) {
+      return res.status(403).json({ 
+        success: false, 
+        message: "غير مصرح لك بتغيير حالة هذا الطلب. فقط إدارة المتجر أو المندوب المسند إليه الطلب يمكنهما ذلك." 
+      });
+    }
+
+    // Drivers can only update delivery lifecycle stages
+    if (!isManagement && isAssignedDriver) {
+      if (!['assigned', 'preparing', 'shipped', 'on_way', 'delivering', 'delivered'].includes(status)) {
+        return res.status(403).json({ success: false, message: "مندوب التوصيل يمكنه فقط تحديث مراحل استلام ومسار الشحنة أو إتمام التسليم" });
+      }
+    }
+
+    let driverInfo: { driverId?: string; driverName?: string; driverPhone?: string } | undefined;
+
+    // Update Driver Assignment if requested by Admin/Management
+    if (isManagement && (driverId || driverName)) {
+      const agents = await db.getDeliveryAgentsAsync();
+      const verifiedAgent = agents.find(a => a.id === driverId || (driverName && a.name.trim() === driverName.trim()));
+      if (!verifiedAgent) {
+        return res.status(400).json({ success: false, message: "المندوب المحدد غير موجود في سجل المناديب المعتمدين" });
+      }
+      driverInfo = {
+        driverId: verifiedAgent.id,
+        driverName: verifiedAgent.name,
+        driverPhone: verifiedAgent.phone
+      };
+      await db.updateOrderDriverAsync(id, driverInfo.driverId!, driverInfo.driverName!, driverInfo.driverPhone!);
+    }
+
+    const actor = `${req.user.name || req.user.role} (${req.user.phone || req.user.userId})`;
     const targetStatus = status || (driverInfo ? 'assigned' : order.status);
     const updated = await db.updateOrderStatus(id, targetStatus, driverNotes, actor, driverInfo);
-    res.json({ success: true, data: updated });
+    if (!updated) {
+      return res.status(404).json({ success: false, message: "الطلب غير موجود" });
+    }
+    return res.json({ success: true, data: updated });
   } catch (err: any) {
-    res.status(400).json({ success: false, message: err.message || "فشل تحديث حالة الطلب" });
+    if (isDatabaseConnectivityError(err)) {
+      return respondSafeError(res, 503, "فشل تحديث حالة الطلب لتعذر الاتصال بقاعدة البيانات", err, "UpdateOrderStatus");
+    }
+    const msg = sanitizeD1ErrorMessage(err) || "فشل تحديث حالة الطلب";
+    if (msg.includes('تغيرت بالتزامن')) {
+      return res.status(409).json({ success: false, message: msg });
+    }
+    return res.status(400).json({ success: false, message: msg });
   }
 });
 
@@ -1448,108 +1558,319 @@ app.post("/api/orders/:id/assign-driver", async (req: AuthenticatedRequest, res)
     return res.status(403).json({ success: false, message: "غير مصرح لك بتعيين المناديب. هذه العملية مقتصرة على الإدارة." });
   }
 
-  const { id } = req.params;
-  const { driverId, driverName, driverNotes, setStatusToAssigned } = req.body || {};
+  try {
+    const { id } = req.params;
+    const { driverId, driverName, driverNotes, setStatusToAssigned } = req.body || {};
 
-  const order = await db.findOrderByIdAsync(id);
-  if (!order) {
-    return res.status(404).json({ success: false, message: "الطلب غير موجود" });
+    const order = await db.findOrderByIdAsync(id);
+    if (!order) {
+      return res.status(404).json({ success: false, message: "الطلب غير موجود" });
+    }
+
+    // Lookup verified agent from D1
+    const agents = await db.getDeliveryAgentsAsync();
+    const verifiedAgent = agents.find(a => a.id === driverId || (driverName && a.name.trim() === driverName.trim()));
+
+    if (!verifiedAgent) {
+      return res.status(400).json({ success: false, message: "المندوب المحدد غير موجود في سجل المناديب المعتمدين" });
+    }
+
+    const finalDriver = verifiedAgent;
+    const actor = `${req.user.name || req.user.role} (${req.user.phone || req.user.userId})`;
+
+    await db.updateOrderDriverAsync(id, finalDriver.id, finalDriver.name, finalDriver.phone);
+
+    const nextStatus = setStatusToAssigned ? 'assigned' : (['pending', 'received'].includes(order.status) ? 'assigned' : order.status);
+    const updated = await db.updateOrderStatus(
+      id, 
+      nextStatus, 
+      driverNotes || `تم تكليف المندوب المعتمد (${finalDriver.name})`, 
+      actor,
+      { driverId: finalDriver.id, driverName: finalDriver.name, driverPhone: finalDriver.phone }
+    );
+
+    return res.json({
+      success: true,
+      message: `تم تكليف المندوب المعتمد (${finalDriver.name}) بنجاح`,
+      data: updated
+    });
+  } catch (err: any) {
+    return respondSafeError(res, 503, "فشل تعيين المندوب في قاعدة البيانات", err, "AssignDriver");
   }
-
-  // Lookup verified agent from D1
-  const agents = await db.getDeliveryAgentsAsync();
-  const verifiedAgent = agents.find(a => a.id === driverId || (driverName && a.name.trim() === driverName.trim()));
-
-  if (!verifiedAgent) {
-    return res.status(400).json({ success: false, message: "المندوب المحدد غير موجود في سجل المناديب المعتمدين" });
-  }
-
-  const finalDriver = verifiedAgent;
-
-  const actor = `${req.user.name || req.user.role} (${req.user.phone || req.user.userId})`;
-
-  await db.updateOrderDriverAsync(id, finalDriver.id, finalDriver.name, finalDriver.phone);
-
-  const nextStatus = setStatusToAssigned ? 'assigned' : (['pending', 'received'].includes(order.status) ? 'assigned' : order.status);
-  const updated = await db.updateOrderStatus(
-    id, 
-    nextStatus, 
-    driverNotes || `تم تكليف المندوب المعتمد (${finalDriver.name})`, 
-    actor,
-    { driverId: finalDriver.id, driverName: finalDriver.name, driverPhone: finalDriver.phone }
-  );
-
-  // Return clean sanitized order data without leaking sensitive driver credentials
-  res.json({
-    success: true,
-    message: `تم تكليف المندوب المعتمد (${finalDriver.name}) بنجاح`,
-    data: updated
-  });
 });
 
 // Explicit Order Cancellation & Atomic Stock Rollback Endpoint
 app.post("/api/orders/:id/cancel", async (req: AuthenticatedRequest, res) => {
-  const { id } = req.params;
-  const { reason } = req.body || {};
-
   if (!req.user) {
     return res.status(401).json({ success: false, message: "يتطلب إلغاء الطلب تسجيل الدخول أولاً" });
   }
 
-  const order = await db.findOrderByIdAsync(id);
-  if (!order) {
-    return res.status(404).json({ success: false, message: "الطلب غير موجود" });
-  }
+  try {
+    const { id } = req.params;
+    const { reason } = req.body || {};
 
-  // If already cancelled, return existing state safely without double rollback
-  if (order.status === 'cancelled') {
-    return res.json({
-      success: true,
-      message: "الطلب ملغي بالفعل والمخزون مسترجع سابقًا",
-      data: order,
-      alreadyCancelled: true
-    });
-  }
+    const order = await db.findOrderByIdAsync(id);
+    if (!order) {
+      return res.status(404).json({ success: false, message: "الطلب غير موجود" });
+    }
 
-  if (order.status === 'delivered') {
-    return res.status(400).json({ success: false, message: "لا يمكن إلغاء طلب تم تسليمه بنجاح" });
-  }
-
-  const isManagement = ['owner', 'admin', 'employee'].includes(req.user.role);
-  const isCustomerOwner = req.user.role === 'customer' && req.user.phone && (
-    order.customerPhone.replace(/\D/g, '') === req.user.phone.replace(/\D/g, '')
-  );
-  const isGuestOwner = req.user.role === 'guest' && Array.isArray((req.user as any).orderIds) && (
-    (req.user as any).orderIds.includes(order.id) || (order.orderNumber && (req.user as any).orderIds.includes(order.orderNumber))
-  );
-
-  if (!isManagement && !isCustomerOwner && !isGuestOwner) {
-    return res.status(403).json({ success: false, message: "غير مصرح لك بإلغاء هذا الطلب" });
-  }
-
-  // Customers & Guests can only cancel when status is 'pending' or 'received'
-  if ((isCustomerOwner || isGuestOwner) && !isManagement) {
-    if (!['pending', 'received'].includes(order.status)) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "لا يمكن للعميل إلغاء الطلب إلا إذا كان في حالة قيد الانتظار أو مستلم (قبل التأكيد والتجهيز). يرجى التواصل مع إدارة المتجر للمساعدة." 
+    // If already cancelled, return existing state safely without double rollback
+    if (order.status === 'cancelled') {
+      return res.json({
+        success: true,
+        message: "الطلب ملغي بالفعل والمخزون مسترجع سابقًا",
+        data: order,
+        alreadyCancelled: true
       });
     }
-  }
 
-  const actor = `${req.user.name || req.user.role} (${req.user.phone || req.user.userId})`;
-  const safeReason = sanitizeInputString(reason || '', 200);
-  const notes = safeReason ? `سبب الإلغاء: ${safeReason}` : undefined;
+    if (order.status === 'delivered' || order.status === 'completed') {
+      return res.status(400).json({ success: false, message: "لا يمكن إلغاء طلب تم تسليمه أو إكماله بالفعل" });
+    }
 
-  try {
+    const isManagement = ['owner', 'admin', 'employee'].includes(req.user.role);
+    const isCustomerOwner = req.user.role === 'customer' && req.user.phone && (
+      order.customerPhone.replace(/\D/g, '') === req.user.phone.replace(/\D/g, '')
+    );
+    const isGuestOwner = req.user.role === 'guest' && Array.isArray((req.user as any).orderIds) && (
+      (req.user as any).orderIds.includes(order.id) || (order.orderNumber && (req.user as any).orderIds.includes(order.orderNumber))
+    );
+
+    if (!isManagement && !isCustomerOwner && !isGuestOwner) {
+      return res.status(403).json({ success: false, message: "غير مصرح لك بإلغاء هذا الطلب" });
+    }
+
+    // Customers & Guests can only cancel when status is 'pending' or 'received'
+    if ((isCustomerOwner || isGuestOwner) && !isManagement) {
+      if (!['pending', 'received'].includes(order.status)) {
+        return res.status(400).json({ 
+          success: false, 
+          message: "لا يمكن للعميل إلغاء الطلب إلا إذا كان في حالة قيد الانتظار أو مستلم (قبل التأكيد والتجهيز). يرجى التواصل مع إدارة المتجر للمساعدة." 
+        });
+      }
+    }
+
+    const actor = `${req.user.name || req.user.role} (${req.user.phone || req.user.userId})`;
+    const safeReason = sanitizeInputString(reason || '', 200);
+    const notes = safeReason ? `سبب الإلغاء: ${safeReason}` : undefined;
+
     const updated = await db.updateOrderStatus(id, 'cancelled', notes, actor);
-    res.json({
+    if (!updated) {
+      return res.status(404).json({ success: false, message: "الطلب غير موجود" });
+    }
+    const wasAlreadyCancelled = Boolean((updated as any)._alreadyCancelled);
+    return res.json({
       success: true,
-      message: "تم إلغاء الطلب واسترجاع كافة الكميات إلى المخزون بنجاح",
-      data: updated
+      message: wasAlreadyCancelled
+        ? "الطلب ملغي بالفعل والمخزون مسترجع سابقًا"
+        : "تم إلغاء الطلب واسترجاع كافة الكميات إلى المخزون بنجاح",
+      data: updated,
+      alreadyCancelled: wasAlreadyCancelled
     });
   } catch (err: any) {
-    res.status(400).json({ success: false, message: err.message || "فشل إلغاء الطلب" });
+    if (isDatabaseConnectivityError(err)) {
+      return respondSafeError(res, 503, "فشل إلغاء الطلب لتعذر الاتصال بقاعدة البيانات", err, "CancelOrder");
+    }
+    const msg = sanitizeD1ErrorMessage(err) || "فشل إلغاء الطلب";
+    if (msg.includes('تم تسليمه') || msg.includes('تغيرت بالتزامن')) {
+      return res.status(409).json({ success: false, message: msg });
+    }
+    return res.status(400).json({ success: false, message: msg });
+  }
+});
+
+// ==========================================
+// 3B. PAYMENTS & COLLECTIONS (D1 Authoritative & RBAC)
+// ==========================================
+
+app.get("/api/payments", requireRoles(['owner', 'admin', 'employee']), async (req, res) => {
+  try {
+    const orderId = typeof req.query.orderId === 'string' ? req.query.orderId.trim() : undefined;
+    const payments = await db.getPaymentsAsync(orderId);
+    res.json({ success: true, data: payments });
+  } catch (err: any) {
+    return respondSafeError(res, 503, "فشل استعلام سجل الدفعات من قاعدة البيانات", err, "GetPayments");
+  }
+});
+
+app.get("/api/orders/:id/payments", async (req: AuthenticatedRequest, res) => {
+  if (!req.user) {
+    return res.status(401).json({ success: false, message: "يتطلب الوصول إلى تفاصيل الدفع تسجيل الدخول" });
+  }
+  try {
+    const order = await db.findOrderByIdAsync(req.params.id);
+    if (!order) {
+      return res.status(404).json({ success: false, message: "الطلب غير موجود" });
+    }
+    const isManagement = ['owner', 'admin', 'employee'].includes(req.user.role);
+    const isCustomerOwner = req.user.role === 'customer' && req.user.phone && order.customerPhone && (
+      req.user.phone.replace(/\D/g, '') === order.customerPhone.replace(/\D/g, '')
+    );
+    const isGuestOwner = req.user.role === 'guest' && Array.isArray((req.user as any).orderIds) && (
+      (req.user as any).orderIds.includes(order.id) || (order.orderNumber && (req.user as any).orderIds.includes(order.orderNumber))
+    );
+    const isDriver = ['delivery', 'mandoub'].includes(req.user.role) && (
+      order.driverId === req.user.userId ||
+      (req.user.phone && order.driverPhone && order.driverPhone.replace(/\D/g, '') === req.user.phone.replace(/\D/g, ''))
+    );
+
+    if (!isManagement && !isCustomerOwner && !isGuestOwner && !isDriver) {
+      return res.status(403).json({ success: false, message: "غير مصرح لك بعرض بيانات الدفع لهذا الطلب" });
+    }
+    const payments = await db.getPaymentsAsync(order.id);
+    return res.json({ success: true, data: payments });
+  } catch (err: any) {
+    return respondSafeError(res, 503, "فشل استعلام بيانات الدفع للطلب", err, "GetOrderPayments");
+  }
+});
+
+app.post("/api/orders/:id/payment/confirm", async (req: AuthenticatedRequest, res) => {
+  if (!req.user) {
+    return res.status(401).json({ success: false, message: "يتطلب تأكيد التحصيل تسجيل الدخول" });
+  }
+  try {
+    const order = await db.findOrderByIdAsync(req.params.id);
+    if (!order) {
+      return res.status(404).json({ success: false, message: "الطلب غير موجود" });
+    }
+
+    const isManagement = ['owner', 'admin', 'employee'].includes(req.user.role);
+    const isDriverRole = ['delivery', 'mandoub'].includes(req.user.role);
+    const isAssignedDriver = isDriverRole && (
+      order.driverId === req.user.userId ||
+      (req.user.phone && order.driverPhone && order.driverPhone.replace(/\D/g, '') === req.user.phone.replace(/\D/g, ''))
+    );
+
+    if (!isManagement && !isAssignedDriver) {
+      return res.status(403).json({ success: false, message: "غير مصرح لك بتأكيد تحصيل الدفعة لهذا الطلب" });
+    }
+
+    // Delivery drivers can only confirm COD/cash collection explicitly, never wallet/bank transfers
+    if (!isManagement && isAssignedDriver) {
+      const m = String(order.paymentMethod || '').toLowerCase();
+      if (m !== 'cod' && m !== 'cash' && m !== 'cash_on_delivery') {
+        return res.status(403).json({ success: false, message: "مندوب التوصيل مصرح له فقط بتأكيد التحصيل النقدي عند الاستلام" });
+      }
+    }
+
+    const { amount, method, referenceNumber, proofImageUrl, notes } = req.body || {};
+    const actor = `${req.user.name || req.user.role} (${req.user.phone || req.user.userId})`;
+
+    const result = await db.confirmOrderPaymentAsync({
+      orderId: order.id,
+      amount: amount !== undefined ? Number(amount) : undefined,
+      method,
+      referenceNumber: referenceNumber ? sanitizeInputString(referenceNumber, 100) : undefined,
+      proofImageUrl: proofImageUrl ? String(proofImageUrl).trim().slice(0, 500) : undefined,
+      notes: notes ? sanitizeInputString(notes, 300) : undefined,
+      actor
+    });
+
+    return res.json({
+      success: true,
+      message: "تم تأكيد تحصيل الدفعة وتحديث حالة الدفع بنجاح",
+      data: result.payment,
+      order: result.order
+    });
+  } catch (err: any) {
+    if (isDatabaseConnectivityError(err)) {
+      return respondSafeError(res, 503, "فشل تأكيد التحصيل لتعذر الاتصال بقاعدة البيانات", err, "ConfirmPayment");
+    }
+    const msg = sanitizeD1ErrorMessage(err) || "فشل تأكيد التحصيل";
+    if (msg.includes('DUP_PAYMENT') || msg.includes('تم تأكيد تحصيل الدفعة لهذا الطلب مسبقاً')) {
+      return res.status(409).json({ success: false, message: "تم تأكيد تحصيل الدفعة لهذا الطلب مسبقاً" });
+    }
+    return res.status(400).json({ success: false, message: msg });
+  }
+});
+
+app.post("/api/orders/:id/payment/refund", requireRoles(['owner', 'admin']), async (req: AuthenticatedRequest, res) => {
+  try {
+    const { reason } = req.body || {};
+    const actor = `${req.user!.name || req.user!.role} (${req.user!.phone || req.user!.userId})`;
+    const result = await db.refundOrderPaymentAsync({
+      orderId: req.params.id,
+      reason: reason ? sanitizeInputString(reason, 300) : undefined,
+      actor
+    });
+    return res.json({
+      success: true,
+      message: "تم تسجيل استرداد الدفعة بنجاح",
+      data: result.payment,
+      order: result.order
+    });
+  } catch (err: any) {
+    if (isDatabaseConnectivityError(err)) {
+      return respondSafeError(res, 503, "فشل تنفيذ الاسترداد لتعذر الاتصال بقاعدة البيانات", err, "RefundPayment");
+    }
+    const msg = sanitizeD1ErrorMessage(err) || "فشل استرداد الدفعة";
+    if (msg.includes('DUP_REFUND') || msg.includes('تم استرداد هذه الدفعة مسبقاً')) {
+      return res.status(409).json({ success: false, message: "تم استرداد هذه الدفعة مسبقاً" });
+    }
+    if (msg.includes('غير موجود')) {
+      return res.status(404).json({ success: false, message: msg });
+    }
+    return res.status(400).json({ success: false, message: msg });
+  }
+});
+
+// ==========================================
+// 3C. NOTIFICATIONS (D1 Authoritative & RBAC)
+// ==========================================
+
+app.get("/api/notifications", async (req: AuthenticatedRequest, res) => {
+  if (!req.user) {
+    return res.status(401).json({ success: false, message: "يتطلب عرض الإشعارات تسجيل الدخول" });
+  }
+  try {
+    const limit = Number(req.query.limit) || 50;
+    const notifications = await db.getNotificationsAsync({
+      role: req.user.role,
+      userId: req.user.userId,
+      phone: req.user.phone,
+      limit
+    });
+    return res.json({ success: true, data: notifications });
+  } catch (err: any) {
+    return respondSafeError(res, 503, "فشل استعلام الإشعارات من قاعدة البيانات", err, "GetNotifications");
+  }
+});
+
+app.patch("/api/notifications/read-all", async (req: AuthenticatedRequest, res) => {
+  if (!req.user) {
+    return res.status(401).json({ success: false, message: "يتطلب هذا الإجراء تسجيل الدخول" });
+  }
+  try {
+    const updatedCount = await db.markAllNotificationsReadAsync({
+      role: req.user.role,
+      userId: req.user.userId,
+      phone: req.user.phone
+    });
+    return res.json({ success: true, updatedCount });
+  } catch (err: any) {
+    return respondSafeError(res, 503, "فشل تحديث حالة الإشعارات في قاعدة البيانات", err, "ReadAllNotifications");
+  }
+});
+
+app.patch("/api/notifications/:id/read", async (req: AuthenticatedRequest, res) => {
+  if (!req.user) {
+    return res.status(401).json({ success: false, message: "يتطلب هذا الإجراء تسجيل الدخول" });
+  }
+  try {
+    const updated = await db.markNotificationReadAsync(req.params.id, {
+      role: req.user.role,
+      userId: req.user.userId,
+      phone: req.user.phone
+    });
+    if (!updated) {
+      return res.status(404).json({ success: false, message: "الإشعار غير موجود" });
+    }
+    return res.json({ success: true, data: updated });
+  } catch (err: any) {
+    if (String(err?.message || '').includes('FORBIDDEN_NOTIFICATION')) {
+      return res.status(403).json({ success: false, message: "غير مصرح لك بتعديل هذا الإشعار" });
+    }
+    return respondSafeError(res, 503, "فشل تحديث الإشعار في قاعدة البيانات", err, "ReadNotification");
   }
 });
 
@@ -1562,8 +1883,7 @@ app.get("/api/reviews", async (req, res) => {
     const reviews = await db.getReviewsAsync();
     res.json({ success: true, data: reviews });
   } catch (err: any) {
-    console.error("Reviews query error:", err);
-    res.status(503).json({ success: false, message: "فشل استعلام تقييمات المنتجات من قاعدة البيانات", error: err.message });
+    return respondSafeError(res, 503, "فشل استعلام تقييمات المنتجات من قاعدة البيانات", err, "Reviews");
   }
 });
 
@@ -1574,13 +1894,20 @@ app.post("/api/reviews", async (req: AuthenticatedRequest, res) => {
       return res.status(400).json({ success: false, message: "يرجى كتابة الاسم والتعليق وتحديد المنتج" });
     }
 
-    // Verified purchase check strictly uses authenticated user JWT phone or verified delivered order
-    const userPhone = req.user?.phone || (req.body.userPhone ? String(req.body.userPhone) : (req.body.phone ? String(req.body.phone) : ''));
-    let isVerified = userPhone ? await db.hasDeliveredOrderForProductAsync(userPhone, productId) : false;
-    if (!isVerified && req.body.orderId) {
-      const order = await db.findOrderByIdAsync(String(req.body.orderId));
-      if (order && order.status === 'delivered' && order.items.some((it: any) => it.productId === productId)) {
-        isVerified = true;
+    // Verified purchase check strictly uses authenticated JWT identity (never unauthenticated body params)
+    let isVerified = false;
+    let verifiedPhone: string | undefined;
+    if (req.user?.role === 'customer' && req.user.phone) {
+      verifiedPhone = req.user.phone.replace(/\D/g, '');
+      isVerified = await db.hasDeliveredOrderForProductAsync(verifiedPhone, String(productId));
+    } else if (req.user?.role === 'guest' && Array.isArray((req.user as any).orderIds)) {
+      verifiedPhone = req.user.phone ? req.user.phone.replace(/\D/g, '') : undefined;
+      for (const oid of (req.user as any).orderIds) {
+        const ord = await db.findOrderByIdAsync(String(oid));
+        if (ord && ord.status === 'delivered' && Array.isArray(ord.items) && ord.items.some((it: any) => it.productId === productId)) {
+          isVerified = true;
+          break;
+        }
       }
     }
 
@@ -1588,7 +1915,7 @@ app.post("/api/reviews", async (req: AuthenticatedRequest, res) => {
       id: "rev-" + Date.now(),
       productId: String(productId),
       userName: sanitizeInputString(userName, 50),
-      userPhone: userPhone || undefined,
+      userPhone: verifiedPhone,
       rating: Math.min(5, Math.max(1, Number(rating) || 5)),
       comment: sanitizeInputString(comment, 500),
       date: new Date().toISOString().split("T")[0],
@@ -1598,8 +1925,7 @@ app.post("/api/reviews", async (req: AuthenticatedRequest, res) => {
     const added = await db.addReviewAsync(newReview);
     res.json({ success: true, data: added });
   } catch (err: any) {
-    console.error("Add review error:", err);
-    res.status(500).json({ success: false, message: "فشل إضافة التقييم في قاعدة البيانات", error: err.message });
+    return respondSafeError(res, 500, "فشل إضافة التقييم في قاعدة البيانات", err, "AddReview");
   }
 });
 
@@ -1619,22 +1945,41 @@ app.post("/api/validate-coupon", couponRateLimiter, async (req, res) => {
       return res.status(400).json({ success: false, message: "كوبون غير صالح أو غير مفعل" });
     }
 
-    if (found.validUntil && new Date(found.validUntil).getTime() < Date.now()) {
-      return res.status(400).json({ success: false, message: "هذا الكوبون منتهي الصلاحية" });
+    if (found.validUntil) {
+      const trimmed = String(found.validUntil).trim();
+      const targetTs = /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
+        ? new Date(`${trimmed}T23:59:59.999Z`).getTime()
+        : new Date(trimmed).getTime();
+      if (!isNaN(targetTs) && targetTs < Date.now()) {
+        return res.status(400).json({ success: false, message: "هذا الكوبون منتهي الصلاحية" });
+      }
     }
 
     if (found.maxUses && found.usageCount && found.usageCount >= found.maxUses) {
       return res.status(400).json({ success: false, message: "لقد استنفد هذا الكوبون الحد الأقصى لعدد مرات الاستخدام المسموح بها" });
     }
 
-    // Recalculate subtotal server-side if cart items are provided
+    // Recalculate subtotal server-side if cart items are provided (matching authoritative weight prices)
     let orderAmount = 0;
     if (items && Array.isArray(items) && items.length > 0) {
       const products = await db.getProductsAsync();
       for (const it of items) {
-        const p = products.find(prod => prod.id === it.productId);
+        const targetId = it.productId || it.product?.id || it.id;
+        const p = products.find(prod => prod.id === targetId);
         if (p) {
-          orderAmount += (p.price * Math.max(1, Number(it.quantity) || 1));
+          const itemWeight = it.weight || it.selectedWeight;
+          let unitPrice = Number(p.price);
+          if (itemWeight && p.weightOptions && p.weightOptions.length > 0) {
+            const cleanReqWeight = String(itemWeight).trim().toLowerCase();
+            const exact = p.weightOptions.find(w => String(w.weight || '').trim().toLowerCase() === cleanReqWeight);
+            const prefix = !exact && p.weightOptions.find(w => {
+              const opt = String(w.weight || '').trim().toLowerCase();
+              return opt.startsWith(cleanReqWeight) || cleanReqWeight.startsWith(opt.split(' ')[0]);
+            });
+            if (exact) unitPrice = Number(exact.price);
+            else if (prefix) unitPrice = Number(prefix.price);
+          }
+          orderAmount += (unitPrice * Math.max(1, Number(it.quantity) || 1));
         }
       }
     } else {
@@ -1663,8 +2008,7 @@ app.post("/api/validate-coupon", couponRateLimiter, async (req, res) => {
       }
     });
   } catch (err: any) {
-    console.error("Validate coupon error:", err);
-    res.status(503).json({ success: false, message: "فشل التحقق من الكوبون في قاعدة البيانات", error: err.message });
+    return respondSafeError(res, 503, "فشل التحقق من الكوبون في قاعدة البيانات", err, "ValidateCoupon");
   }
 });
 
@@ -1673,8 +2017,7 @@ app.get("/api/coupons", requireRoles(['owner', 'admin', 'employee']), async (req
     const coupons = await db.getCouponsAsync();
     res.json({ success: true, data: coupons });
   } catch (err: any) {
-    console.error("Coupons query error:", err);
-    res.status(503).json({ success: false, message: "فشل استعلام الكوبونات من قاعدة البيانات", error: err.message });
+    return respondSafeError(res, 503, "فشل استعلام الكوبونات من قاعدة البيانات", err, "Coupons");
   }
 });
 
@@ -1697,8 +2040,7 @@ app.post("/api/coupons", requireRoles(['owner', 'admin']), async (req, res) => {
 
     res.json({ success: true, data: newCoupon });
   } catch (err: any) {
-    console.error("Add coupon error:", err);
-    res.status(500).json({ success: false, message: "فشل حفظ الكوبون في قاعدة البيانات", error: err.message });
+    return respondSafeError(res, 500, "فشل حفظ الكوبون في قاعدة البيانات", err, "AddCoupon");
   }
 });
 
@@ -1710,18 +2052,19 @@ app.put("/api/coupons/:code", requireRoles(['owner', 'admin']), async (req, res)
     }
     res.json({ success: true, data: updated });
   } catch (err: any) {
-    console.error("Update coupon error:", err);
-    res.status(500).json({ success: false, message: "فشل تحديث الكوبون في قاعدة البيانات", error: err.message });
+    return respondSafeError(res, 500, "فشل تحديث الكوبون في قاعدة البيانات", err, "UpdateCoupon");
   }
 });
 
 app.delete("/api/coupons/:code", requireRoles(['owner', 'admin']), async (req, res) => {
   try {
-    await db.deleteCouponAsync(req.params.code);
+    const deleted = await db.deleteCouponAsync(req.params.code);
+    if (!deleted) {
+      return res.status(404).json({ success: false, message: "الكوبون غير موجود" });
+    }
     res.json({ success: true, message: "تم حذف الكوبون" });
   } catch (err: any) {
-    console.error("Delete coupon error:", err);
-    res.status(500).json({ success: false, message: "فشل حذف الكوبون من قاعدة البيانات", error: err.message });
+    return respondSafeError(res, 500, "فشل حذف الكوبون من قاعدة البيانات", err, "DeleteCoupon");
   }
 });
 
@@ -1734,8 +2077,7 @@ app.get("/api/settings", async (req, res) => {
     const settings = await db.getSettingsAsync();
     res.json({ success: true, data: settings });
   } catch (err: any) {
-    console.error("Settings query error:", err);
-    res.status(503).json({ success: false, message: "فشل استعلام الإعدادات من قاعدة البيانات", error: err.message });
+    return respondSafeError(res, 503, "فشل استعلام الإعدادات من قاعدة البيانات", err, "Settings");
   }
 });
 
@@ -1744,8 +2086,7 @@ app.post("/api/settings", requireRoles(['owner', 'admin']), async (req, res) => 
     const updated = await db.updateSettingsAsync(req.body);
     res.json({ success: true, data: updated });
   } catch (err: any) {
-    console.error("Settings update error:", err);
-    res.status(500).json({ success: false, message: "فشل حفظ الإعدادات في قاعدة البيانات", error: err.message });
+    return respondSafeError(res, 500, "فشل حفظ الإعدادات في قاعدة البيانات", err, "SaveSettings");
   }
 });
 
@@ -1754,8 +2095,7 @@ app.put("/api/settings", requireRoles(['owner', 'admin']), async (req, res) => {
     const updated = await db.updateSettingsAsync(req.body);
     res.json({ success: true, data: updated });
   } catch (err: any) {
-    console.error("Settings update error:", err);
-    res.status(500).json({ success: false, message: "فشل حفظ الإعدادات في قاعدة البيانات", error: err.message });
+    return respondSafeError(res, 500, "فشل حفظ الإعدادات في قاعدة البيانات", err, "UpdateSettings");
   }
 });
 
@@ -1777,8 +2117,7 @@ app.get("/api/delivery-agents", async (req: AuthenticatedRequest, res) => {
     }));
     res.json({ success: true, data: safeAgents });
   } catch (err: any) {
-    console.error("Delivery agents error:", err);
-    res.status(503).json({ success: false, message: "فشل استعلام مناديب التوصيل من قاعدة البيانات", error: err.message });
+    return respondSafeError(res, 503, "فشل استعلام مناديب التوصيل من قاعدة البيانات", err, "DeliveryAgents");
   }
 });
 
@@ -1808,8 +2147,7 @@ app.post("/api/delivery-agents", requireRoles(['owner', 'admin']), async (req, r
 
     res.json({ success: true, data: newAgent });
   } catch (err: any) {
-    console.error("Delivery agents update error:", err);
-    res.status(500).json({ success: false, message: "فشل حفظ بيانات المندوب في قاعدة البيانات", error: err.message });
+    return respondSafeError(res, 500, "فشل حفظ بيانات المندوب في قاعدة البيانات", err, "AddDeliveryAgent");
   }
 });
 
@@ -1829,8 +2167,7 @@ app.put("/api/delivery-agents/:id", requireRoles(['owner', 'admin']), async (req
     }
     res.json({ success: true, data: updated });
   } catch (err: any) {
-    console.error("Delivery agent update error:", err);
-    res.status(500).json({ success: false, message: "فشل تحديث بيانات المندوب", error: err.message });
+    return respondSafeError(res, 500, "فشل تحديث بيانات المندوب", err, "UpdateDeliveryAgent");
   }
 });
 
@@ -1839,8 +2176,7 @@ app.delete("/api/delivery-agents/:id", requireRoles(['owner', 'admin']), async (
     await db.deleteDeliveryAgentAsync(req.params.id);
     res.json({ success: true, message: "تم حذف المندوب بنجاح" });
   } catch (err: any) {
-    console.error("Delivery agent delete error:", err);
-    res.status(500).json({ success: false, message: "فشل حذف المندوب من قاعدة البيانات", error: err.message });
+    return respondSafeError(res, 500, "فشل حذف المندوب من قاعدة البيانات", err, "DeleteDeliveryAgent");
   }
 });
 
@@ -1849,8 +2185,7 @@ app.get("/api/gallery", async (req, res) => {
     const data = await db.getGalleryItemsAsync();
     res.json({ success: true, data });
   } catch (err: any) {
-    console.error("Gallery query error:", err);
-    res.status(503).json({ success: false, message: "فشل استعلام المعرض من قاعدة البيانات", error: err.message });
+    return respondSafeError(res, 503, "فشل استعلام المعرض من قاعدة البيانات", err, "Gallery");
   }
 });
 
@@ -1862,8 +2197,7 @@ app.post("/api/gallery", requireRoles(['owner', 'admin']), async (req, res) => {
     });
     res.json({ success: true, data: newItem });
   } catch (err: any) {
-    console.error("Gallery add error:", err);
-    res.status(500).json({ success: false, message: "فشل إضافة الصورة للمعرض", error: err.message });
+    return respondSafeError(res, 500, "فشل إضافة الصورة للمعرض", err, "AddGallery");
   }
 });
 
@@ -1875,18 +2209,19 @@ app.put("/api/gallery/:id", requireRoles(['owner', 'admin']), async (req, res) =
     }
     res.json({ success: true, data: updated });
   } catch (err: any) {
-    console.error("Gallery update error:", err);
-    res.status(500).json({ success: false, message: "فشل تعديل عنصر المعرض", error: err.message });
+    return respondSafeError(res, 500, "فشل تعديل عنصر المعرض", err, "UpdateGallery");
   }
 });
 
 app.delete("/api/gallery/:id", requireRoles(['owner', 'admin']), async (req, res) => {
   try {
-    await db.deleteGalleryItemAsync(req.params.id);
+    const deleted = await db.deleteGalleryItemAsync(req.params.id);
+    if (!deleted) {
+      return res.status(404).json({ success: false, message: "عنصر المعرض غير موجود" });
+    }
     res.json({ success: true, message: "تم حذف الصورة من المعرض" });
   } catch (err: any) {
-    console.error("Gallery delete error:", err);
-    res.status(500).json({ success: false, message: "فشل حذف الصورة من المعرض", error: err.message });
+    return respondSafeError(res, 500, "فشل حذف الصورة من المعرض", err, "DeleteGallery");
   }
 });
 
@@ -1939,22 +2274,14 @@ app.get("/api/admin/reports", requireRoles(['owner', 'admin']), async (req, res)
       }
     });
   } catch (err: any) {
-    console.error("Reports query error:", err);
-    res.status(503).json({ success: false, message: "فشل استعلام التقارير من قاعدة البيانات", error: err.message });
+    return respondSafeError(res, 503, "فشل استعلام التقارير من قاعدة البيانات", err, "AdminReports");
   }
 });
 
 app.get(["/api/customers", "/api/admin/customers", "/api/crm/customers"], requireRoles(['owner', 'admin', 'employee']), async (req, res) => {
   try {
     const orders = await db.getOrdersAsync();
-    let registeredCustomers: any[] = [];
-    try {
-      if (typeof (db as any).getCustomersAsync === 'function') {
-        registeredCustomers = await (db as any).getCustomersAsync();
-      }
-    } catch (e) {
-      console.warn("Could not fetch registered customers:", e);
-    }
+    const registeredCustomers = await db.getCustomersAsync();
 
     const customerMap: Record<string, {
       id: string;
@@ -2064,8 +2391,7 @@ app.get(["/api/customers", "/api/admin/customers", "/api/crm/customers"], requir
     }));
     res.json({ success: true, data: result });
   } catch (err: any) {
-    console.error("Customers query error:", err);
-    res.status(503).json({ success: false, message: "فشل استعلام العملاء من قاعدة البيانات", error: err.message });
+    return respondSafeError(res, 503, "فشل استعلام العملاء من قاعدة البيانات", err, "CustomersCRM");
   }
 });
 
@@ -2095,8 +2421,7 @@ app.get("/api/b2b/calculator-data", requireRoles(['owner', 'admin', 'employee'])
       }
     });
   } catch (err: any) {
-    console.error("B2B calculator query error:", err);
-    res.status(503).json({ success: false, message: "فشل استعلام بيانات B2B من قاعدة البيانات", error: err.message });
+    return respondSafeError(res, 503, "فشل استعلام بيانات B2B من قاعدة البيانات", err, "B2BCalculator");
   }
 });
 
@@ -2120,11 +2445,11 @@ app.post("/api/analytics/abandoned-cart", (req, res) => {
 
 // Dynamic SEO Sitemap.xml
 app.get("/sitemap.xml", async (req, res) => {
-  res.setHeader("Content-Type", "application/xml");
-  const host = req.protocol + "://" + req.get("host");
-  const products = await db.getProductsAsync();
+  try {
+    const host = req.protocol + "://" + req.get("host");
+    const products = await db.getProductsAsync();
 
-  const productUrls = products.map(p => `
+    const productUrls = products.map(p => `
     <url>
       <loc>${host}/product/${p.id}</loc>
       <lastmod>${new Date().toISOString().split("T")[0]}</lastmod>
@@ -2133,7 +2458,7 @@ app.get("/sitemap.xml", async (req, res) => {
     </url>
   `).join("");
 
-  const sitemap = `<?xml version="1.0" encoding="UTF-8"?>
+    const sitemap = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
     <loc>${host}/</loc>
@@ -2150,7 +2475,11 @@ app.get("/sitemap.xml", async (req, res) => {
   ${productUrls}
 </urlset>`;
 
-  res.send(sitemap);
+    res.setHeader("Content-Type", "application/xml");
+    return res.send(sitemap);
+  } catch (err: any) {
+    return respondSafeError(res, 503, "تعذر إنشاء خريطة الموقع حالياً", err, "Sitemap");
+  }
 });
 
 // Robots.txt
@@ -2218,13 +2547,18 @@ app.post("/api/gemini/advisor", async (req, res) => {
 // 10. VITE MIDDLEWARE & STATIC SERVING
 // ==========================================
 
-// Global Error Handler Middleware (ensures all uncaught errors return clean JSON)
+// Global Error Handler Middleware (ensures all uncaught errors return clean JSON without leaking internals)
 app.use((err: any, req: Request, res: Response, next: NextFunction) => {
-  console.error("Unhandled Server Error:", err);
+  console.error("Unhandled Server Error:", sanitizeD1ErrorMessage(err));
   if (!res.headersSent) {
-    res.status(err.status || 500).json({
+    const status = (err?.status && typeof err.status === 'number')
+      ? err.status
+      : (isDatabaseConnectivityError(err) ? 503 : 500);
+    res.status(status).json({
       success: false,
-      message: err.message || "حدث خطأ غير متوقع في الخادم"
+      message: status === 503
+        ? "خدمة قاعدة البيانات غير متاحة مؤقتاً. يرجى المحاولة لاحقاً."
+        : "حدث خطأ غير متوقع في الخادم"
     });
   }
 });

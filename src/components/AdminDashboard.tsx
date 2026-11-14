@@ -864,32 +864,43 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         onUpdateProduct(selectedInventoryProduct.id, { stock: res.data.product.stock });
         setInventoryTransactions(prev => [res.data.transaction, ...prev]);
         setInventoryModalOpen(false);
+      } else {
+        showMediaToast(res?.message || 'فشل تعديل المخزون في قاعدة البيانات');
       }
     } catch (err: any) {
       showMediaToast(err.message || 'فشل تعديل المخزون');
     }
   };
 
-  // KPI Calculations
+  // KPI Calculations (100% derived from live orders)
   const safeOrders = (orders || []).filter(Boolean);
   const safeProducts = (products || []).filter(Boolean);
-  const totalRevenue = safeOrders.reduce((sum, o) => (o && o.status !== 'cancelled' ? sum + (o.totalAmount ?? o.total ?? 0) : sum), 0);
+  const nonCancelledOrders = safeOrders.filter(o => o && o.status !== 'cancelled');
+  const totalRevenue = nonCancelledOrders.reduce((sum, o) => sum + (o.totalAmount ?? o.total ?? 0), 0);
   const totalOrdersCount = safeOrders.length;
   const newOrdersCount = safeOrders.filter(o => o && (o.status === 'pending' || o.status === 'received' || o.status === 'preparing')).length;
   const deliveringOrdersCount = safeOrders.filter(o => o && (o.status === 'shipped' || o.status === 'delivering' || o.status === 'on_way')).length;
   const completedOrdersCount = safeOrders.filter(o => o && o.status === 'delivered').length;
+  const completionRatePercent = totalOrdersCount > 0 ? Math.round((completedOrdersCount / totalOrdersCount) * 100) : 0;
   const lowStockProducts = safeProducts.filter(p => p && (p.stock || 0) < 50);
 
-  // Revenue chart data
-  const revenueChartData = [
-    { day: 'السبت', sales: 48000, orders: 12 },
-    { day: 'الأحد', sales: 62000, orders: 15 },
-    { day: 'الإثنين', sales: 54000, orders: 13 },
-    { day: 'الثلاثاء', sales: 71500, orders: 18 },
-    { day: 'الأربعاء', sales: 89000, orders: 22 },
-    { day: 'الخميس', sales: 124000, orders: 31 },
-    { day: 'الجمعة (اليوم)', sales: totalRevenue > 0 ? totalRevenue : 156000, orders: safeOrders.length > 0 ? safeOrders.length : 38 }
-  ];
+  // Real 7-day Revenue Chart Data from live orders
+  const dayNamesAr = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+  const revenueChartData = Array.from({ length: 7 }, (_, idx) => {
+    const d = new Date();
+    d.setDate(d.getDate() - (6 - idx));
+    const yyyyMmDd = d.toISOString().slice(0, 10);
+    const dayLabel = idx === 6 ? `${dayNamesAr[d.getDay()]} (اليوم)` : dayNamesAr[d.getDay()];
+    const dayOrders = nonCancelledOrders.filter((o) => {
+      const raw = String(o.createdAt || o.date || '');
+      return raw.slice(0, 10) === yyyyMmDd;
+    });
+    return {
+      day: dayLabel,
+      sales: dayOrders.reduce((sum, o) => sum + (o.totalAmount ?? o.total ?? 0), 0),
+      orders: dayOrders.length,
+    };
+  });
 
   // Print or View Official Royal Invoice for Sanaa Courier & Customers
   const handlePrintOrderInvoice = (order: Order) => {
@@ -915,12 +926,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return matchesStatus && matchesQuery;
   });
 
-  const defaultAgents: DeliveryAgent[] = [
-    { id: 'drv-1', name: 'أحمد الكبسي', phone: '775000150', vehicleType: 'motorcycle', vehicle: 'دراجة نارية سريعة', assignedDistricts: ['حدة', 'السبعين'], zone: 'حدة والسبعين', isActive: true, status: 'active', activeOrdersCount: 2, completedToday: 8, rating: 4.9 },
-    { id: 'drv-2', name: 'محمد الحاشدي', phone: '770123456', vehicleType: 'van', vehicle: 'سيارة دباب توصيل', assignedDistricts: ['الستين', 'التحرير'], zone: 'الستين والتحرير', isActive: true, status: 'active', activeOrdersCount: 1, completedToday: 6, rating: 4.8 },
-    { id: 'drv-3', name: 'يحيى الصنعاني', phone: '777987654', vehicleType: 'motorcycle', vehicle: 'دراجة نارية سريعة', assignedDistricts: ['الحصبة', 'شعوب'], zone: 'الحصبة وشعوب', isActive: true, status: 'active', activeOrdersCount: 0, completedToday: 9, rating: 5.0 },
-  ];
-  const activeAgents = (deliveryAgents && deliveryAgents.length > 0) ? deliveryAgents : defaultAgents;
+  const activeAgents = (deliveryAgents || []).filter(Boolean);
 
   if (!isOpen) return null;
 
@@ -1161,15 +1167,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <div className="p-4 rounded-2xl bg-slate-900/90 border border-amber-500/40 space-y-1">
                 <span className="text-[11px] text-slate-400 font-bold block">إجمالي مبيعات المتجر:</span>
                 <span className="text-lg sm:text-2xl font-black text-amber-400 font-mono block">
-                  {totalRevenue > 0 ? totalRevenue.toLocaleString() : '156,000'} YER
+                  {totalRevenue.toLocaleString()} YER
                 </span>
-                <span className="text-[10px] text-emerald-400 font-bold block">↑ نمو مالي مستقر في صنعاء</span>
+                <span className="text-[10px] text-emerald-400 font-bold block">بيانات مالية حية من قاعدة D1</span>
               </div>
 
               <div className="p-4 rounded-2xl bg-slate-900/90 border border-slate-800 space-y-1">
                 <span className="text-[11px] text-slate-400 font-bold block">إجمالي عدد الطلبات:</span>
                 <span className="text-lg sm:text-2xl font-black text-white font-mono block">
-                  {totalOrdersCount > 0 ? totalOrdersCount : 38} طلب
+                  {totalOrdersCount} طلب
                 </span>
                 <span className="text-[10px] text-amber-300 font-bold block">{newOrdersCount} طلب جديد قيد المتابعة</span>
               </div>
@@ -1179,7 +1185,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <span className="text-lg sm:text-2xl font-black text-blue-400 font-mono block">
                   {deliveringOrdersCount} طلبات
                 </span>
-                <span className="text-[10px] text-slate-400 font-bold block">زمن الوصول المستهدف 45 دقيقة</span>
+                <span className="text-[10px] text-slate-400 font-bold block">متابعة مباشرة للشحنات النشطة</span>
               </div>
 
               <div className="p-4 rounded-2xl bg-slate-900/90 border border-slate-800 space-y-1">
@@ -1187,7 +1193,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <span className="text-lg sm:text-2xl font-black text-emerald-400 font-mono block">
                   {completedOrdersCount} طلبات
                 </span>
-                <span className="text-[10px] text-emerald-400 font-bold block">نسبة التسليم الناجح 98.4%</span>
+                <span className="text-[10px] text-emerald-400 font-bold block">نسبة التسليم المكتمل {completionRatePercent}%</span>
               </div>
             </div>
 
@@ -1426,9 +1432,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                              order.status === 'preparing' ? 'قيد التجهيز' :
                              order.status === 'cancelled' ? 'ملغي' : 'طلب جديد'}
                           </span>
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                            order.paymentStatus === 'paid' || order.paymentStatus === 'confirmed'
+                              ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                              : order.paymentStatus === 'refunded'
+                              ? 'bg-purple-500/15 text-purple-300 border-purple-500/30'
+                              : order.paymentStatus === 'failed'
+                              ? 'bg-red-500/15 text-red-300 border-red-500/30'
+                              : 'bg-slate-800 text-slate-300 border-slate-700'
+                          }`}>
+                            {order.paymentStatus === 'paid' || order.paymentStatus === 'confirmed'
+                              ? 'مدفوع ✓'
+                              : order.paymentStatus === 'refunded'
+                              ? 'مسترد'
+                              : order.paymentStatus === 'failed'
+                              ? 'دفع ملغي'
+                              : 'بانتظار الدفع'}
+                          </span>
                         </div>
 
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <button
                             onClick={() => handlePrintOrderInvoice(order)}
                             className="px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 text-[11px] font-bold flex items-center gap-1 cursor-pointer"
@@ -1436,6 +1459,45 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             <Printer className="w-3.5 h-3.5 text-amber-400" />
                             <span>طباعة فاتورة</span>
                           </button>
+
+                          {order.status !== 'cancelled' && order.paymentStatus !== 'paid' && order.paymentStatus !== 'confirmed' && (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const res = await api.confirmOrderPayment(order.id, {
+                                  amount: safeTotal,
+                                  method: order.paymentMethod,
+                                });
+                                if (res?.success) {
+                                  showMediaToast(`✅ تم تأكيد تحصيل دفعة الطلب #${order.orderNumber || order.id}`);
+                                  onRefreshOrders?.();
+                                } else {
+                                  showMediaToast(`❌ ${res?.message || 'فشل تأكيد الدفع'}`);
+                                }
+                              }}
+                              className="px-2.5 py-1 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 text-[11px] font-bold cursor-pointer"
+                            >
+                              تأكيد الدفع ✓
+                            </button>
+                          )}
+
+                          {(order.paymentStatus === 'paid' || order.paymentStatus === 'confirmed') && (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const res = await api.refundOrderPayment(order.id, 'استرداد إداري من لوحة التحكم');
+                                if (res?.success) {
+                                  showMediaToast(`✅ تم تسجيل استرداد المبلغ للطلب #${order.orderNumber || order.id}`);
+                                  onRefreshOrders?.();
+                                } else {
+                                  showMediaToast(`❌ ${res?.message || 'فشل تسجيل الاسترداد'}`);
+                                }
+                              }}
+                              className="px-2.5 py-1 rounded-xl bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 border border-purple-500/40 text-[11px] font-bold cursor-pointer"
+                            >
+                              استرداد الدفعة
+                            </button>
+                          )}
 
                           <select
                             value={order.status}
@@ -1498,7 +1560,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             التوصيل: {(order.shippingFee || 0).toLocaleString()} | الخصم: {(order.discount || 0).toLocaleString()}
                           </div>
                           <div className="text-slate-300 text-[11px] pt-1">
-                            🛵 المندوب: <strong className="text-amber-300">{order.driverName || activeAgents[0]?.name || 'بانتظار التعيين'}</strong>
+                            🛵 المندوب: <strong className="text-amber-300">{order.driverName || 'بانتظار التعيين'}</strong>
                           </div>
                         </div>
                       </div>
@@ -1515,33 +1577,39 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             value={order.driverName || activeAgents[0]?.name || ''}
                             onChange={async (e) => {
                               const chosenDriverName = e.target.value;
+                              if (!chosenDriverName) return;
                               const chosenAgent = activeAgents.find(a => a.name === chosenDriverName);
                               await onUpdateOrderStatus(
                                 order.id,
                                 order.status === 'pending' || order.status === 'received' ? 'shipped' : order.status,
                                 order.driverNotes,
                                 {
-                                  driverId: chosenAgent?.id || 'drv-custom',
+                                  driverId: chosenAgent?.id,
                                   driverName: chosenDriverName,
-                                  driverPhone: chosenAgent?.phone || '775000150'
+                                  driverPhone: chosenAgent?.phone
                                 }
                               );
                             }}
                             className="bg-slate-900 border border-slate-700 text-white rounded-xl px-2.5 py-1 text-xs font-bold outline-none focus:border-amber-500 cursor-pointer"
                           >
-                            {activeAgents.map(ag => (
-                              <option key={ag.id} value={ag.name}>
-                                {ag.name} ({ag.vehicle} • {ag.phone})
-                              </option>
-                            ))}
+                            {activeAgents.length === 0 ? (
+                              <option value="">لا يوجد مناديب مضافون</option>
+                            ) : (
+                              activeAgents.map(ag => (
+                                <option key={ag.id} value={ag.name}>
+                                  {ag.name} ({ag.vehicle || ag.vehicleType} • {ag.phone})
+                                </option>
+                              ))
+                            )}
                           </select>
 
                           {/* Direct Fast Approval Button */}
-                          {(order.status === 'pending' || order.status === 'received') && (
+                          {(order.status === 'pending' || order.status === 'received') && activeAgents.length > 0 && (
                             <button
                               type="button"
                               onClick={async () => {
                                 const currentDriver = activeAgents.find(a => a.name === order.driverName) || activeAgents[0];
+                                if (!currentDriver) return;
                                 await onUpdateOrderStatus(
                                   order.id,
                                   'shipped',
@@ -1566,12 +1634,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           {/* WhatsApp to Driver */}
                           {(() => {
                             const assignedDriver = activeAgents.find(a => a.name === order.driverName) || activeAgents[0];
+                            if (!assignedDriver) return null;
                             const itemsText = orderItems.length > 0 
                               ? orderItems.map((it: any) => `• ${it.productNameAr || it.product?.nameAr || 'فحم الذهب الأسود'} (${it.weight || it.selectedWeight || 'العبوة'}) × ${it.quantity || 1}`).join('\n')
                               : (order.itemsSummary || 'فحم الذهب الأسود');
                             const driverMsg = `*بوليصة شحنة فحم الذهب الأسود 👑🛵*\n---------------------------------\n📦 *رقم الطلب:* #${order.orderNumber || order.id}\n👤 *العميل:* ${order.customerName}\n📱 *هاتف العميل:* ${order.customerPhone}\n📍 *العنوان والحي:* ${order.district || order.address?.district || 'صنعاء'} - ${order.address?.street || 'أمانة العاصمة'}\n---------------------------------\n🛒 *الأصناف:*\n${itemsText}\n---------------------------------\n💰 *المبلغ المطلوب تحصيله نقداً:* ${safeTotal.toLocaleString()} ريال يمني\n(شامل رسوم التوصيل ${(order.shippingFee || 0).toLocaleString()} ريال)\n${order.notes ? `📝 *ملاحظات العميل:* ${order.notes}\n` : ''}---------------------------------\nيرجى التواصل مع العميل والتحرك للتسليم.`;
                             
-                            const cleanDriverPhone = (assignedDriver.phone || '775000150').replace(/\D/g, '');
+                            const cleanDriverPhone = (assignedDriver.phone || '').replace(/\D/g, '');
+                            if (!cleanDriverPhone) return null;
 
                             return (
                               <a
@@ -1604,15 +1674,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           )}
 
                           {/* Driver Screen Preview */}
-                          <button
-                            type="button"
-                            onClick={() => onOpenDriverScreen(order.driverName || activeAgents[0]?.name || '')}
-                            className="px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-bold flex items-center gap-1 border border-slate-700 cursor-pointer"
-                            title="معاينة شاشة المندوب الميدانية"
-                          >
-                            <Eye className="w-3.5 h-3.5 text-slate-400" />
-                            <span>معاينة شاشة الكابتن</span>
-                          </button>
+                          {activeAgents.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => onOpenDriverScreen(order.driverName || activeAgents[0]?.name || '')}
+                              className="px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-bold flex items-center gap-1 border border-slate-700 cursor-pointer"
+                              title="معاينة شاشة المندوب الميدانية"
+                            >
+                              <Eye className="w-3.5 h-3.5 text-slate-400" />
+                              <span>معاينة شاشة الكابتن</span>
+                            </button>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -2579,34 +2651,42 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {/* ========================================================= */}
         {/* TAB 10: REPORTS */}
         {/* ========================================================= */}
-        {activeTab === 'reports' && (
+        {activeTab === 'reports' && (() => {
+          const totalActive = nonCancelledOrders.length;
+          const codCount = nonCancelledOrders.filter(o => !o.paymentMethod || o.paymentMethod === 'cod' || o.paymentMethod === 'cash_on_delivery' || o.paymentMethod === 'cash').length;
+          const kuraimiCount = nonCancelledOrders.filter(o => o.paymentMethod === 'kuraimi' || o.paymentMethod === 'haseb').length;
+          const walletCount = nonCancelledOrders.filter(o => o.paymentMethod === 'one_cash' || o.paymentMethod === 'floosak' || o.paymentMethod === 'jawali' || o.paymentMethod === 'other').length;
+          const pct = (c: number) => totalActive > 0 ? Math.round((c / totalActive) * 100) : 0;
+
+          return (
           <div className="space-y-4 overflow-y-auto pr-1 text-xs">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-2">
                 <h4 className="font-bold text-white border-b border-slate-800 pb-1.5">متوسط قيمة السلة (AOV):</h4>
                 <div className="text-2xl font-black text-amber-400 font-mono">
-                  {orders.length > 0 ? Math.round(totalRevenue / orders.length).toLocaleString() : '4,100'} YER
+                  {totalActive > 0 ? Math.round(totalRevenue / totalActive).toLocaleString() : '0'} YER
                 </div>
-                <p className="text-[10px] text-slate-400">معدل شراء العميل الواحد في كل طلب</p>
+                <p className="text-[10px] text-slate-400">معدل شراء العميل الواحد من الطلبات الفعلية</p>
               </div>
 
               <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-2">
                 <h4 className="font-bold text-white border-b border-slate-800 pb-1.5">توزيع قنوات التحصيل:</h4>
                 <div className="text-slate-300 text-[11px] space-y-1">
-                  <div>• الدفع عند الاستلام كاش: <strong className="text-amber-400">75%</strong></div>
-                  <div>• بنك الكريمي وحاسب: <strong className="text-emerald-400">20%</strong></div>
-                  <div>• المحافظ الإلكترونية (ون كاش): <strong className="text-blue-400">5%</strong></div>
+                  <div>• الدفع عند الاستلام كاش: <strong className="text-amber-400">{pct(codCount)}%</strong> ({codCount})</div>
+                  <div>• بنك الكريمي وحاسب: <strong className="text-emerald-400">{pct(kuraimiCount)}%</strong> ({kuraimiCount})</div>
+                  <div>• المحافظ الإلكترونية: <strong className="text-blue-400">{pct(walletCount)}%</strong> ({walletCount})</div>
                 </div>
               </div>
 
               <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-2">
-                <h4 className="font-bold text-white border-b border-slate-800 pb-1.5">معدل الوفاء والتوصيل السريع:</h4>
-                <div className="text-2xl font-black text-emerald-400 font-mono">38 دقيقة</div>
-                <p className="text-[10px] text-slate-400">متوسط زمن التوصيل من وقت الطلب لباب البيت</p>
+                <h4 className="font-bold text-white border-b border-slate-800 pb-1.5">نسبة إتمام وتسليم الطلبات:</h4>
+                <div className="text-2xl font-black text-emerald-400 font-mono">{completionRatePercent}%</div>
+                <p className="text-[10px] text-slate-400">{completedOrdersCount} طلب مسلّم من إجمالي {totalOrdersCount} طلب</p>
               </div>
             </div>
           </div>
-        )}
+          );
+        })()}
 
         {/* ========================================================= */}
         {/* TAB 11: SETTINGS */}

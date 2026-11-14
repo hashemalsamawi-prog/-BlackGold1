@@ -49,11 +49,8 @@ export default function App() {
   const [userName, setUserName] = useState<string>(() => {
     return safeGetLocalStorage('bg_customer_name', '');
   });
-  const [userRole, setUserRole] = useState<'owner' | 'mandoub' | 'customer'>(() => {
-    const saved = safeGetLocalStorage('bg_user_role', 'customer');
-    if (saved === 'owner' || saved === 'mandoub' || saved === 'customer') return saved;
-    return 'customer';
-  });
+  const [userRole, setUserRole] = useState<'owner' | 'mandoub' | 'customer'>('customer');
+  const [isSessionVerified, setIsSessionVerified] = useState<boolean>(false);
 
   // Theme state: 'dark' | 'light'
   const [theme, setTheme] = useState<ThemeMode>(() => {
@@ -107,26 +104,13 @@ export default function App() {
   });
   const [cart, setCart] = useState<CartItem[]>([]);
   const [orders, setOrders] = useState<Order[]>(() => {
-    const savedRole = safeGetLocalStorage('bg_user_role', 'customer');
-    if (savedRole === 'owner' || savedRole === 'mandoub') {
-      const saved = safeGetLocalStorage('bg_saved_orders', '');
-      if (saved) {
-        try {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-        } catch (e) {
-          console.error('Failed to parse bg_saved_orders', e);
-        }
-      }
-    } else {
-      // For customer/visitor, initialize only with their own cached orders
-      const mySaved = safeGetLocalStorage('bg_my_orders_cache', '');
-      if (mySaved) {
-        try {
-          const parsed = JSON.parse(mySaved);
-          if (Array.isArray(parsed)) return parsed;
-        } catch (e) {}
-      }
+    // Initialize strictly with customer's own cached orders until server session verifies role
+    const mySaved = safeGetLocalStorage('bg_my_orders_cache', '');
+    if (mySaved) {
+      try {
+        const parsed = JSON.parse(mySaved);
+        if (Array.isArray(parsed)) return parsed;
+      } catch (e) {}
     }
     return [];
   });
@@ -169,24 +153,28 @@ export default function App() {
     }
     return INITIAL_GALLERY_ITEMS;
   });
-  const [selectedDriverName, setSelectedDriverName] = useState<string>('أحمد الكبسي');
+  const [selectedDriverName, setSelectedDriverName] = useState<string>('');
   const [isOwnerDriverPreview, setIsOwnerDriverPreview] = useState<boolean>(false);
 
   const handleLoginSuccess = (name: string, phone?: string, role: 'owner' | 'mandoub' | 'customer' = 'customer') => {
     setUserName(name);
     setUserRole(role);
+    setIsSessionVerified(true);
     if (name) safeSetLocalStorage('bg_customer_name', name);
     if (phone) safeSetLocalStorage('bg_customer_phone', phone);
     safeSetLocalStorage('bg_user_role', role);
     if (role === 'owner') {
       setToastMessage("مرحباً بك يا مدير المتجر! تم تفعيل لوحة الإدارة 👑");
-      fetchLatestOrders(false);
+      fetchLatestOrders(false, 'owner');
+      setFetchAttempt((n) => n + 1);
     } else if (role === 'mandoub') {
+      if (name) setSelectedDriverName(name);
       setToastMessage(`مرحباً بك كابتن ${name}! بوابة المناديب جاهزة 🛵`);
-      fetchLatestOrders(false);
+      fetchLatestOrders(false, 'mandoub');
+      setFetchAttempt((n) => n + 1);
     } else {
       setToastMessage(`مرحباً بك ${name}! نتمنى لك تسوقاً ممتعاً 🔥`);
-      fetchLatestOrders(false);
+      fetchLatestOrders(false, 'customer');
     }
     setTimeout(() => setToastMessage(null), 4000);
   };
@@ -354,23 +342,76 @@ export default function App() {
     Boolean(selectedProductDetails), Boolean(invoiceOrder)
   ]);
 
+  // Verify JWT session on initial mount via /api/auth/me (fail closed if missing or invalid)
+  useEffect(() => {
+    let mounted = true;
+    const verifyBootSession = async () => {
+      const token = authStorage.getToken();
+      if (!token) {
+        safeRemoveLocalStorage('bg_user_role');
+        safeRemoveLocalStorage('bg_saved_orders');
+        if (mounted) {
+          setUserRole('customer');
+          setIsSessionVerified(true);
+        }
+        return;
+      }
+
+      const res = await api.verifySession();
+      if (!mounted) return;
+      if (res && res.success && res.user) {
+        const backendRole = String(res.user.role || '').toLowerCase();
+        const mappedRole: 'owner' | 'mandoub' | 'customer' =
+          backendRole === 'owner' || backendRole === 'admin'
+            ? 'owner'
+            : backendRole === 'delivery' || backendRole === 'mandoub'
+            ? 'mandoub'
+            : 'customer';
+        setUserRole(mappedRole);
+        if (res.user.name) {
+          setUserName(res.user.name);
+          safeSetLocalStorage('bg_customer_name', res.user.name);
+          if (mappedRole === 'mandoub') {
+            setSelectedDriverName(res.user.name);
+          }
+        }
+        if (res.user.phone) {
+          safeSetLocalStorage('bg_customer_phone', res.user.phone);
+        }
+        safeSetLocalStorage('bg_user_role', mappedRole);
+        setIsSessionVerified(true);
+      } else {
+        authStorage.removeToken();
+        safeRemoveLocalStorage('bg_user_role');
+        safeRemoveLocalStorage('bg_saved_orders');
+        setUserRole('customer');
+        setIsSessionVerified(true);
+      }
+    };
+    verifyBootSession();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   // Handle direct staff routes: /admin/login, /admin, /delivery/login, /delivery, #admin, #delivery
   useEffect(() => {
+    if (!isSessionVerified) return;
+
     const handleUrlRouting = () => {
       if (typeof window === 'undefined') return;
       const path = window.location.pathname.toLowerCase();
       const hash = window.location.hash.toLowerCase();
+      const hasToken = Boolean(authStorage.getToken());
 
       if (path === '/admin/login' || path === '/admin' || hash.includes('admin') || hash.includes('owner')) {
-        const savedRole = safeGetLocalStorage('bg_user_role', 'customer');
-        if (savedRole === 'owner') {
+        if (hasToken && userRole === 'owner') {
           setAdminOpen(true);
         } else {
           setAuthOpen(true);
         }
       } else if (path === '/delivery/login' || path === '/delivery' || path === '/mandoub/login' || path === '/mandoub' || hash.includes('delivery') || hash.includes('mandoub') || hash.includes('driver')) {
-        const savedRole = safeGetLocalStorage('bg_user_role', 'customer');
-        if (savedRole === 'mandoub') {
+        if (hasToken && userRole === 'mandoub') {
           setIsOwnerDriverPreview(false);
           setMandoubOpen(true);
         } else {
@@ -386,7 +427,7 @@ export default function App() {
       window.removeEventListener('popstate', handleUrlRouting);
       window.removeEventListener('hashchange', handleUrlRouting);
     };
-  }, []);
+  }, [isSessionVerified, userRole]);
 
   // Checkout Params
   const [checkoutShippingFee, setCheckoutShippingFee] = useState(1000);
@@ -469,17 +510,21 @@ export default function App() {
       })
       .catch(() => {});
 
-    // Fetch store settings & custom logo
+    // Fetch store settings & custom logo (D1 authoritative)
     fetch('/api/settings')
       .then((res) => res.json())
       .then((data) => {
         if (data.success && data.data && isMounted) {
           const storedLogo = safeGetLocalStorage('bg_custom_logo', '');
+          const resolvedLogo = data.data.customLogoUrl || storedLogo || '';
           setStoreSettings({
             ...INITIAL_STORE_SETTINGS,
             ...data.data,
-            customLogoUrl: storedLogo || data.data.customLogoUrl || ''
+            customLogoUrl: resolvedLogo
           });
+          if (data.data.customLogoUrl) {
+            safeSetLocalStorage('bg_custom_logo', data.data.customLogoUrl);
+          }
         }
       })
       .catch(() => {
@@ -519,45 +564,95 @@ export default function App() {
   }, [fetchAttempt]);
 
   const handleUpdateStoreSettings = async (newSettings: StoreSettings) => {
-    setStoreSettings(newSettings);
-    if (newSettings.customLogoUrl) {
-      safeSetLocalStorage('bg_custom_logo', newSettings.customLogoUrl);
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new Event('bg_logo_updated'));
-      }
-    } else {
-      safeRemoveLocalStorage('bg_custom_logo');
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new Event('bg_logo_updated'));
-      }
-    }
-
+    const previousSettings = storeSettings;
     try {
-      await fetch('/api/settings', {
-        method: 'POST',
+      const res = await fetch('/api/settings', {
+        method: 'PUT',
         headers: getAuthHeaders(true),
         body: JSON.stringify(newSettings)
       });
-    } catch (e) {
-      console.log('Settings save local fallback', e);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.success === false) {
+        throw new Error(data?.message || 'فشل حفظ الإعدادات في قاعدة البيانات');
+      }
+      const savedSettings = data.data ? { ...newSettings, ...data.data } : newSettings;
+      setStoreSettings(savedSettings);
+      if (savedSettings.customLogoUrl) {
+        safeSetLocalStorage('bg_custom_logo', savedSettings.customLogoUrl);
+      } else {
+        safeRemoveLocalStorage('bg_custom_logo');
+      }
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('bg_logo_updated'));
+      }
+      setToastMessage("تم تحديث وتطبيق شعار وهوية المتجر بنجاح في كافة الشاشات! 👑✨");
+    } catch (e: any) {
+      setStoreSettings(previousSettings);
+      setToastMessage(`❌ ${e?.message || 'تعذر حفظ الإعدادات في الخادم'}`);
     }
-
-    setToastMessage("تم تحديث وتطبيق شعار وهوية المتجر بنجاح في كافة الشاشات! 👑✨");
     setTimeout(() => setToastMessage(null), 4000);
   };
 
-  const handleUpdateGalleryItems = (newItems: GalleryItem[]) => {
-    setGalleryItems(newItems);
-    safeSetLocalStorage('bg_saved_gallery', JSON.stringify(newItems));
-    fetch('/api/gallery', {
-      method: 'POST',
-      headers: getAuthHeaders(true),
-      body: JSON.stringify(newItems)
-    }).catch((err) => {
-      console.log('Gallery sync local fallback', err);
-    });
-    setToastMessage("تم تحديث صور وتطبيقات معرض الذهب الأسود بنجاح! 📸✨");
-    setTimeout(() => setToastMessage(null), 3000);
+  const handleUpdateGalleryItems = async (newItems: GalleryItem[]) => {
+    const previousItems = galleryItems;
+    try {
+      const prevMap = new Map(previousItems.map((it) => [it.id, it]));
+      const nextMap = new Map(newItems.map((it) => [it.id, it]));
+
+      // Deletions
+      for (const oldItem of previousItems) {
+        if (!nextMap.has(oldItem.id)) {
+          const delRes = await fetch(`/api/gallery/${encodeURIComponent(oldItem.id)}`, {
+            method: 'DELETE',
+            headers: getAuthHeaders(false),
+          });
+          if (!delRes.ok && delRes.status !== 404) {
+            const delData = await delRes.json().catch(() => ({}));
+            throw new Error(delData?.message || 'فشل حذف عنصر المعرض من قاعدة البيانات');
+          }
+        }
+      }
+
+      // Additions & updates
+      const syncedItems: GalleryItem[] = [];
+      for (const item of newItems) {
+        const prevItem = prevMap.get(item.id);
+        if (!prevItem) {
+          const postRes = await fetch('/api/gallery', {
+            method: 'POST',
+            headers: getAuthHeaders(true),
+            body: JSON.stringify(item),
+          });
+          const postData = await postRes.json().catch(() => ({}));
+          if (!postRes.ok || postData.success === false) {
+            throw new Error(postData?.message || 'فشل إضافة صورة المعرض إلى قاعدة البيانات');
+          }
+          syncedItems.push(postData.data || item);
+        } else if (JSON.stringify(prevItem) !== JSON.stringify(item)) {
+          const putRes = await fetch(`/api/gallery/${encodeURIComponent(item.id)}`, {
+            method: 'PUT',
+            headers: getAuthHeaders(true),
+            body: JSON.stringify(item),
+          });
+          const putData = await putRes.json().catch(() => ({}));
+          if (!putRes.ok || putData.success === false) {
+            throw new Error(putData?.message || 'فشل تعديل صورة المعرض في قاعدة البيانات');
+          }
+          syncedItems.push(putData.data || item);
+        } else {
+          syncedItems.push(item);
+        }
+      }
+
+      setGalleryItems(syncedItems);
+      safeSetLocalStorage('bg_saved_gallery', JSON.stringify(syncedItems));
+      setToastMessage("تم تحديث صور وتطبيقات معرض الذهب الأسود بنجاح! 📸✨");
+    } catch (err: any) {
+      setGalleryItems(previousItems);
+      safeSetLocalStorage('bg_saved_gallery', JSON.stringify(previousItems));
+      setToastMessage(`❌ ${err?.message || 'تعذر حفظ تغييرات المعرض في قاعدة البيانات'}`);
+    }
+    setTimeout(() => setToastMessage(null), 4000);
   };
 
 
@@ -618,11 +713,12 @@ export default function App() {
     setCheckoutOpen(true);
   };
 
-  const fetchLatestOrders = async (notifyIfNew = true) => {
+  const fetchLatestOrders = async (notifyIfNew = true, roleOverride?: 'owner' | 'mandoub' | 'customer') => {
     try {
+      const effectiveRole = roleOverride || userRole;
       const token = authStorage.getToken();
       // Only owner / mandoub should fetch all store orders
-      if (userRole !== 'owner' && userRole !== 'mandoub') {
+      if (effectiveRole !== 'owner' && effectiveRole !== 'mandoub') {
         const guestToken = safeGetLocalStorage('bg_guest_token', '');
         const authToken = token || guestToken;
         if (authToken) {
@@ -798,53 +894,58 @@ export default function App() {
   };
 
   const handleAddProduct = async (p: any) => {
-    const mockNew = { id: "p_" + Date.now(), ...p };
-    setProducts((prev) => {
-      const updated = [mockNew, ...prev];
-      safeSetLocalStorage('bg_saved_products', JSON.stringify(updated));
-      return updated;
-    });
-
+    const previousProducts = products;
     try {
       const data = await api.addProduct(p);
-      if (data.success && data.data) {
-        setProducts((prev) => {
-          const updated = prev.map((item) => item.id === mockNew.id ? data.data : item);
-          safeSetLocalStorage('bg_saved_products', JSON.stringify(updated));
-          return updated;
-        });
+      if (!data || data.success === false || !data.data) {
+        throw new Error(data?.message || 'فشل إضافة المنتج في قاعدة البيانات');
       }
-    } catch {
-      // Local copy already saved in state and localStorage
+      setProducts((prev) => {
+        const updated = [data.data, ...prev];
+        safeSetLocalStorage('bg_saved_products', JSON.stringify(updated));
+        return updated;
+      });
+      setToastMessage("تم إضافة المنتج الجديد وحفظه بنجاح إلى القائمة!");
+    } catch (err: any) {
+      setProducts(previousProducts);
+      safeSetLocalStorage('bg_saved_products', JSON.stringify(previousProducts));
+      setToastMessage(`❌ ${err?.message || 'تعذر إضافة المنتج إلى قاعدة البيانات'}`);
     }
-    setToastMessage("تم إضافة المنتج الجديد وحفظه بنجاح إلى القائمة!");
     setTimeout(() => setToastMessage(null), 4000);
   };
 
   const handleUpdateProduct = async (id: string, updatedPayload: any) => {
-    const finalImage = updatedPayload.image || updatedPayload.images?.[0] || ASSETS.pouchPair;
-    const finalImages = (updatedPayload.images && updatedPayload.images.length > 0) ? updatedPayload.images : [finalImage];
-    const normalizedPayload = {
-      ...updatedPayload,
-      image: finalImage,
-      images: finalImages
-    };
-
-    setProducts((prev) => {
-      const updated = prev.map((p) => (p.id === id ? { ...p, ...normalizedPayload } : p));
-      safeSetLocalStorage('bg_saved_products', JSON.stringify(updated));
-      return updated;
-    });
-
-    // If modal is currently viewing this product, update it in realtime
-    setSelectedProductDetails((prev) => (prev && prev.id === id ? { ...prev, ...normalizedPayload } : prev));
+    const previousProducts = products;
+    const existingProduct = products.find((p) => p.id === id);
+    const hasExplicitImage = Boolean(updatedPayload.image || (Array.isArray(updatedPayload.images) && updatedPayload.images.length > 0));
+    const finalImage = hasExplicitImage
+      ? (updatedPayload.image || updatedPayload.images?.[0] || ASSETS.pouchPair)
+      : (existingProduct?.image || existingProduct?.images?.[0] || ASSETS.pouchPair);
+    const finalImages = hasExplicitImage
+      ? ((updatedPayload.images && updatedPayload.images.length > 0) ? updatedPayload.images : [finalImage])
+      : ((existingProduct?.images && existingProduct.images.length > 0) ? existingProduct.images : [finalImage]);
+    const normalizedPayload = hasExplicitImage
+      ? { ...updatedPayload, image: finalImage, images: finalImages }
+      : { ...updatedPayload };
 
     try {
-      await api.updateProduct(id, normalizedPayload);
-    } catch (e) {
-      console.log('Offline fallback for product update', e);
+      const data = await api.updateProduct(id, normalizedPayload);
+      if (!data || data.success === false) {
+        throw new Error(data?.message || 'فشل تحديث المنتج في قاعدة البيانات');
+      }
+      const persisted = data.data ? { ...normalizedPayload, ...data.data } : { ...normalizedPayload, image: finalImage, images: finalImages };
+      setProducts((prev) => {
+        const updated = prev.map((p) => (p.id === id ? { ...p, ...persisted } : p));
+        safeSetLocalStorage('bg_saved_products', JSON.stringify(updated));
+        return updated;
+      });
+      setSelectedProductDetails((prev) => (prev && prev.id === id ? { ...prev, ...persisted } : prev));
+      setToastMessage("تم حفظ وتحديث صورة وبيانات المنتج بنجاح! 📸✨");
+    } catch (err: any) {
+      setProducts(previousProducts);
+      safeSetLocalStorage('bg_saved_products', JSON.stringify(previousProducts));
+      setToastMessage(`❌ ${err?.message || 'تعذر تحديث بيانات المنتج في الخادم'}`);
     }
-    setToastMessage("تم حفظ وتحديث صورة وبيانات المنتج بنجاح! 📸✨");
     setTimeout(() => setToastMessage(null), 4000);
   };
 
@@ -871,73 +972,83 @@ export default function App() {
   };
 
   const handleAddGalleryItem = async (item: Omit<GalleryItem, 'id'>) => {
+    const previousItems = galleryItems;
     const newItem: GalleryItem = {
       id: 'g_' + Date.now(),
       ...item
     };
-    setGalleryItems(prev => {
-      const updated = [newItem, ...prev];
-      safeSetLocalStorage('bg_saved_gallery', JSON.stringify(updated));
-      return updated;
-    });
-
     try {
       const res = await fetch('/api/gallery', {
         method: 'POST',
         headers: getAuthHeaders(true),
         body: JSON.stringify(newItem)
       });
-      const data = await res.json();
-      if (data.success && data.data) {
-        setGalleryItems(prev => {
-          const updated = prev.map(it => it.id === newItem.id ? data.data : it);
-          safeSetLocalStorage('bg_saved_gallery', JSON.stringify(updated));
-          return updated;
-        });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.success === false || !data.data) {
+        throw new Error(data?.message || 'فشل إضافة صورة المعرض في قاعدة البيانات');
       }
-    } catch (e) {
-      console.log('Gallery local fallback', e);
+      setGalleryItems(prev => {
+        const updated = [data.data, ...prev];
+        safeSetLocalStorage('bg_saved_gallery', JSON.stringify(updated));
+        return updated;
+      });
+      setToastMessage("تمت إضافة صورة المعرض الجديدة بنجاح! 📸✨");
+    } catch (e: any) {
+      setGalleryItems(previousItems);
+      safeSetLocalStorage('bg_saved_gallery', JSON.stringify(previousItems));
+      setToastMessage(`❌ ${e?.message || 'تعذر إضافة صورة المعرض'}`);
     }
-    setToastMessage("تمت إضافة صورة المعرض الجديدة بنجاح! 📸✨");
     setTimeout(() => setToastMessage(null), 4000);
   };
 
   const handleUpdateGalleryItem = async (id: string, updatedPayload: Partial<GalleryItem>) => {
-    setGalleryItems(prev => {
-      const updated = prev.map(item => item.id === id ? { ...item, ...updatedPayload } : item);
-      safeSetLocalStorage('bg_saved_gallery', JSON.stringify(updated));
-      return updated;
-    });
-
+    const previousItems = galleryItems;
     try {
-      await fetch(`/api/gallery/${id}`, {
+      const res = await fetch(`/api/gallery/${encodeURIComponent(id)}`, {
         method: 'PUT',
         headers: getAuthHeaders(true),
         body: JSON.stringify(updatedPayload)
       });
-    } catch (e) {
-      console.log('Gallery update fallback', e);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.success === false) {
+        throw new Error(data?.message || 'فشل تعديل عنصر المعرض في قاعدة البيانات');
+      }
+      setGalleryItems(prev => {
+        const updated = prev.map(item => item.id === id ? (data.data || { ...item, ...updatedPayload }) : item);
+        safeSetLocalStorage('bg_saved_gallery', JSON.stringify(updated));
+        return updated;
+      });
+      setToastMessage("تم تعديل وحفظ صورة المعرض بنجاح! 📸✨");
+    } catch (e: any) {
+      setGalleryItems(previousItems);
+      safeSetLocalStorage('bg_saved_gallery', JSON.stringify(previousItems));
+      setToastMessage(`❌ ${e?.message || 'تعذر تعديل صورة المعرض'}`);
     }
-    setToastMessage("تم تعديل وحفظ صورة المعرض بنجاح! 📸✨");
     setTimeout(() => setToastMessage(null), 4000);
   };
 
   const handleDeleteGalleryItem = async (id: string) => {
-    setGalleryItems(prev => {
-      const updated = prev.filter(item => item.id !== id);
-      safeSetLocalStorage('bg_saved_gallery', JSON.stringify(updated));
-      return updated;
-    });
-
+    const previousItems = galleryItems;
     try {
-      await fetch(`/api/gallery/${id}`, { 
+      const res = await fetch(`/api/gallery/${encodeURIComponent(id)}`, { 
         method: 'DELETE',
-        headers: getAuthHeaders(true)
+        headers: getAuthHeaders(false)
       });
-    } catch (e) {
-      console.log('Gallery delete fallback', e);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.success === false) {
+        throw new Error(data?.message || 'فشل حذف صورة المعرض من قاعدة البيانات');
+      }
+      setGalleryItems(prev => {
+        const updated = prev.filter(item => item.id !== id);
+        safeSetLocalStorage('bg_saved_gallery', JSON.stringify(updated));
+        return updated;
+      });
+      setToastMessage("تم حذف الصورة من المعرض بنجاح!");
+    } catch (e: any) {
+      setGalleryItems(previousItems);
+      safeSetLocalStorage('bg_saved_gallery', JSON.stringify(previousItems));
+      setToastMessage(`❌ ${e?.message || 'تعذر حذف صورة المعرض'}`);
     }
-    setToastMessage("تم حذف الصورة من المعرض بنجاح!");
     setTimeout(() => setToastMessage(null), 4000);
   };
 
@@ -1382,8 +1493,7 @@ export default function App() {
           lang={lang}
           onOpenTracker={() => setOrdersOpen(true)}
           onOpenAdmin={() => {
-            const savedRole = safeGetLocalStorage('bg_user_role', 'customer');
-            if (savedRole === 'owner') {
+            if (authStorage.getToken() && userRole === 'owner') {
               setAdminOpen(true);
             } else {
               window.location.hash = '#admin';
@@ -1391,8 +1501,7 @@ export default function App() {
             }
           }}
           onOpenMandoub={() => {
-            const savedRole = safeGetLocalStorage('bg_user_role', 'customer');
-            if (savedRole === 'mandoub') {
+            if (authStorage.getToken() && userRole === 'mandoub') {
               setIsOwnerDriverPreview(false);
               setMandoubOpen(true);
             } else {
@@ -1429,6 +1538,7 @@ export default function App() {
           savedAddresses={addresses}
           selectedAddressId={selectedAddressId}
           setSelectedAddressId={handleSelectAddress}
+          storeSettings={storeSettings}
         />
 
         <InteractiveMapModal
@@ -1460,6 +1570,7 @@ export default function App() {
           onDeleteAddress={handleDeleteAddress}
           onOrderPlaced={handleOrderPlaced}
           onOpenTracking={() => setOrdersOpen(true)}
+          storeSettings={storeSettings}
         />
 
         <OrderTrackerModal
